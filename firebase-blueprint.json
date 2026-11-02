@@ -1,0 +1,776 @@
+{
+  "entities": {
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Non-PII RBAC record granting club secretariat admin privileges to a verified Google user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the club administrator.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned administrative tier in PasserSI.",
+          "enum": ["SUPER_ADMIN", "RACE_ADMIN"],
+          "minLength": 10,
+          "maxLength": 11
+        },
+        "inviteId": {
+          "type": "string",
+          "description": "Deterministic invite document ID or bootstrap_super_admin.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the admin role was claimed."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the admin role was last updated."
+        }
+      },
+      "required": ["uid", "displayName", "role", "inviteId", "createdAt", "updatedAt"]
+    },
+    "AdminInvite": {
+      "title": "AdminInvite",
+      "description": "PII-isolated authorization invite allowing a specific verified Google email to claim a club admin role.",
+      "type": "object",
+      "properties": {
+        "inviteId": {
+          "type": "string",
+          "description": "Deterministic identifier matching the Firestore document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Normalized lowercase Google account email address.",
+          "minLength": 5,
+          "maxLength": 120,
+          "pattern": "^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Name or label for the invited race director.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "description": "Administrative role granted when this invite is claimed.",
+          "enum": ["SUPER_ADMIN", "RACE_ADMIN"],
+          "minLength": 10,
+          "maxLength": 11
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether this invite is currently active."
+        },
+        "createdByUid": {
+          "type": "string",
+          "description": "UID of the administrator who created the invite.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the invite was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the invite was last updated."
+        }
+      },
+      "required": [
+        "inviteId",
+        "email",
+        "displayName",
+        "role",
+        "active",
+        "createdByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ClubSettings": {
+      "title": "ClubSettings",
+      "description": "Club-wide configuration including Eventor ID, Swish QR payment settings, rental card fees, and active season state.",
+      "type": "object",
+      "properties": {
+        "settingId": {
+          "type": "string",
+          "description": "Singleton document identifier (default).",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "clubName": {
+          "type": "string",
+          "description": "Official orienteering club name.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "eventorOrgId": {
+          "type": "string",
+          "description": "Optional Swedish Eventor organisation ID.",
+          "minLength": 0,
+          "maxLength": 32
+        },
+        "swishNumber": {
+          "type": "string",
+          "description": "Club Swish 123-number or phone number for arena self-registration.",
+          "minLength": 0,
+          "maxLength": 20
+        },
+        "swishRecipientName": {
+          "type": "string",
+          "description": "Recipient label displayed next to the Swish QR code.",
+          "minLength": 0,
+          "maxLength": 100
+        },
+        "defaultDirectEntryFeeSek": {
+          "type": "integer",
+          "description": "Default direct entry fee in SEK."
+        },
+        "rentalCardFeeSek": {
+          "type": "integer",
+          "description": "Additional fee in SEK when borrowing a club rental SI-card."
+        },
+        "missingRentalFeeSek": {
+          "type": "integer",
+          "description": "Replacement charge in SEK noted for unreturned rental SI-cards."
+        },
+        "portalTitle": {
+          "type": "string",
+          "description": "Optional custom brand title shown in top navigation bars.",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "logoDataUrl": {
+          "type": "string",
+          "description": "Optional compressed PNG or JPEG club logo encoded as a base64 data URL.",
+          "minLength": 0,
+          "maxLength": 200000
+        },
+        "customBgColor": {
+          "type": "string",
+          "description": "Optional hex background color (#RRGGBB) for light mode.",
+          "minLength": 0,
+          "maxLength": 7,
+          "pattern": "^$|^#[0-9a-fA-F]{6}$"
+        },
+        "customTextColor": {
+          "type": "string",
+          "description": "Optional hex primary text color (#RRGGBB) for light mode.",
+          "minLength": 0,
+          "maxLength": 7,
+          "pattern": "^$|^#[0-9a-fA-F]{6}$"
+        },
+        "customAccentColor": {
+          "type": "string",
+          "description": "Optional hex club accent color (#RRGGBB) for buttons and active tabs.",
+          "minLength": 0,
+          "maxLength": 7,
+          "pattern": "^$|^#[0-9a-fA-F]{6}$"
+        },
+        "activeEventId": {
+          "type": "string",
+          "description": "Currently active competition ID or empty string when season has zero events.",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "demoCleared": {
+          "type": "boolean",
+          "description": "Whether demo seed competitions were explicitly cleared by an administrator."
+        },
+        "competitionIds": {
+          "type": "array",
+          "description": "Bounded list of active season competition IDs (empty when zero competitions exist)."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "UID of the administrator who initialized the club settings.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated."
+        }
+      },
+      "required": [
+        "settingId",
+        "clubName",
+        "eventorOrgId",
+        "swishNumber",
+        "swishRecipientName",
+        "defaultDirectEntryFeeSek",
+        "rentalCardFeeSek",
+        "missingRentalFeeSek",
+        "activeEventId",
+        "demoCleared",
+        "competitionIds",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudCompetition": {
+      "title": "CloudCompetition",
+      "description": "Full cloud-persisted orienteering competition metadata, series link, emergency controls, and official role PINs.",
+      "type": "object",
+      "properties": {
+        "competitionId": {
+          "type": "string",
+          "description": "Unique competition identifier matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "shortCode": {
+          "type": "string",
+          "description": "Public URL short code (/t/:shortCode).",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Competition or club training title.",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "organizer": {
+          "type": "string",
+          "description": "Organizing orienteering club.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "date": {
+          "type": "string",
+          "description": "ISO calendar date YYYY-MM-DD in Europe/Stockholm.",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "status": {
+          "type": "string",
+          "description": "Competition lifecycle status.",
+          "enum": ["LIVE", "UPCOMING", "COMPLETED"],
+          "minLength": 4,
+          "maxLength": 9
+        },
+        "zeroTimeStr": {
+          "type": "string",
+          "description": "Competition zero time HH:MM:SS.",
+          "minLength": 5,
+          "maxLength": 8,
+          "pattern": "^\\d{2}:\\d{2}(:\\d{2})?$"
+        },
+        "zeroTimeSec": {
+          "type": "integer",
+          "description": "Competition zero time in seconds since midnight."
+        },
+        "arenaInfo": {
+          "type": "string",
+          "description": "Arena directions or PM notes.",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "seriesName": {
+          "type": "string",
+          "description": "Optional multi-event club league/series name (e.g. Torsdagsserien).",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "allowSelfRegistration": {
+          "type": "boolean",
+          "description": "Whether mobile QR self-registration is enabled."
+        },
+        "enableFeesAndSwish": {
+          "type": "boolean",
+          "description": "Whether entry fees and Swish QR payment are enabled for this competition."
+        },
+        "competitorCount": {
+          "type": "integer",
+          "description": "Total registered competitors."
+        },
+        "finishedCount": {
+          "type": "integer",
+          "description": "Total finished or read-out competitors."
+        },
+        "brokenControls": {
+          "type": "array",
+          "description": "List of control codes marked malfunctioning in the forest."
+        },
+        "pinStart": {
+          "type": "string",
+          "description": "4-6 digit PIN for Start Corral officials.",
+          "minLength": 4,
+          "maxLength": 6,
+          "pattern": "^\\d{4,6}$"
+        },
+        "pinReadout": {
+          "type": "string",
+          "description": "4-6 digit PIN for Finish & Readout officials.",
+          "minLength": 4,
+          "maxLength": 6,
+          "pattern": "^\\d{4,6}$"
+        },
+        "pinForest": {
+          "type": "string",
+          "description": "4-6 digit PIN for Forest Safety officials.",
+          "minLength": 4,
+          "maxLength": 6,
+          "pattern": "^\\d{4,6}$"
+        },
+        "pinSpeaker": {
+          "type": "string",
+          "description": "4-6 digit PIN for Speaker & Results officials.",
+          "minLength": 4,
+          "maxLength": 6,
+          "pattern": "^\\d{4,6}$"
+        },
+        "pinsCustomized": {
+          "type": "boolean",
+          "description": "Whether role PINs have been customized from defaults."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "UID of the race administrator who created/synced the competition.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when first synced to cloud."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest sync."
+        }
+      },
+      "required": [
+        "competitionId",
+        "shortCode",
+        "name",
+        "organizer",
+        "date",
+        "status",
+        "zeroTimeStr",
+        "zeroTimeSec",
+        "arenaInfo",
+        "seriesName",
+        "allowSelfRegistration",
+        "enableFeesAndSwish",
+        "competitorCount",
+        "finishedCount",
+        "brokenControls",
+        "pinStart",
+        "pinReadout",
+        "pinForest",
+        "pinSpeaker",
+        "pinsCustomized",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudCourse": {
+      "title": "CloudCourse",
+      "description": "Orienteering course definition persisted under a competition.",
+      "type": "object",
+      "properties": {
+        "courseId": {
+          "type": "string",
+          "description": "Course identifier matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "competitionId": {
+          "type": "string",
+          "description": "Parent competition identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Course name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "lengthMeters": {
+          "type": "integer",
+          "description": "Course length in meters."
+        },
+        "climbMeters": {
+          "type": "integer",
+          "description": "Course climb in meters."
+        },
+        "controls": {
+          "type": "array",
+          "description": "Ordered control codes on the course."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "UID of the administrator who synced the course.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated."
+        }
+      },
+      "required": [
+        "courseId",
+        "competitionId",
+        "name",
+        "lengthMeters",
+        "climbMeters",
+        "controls",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudClass": {
+      "title": "CloudClass",
+      "description": "Competition class definition persisted under a competition.",
+      "type": "object",
+      "properties": {
+        "classId": {
+          "type": "string",
+          "description": "Class identifier matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "competitionId": {
+          "type": "string",
+          "description": "Parent competition identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Class name (e.g. D21, H21, Öppen Motion).",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "courseId": {
+          "type": "string",
+          "description": "Assigned course ID or empty string if open course matching.",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "classFormat": {
+          "type": "string",
+          "description": "Class competition format.",
+          "enum": ["STANDARD", "FORKED", "ROGAINING"],
+          "minLength": 6,
+          "maxLength": 9
+        },
+        "forkCourseIds": {
+          "type": "array",
+          "description": "Pool of forked course IDs when classFormat is FORKED."
+        },
+        "rogainingMaxTimeSec": {
+          "type": "integer",
+          "description": "Max time in seconds for Rogaining or -1 when unused."
+        },
+        "rogainingPenaltyPerMin": {
+          "type": "integer",
+          "description": "Penalty points per minute for Rogaining or -1 when unused."
+        },
+        "allowDirectEntry": {
+          "type": "boolean",
+          "description": "Whether direct entry is allowed."
+        },
+        "freeStart": {
+          "type": "boolean",
+          "description": "Whether free start punching is enabled."
+        },
+        "autoMatchCourse": {
+          "type": "boolean",
+          "description": "Whether readout automatically matches any open course."
+        },
+        "feeSek": {
+          "type": "integer",
+          "description": "Class entry fee in SEK."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "UID of the administrator who synced the class.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated."
+        }
+      },
+      "required": [
+        "classId",
+        "competitionId",
+        "name",
+        "courseId",
+        "classFormat",
+        "forkCourseIds",
+        "rogainingMaxTimeSec",
+        "rogainingPenaltyPerMin",
+        "allowDirectEntry",
+        "freeStart",
+        "autoMatchCourse",
+        "feeSek",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudCompetitor": {
+      "title": "CloudCompetitor",
+      "description": "Registered competitor, rental/payment status, and raw SI-card punches persisted under a competition.",
+      "type": "object",
+      "properties": {
+        "competitorId": {
+          "type": "string",
+          "description": "Competitor identifier matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "competitionId": {
+          "type": "string",
+          "description": "Parent competition identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bib": {
+          "type": "integer",
+          "description": "Runner bib number."
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Runner full name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "club": {
+          "type": "string",
+          "description": "Runner orienteering club.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "classId": {
+          "type": "string",
+          "description": "Entered competition class ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "siNumber": {
+          "type": "integer",
+          "description": "SPORTident card number."
+        },
+        "cardSeries": {
+          "type": "string",
+          "description": "SPORTident card hardware generation.",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "isRentalCard": {
+          "type": "boolean",
+          "description": "Whether the SI-card was borrowed from the club."
+        },
+        "rentalReturned": {
+          "type": "boolean",
+          "description": "Whether the borrowed rental SI-card has been returned."
+        },
+        "isSelfRegistered": {
+          "type": "boolean",
+          "description": "Whether registered via mobile QR self-registration."
+        },
+        "feePaid": {
+          "type": "boolean",
+          "description": "Whether direct entry / Swish fee has been marked paid."
+        },
+        "status": {
+          "type": "string",
+          "description": "Runner race status.",
+          "enum": [
+            "REGISTERED",
+            "CHECKED",
+            "IN_FOREST",
+            "PRELIMINARY_FIN",
+            "OK",
+            "MP",
+            "DNF",
+            "DNS"
+          ],
+          "minLength": 2,
+          "maxLength": 15
+        },
+        "allocatedStartSec": {
+          "type": "integer",
+          "description": "Allocated start time in seconds since midnight or -1 if free start."
+        },
+        "checkTimeSec": {
+          "type": "integer",
+          "description": "Check punch time in seconds since midnight or -1."
+        },
+        "startTimeSec": {
+          "type": "integer",
+          "description": "Start punch time in seconds since midnight or -1."
+        },
+        "finishTimeSec": {
+          "type": "integer",
+          "description": "Finish punch time in seconds since midnight or -1."
+        },
+        "manualFinishTimeSec": {
+          "type": "integer",
+          "description": "Manual backup finish time in seconds since midnight or -1."
+        },
+        "runningTimeSec": {
+          "type": "integer",
+          "description": "Net running time in seconds or -1."
+        },
+        "readoutAtIso": {
+          "type": "string",
+          "description": "ISO timestamp when card was read out or empty string.",
+          "minLength": 0,
+          "maxLength": 40
+        },
+        "punchCodes": {
+          "type": "array",
+          "description": "Ordered list of raw SI punch control codes (parallel to punchTimes)."
+        },
+        "punchTimes": {
+          "type": "array",
+          "description": "Ordered list of raw SI punch timestamps in seconds since midnight."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "UID of the administrator who synced the competitor.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when last updated."
+        }
+      },
+      "required": [
+        "competitorId",
+        "competitionId",
+        "bib",
+        "fullName",
+        "club",
+        "classId",
+        "siNumber",
+        "cardSeries",
+        "isRentalCard",
+        "rentalReturned",
+        "isSelfRegistered",
+        "feePaid",
+        "status",
+        "allocatedStartSec",
+        "checkTimeSec",
+        "startTimeSec",
+        "finishTimeSec",
+        "manualFinishTimeSec",
+        "runningTimeSec",
+        "readoutAtIso",
+        "punchCodes",
+        "punchTimes",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Non-PII RBAC collection mapping verified Firebase Auth UIDs to PasserSI administrative tiers."
+    },
+    "/adminInvites/{inviteId}": {
+      "schema": { "$ref": "#/entities/AdminInvite" },
+      "description": "PII-isolated collection of invited club administrator email addresses."
+    },
+    "/clubSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/ClubSettings" },
+      "description": "Club-wide configuration for Eventor, Swish QR payments, rental fees, and active season state."
+    },
+    "/competitions/{competitionId}": {
+      "schema": { "$ref": "#/entities/CloudCompetition" },
+      "description": "Cloud-persisted orienteering competitions, role PINs, and series metadata."
+    },
+    "/competitions/{competitionId}/courses/{courseId}": {
+      "schema": { "$ref": "#/entities/CloudCourse" },
+      "description": "Courses belonging to a cloud-persisted competition."
+    },
+    "/competitions/{competitionId}/classes/{classId}": {
+      "schema": { "$ref": "#/entities/CloudClass" },
+      "description": "Classes belonging to a cloud-persisted competition."
+    },
+    "/competitions/{competitionId}/competitors/{competitorId}": {
+      "schema": { "$ref": "#/entities/CloudCompetitor" },
+      "description": "Competitors, rental SI-card status, and raw punch lists belonging to a cloud-persisted competition."
+    }
+  }
+}

@@ -1,0 +1,1582 @@
+import { initializeApp } from 'firebase/app';
+import {
+  GoogleAuthProvider,
+  getAuth,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  type User,
+} from 'firebase/auth';
+import {
+  Timestamp,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocFromServer,
+  getDocs,
+  getFirestore,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+  writeBatch,
+  type DocumentReference,
+} from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
+import type {
+  ClassCompetitionFormat,
+  CloudCompetitionRecord,
+  CloudEventExportItem,
+  CloudSeasonSnapshot,
+  ClubAdminTier,
+  ClubSettings,
+  CompClass,
+  Competitor,
+  Course,
+  EventLifecycleStatus,
+  RunnerStatus,
+  SICardSeries,
+} from './types/sportident';
+
+const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+// Blueprint validation constants synchronized verbatim with firebase-blueprint.json & firestore.rules
+export const BOOTSTRAP_SUPER_ADMIN_EMAIL = 'instagram.okosteraker@gmail.com';
+export const BOOTSTRAP_SUPER_ADMIN_EMAILS = [
+  'instagram.okosteraker@gmail.com',
+  'marcus.o.ahlen@gmail.com',
+];
+const SAFE_ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
+const SAFE_EMAIL_REGEX = /^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/;
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const CLOCK_REGEX = /^\d{2}:\d{2}(:\d{2})?$/;
+const PIN_REGEX = /^\d{4,6}$/;
+const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+const MAX_LOGO_DATA_URL_LEN = 200_000;
+const BATCH_CHUNK_LIMIT = 350;
+
+function sanitizeCloudHexColor(raw?: string | null): string {
+  if (!raw || typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  return HEX_COLOR_REGEX.test(trimmed) ? trimmed.toLowerCase() : '';
+}
+
+function sanitizeCloudLogoDataUrl(raw?: string | null): string {
+  if (!raw || typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_LOGO_DATA_URL_LEN) return '';
+  if (
+    trimmed.startsWith('data:image/png;base64,') ||
+    trimmed.startsWith('data:image/jpeg;base64,')
+  ) {
+    return trimmed;
+  }
+  return '';
+}
+
+export function getStockholmTodayIso(date = new Date()): string {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Stockholm',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+function clampInt(val: unknown, min: number, max: number, fallback: number): number {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(num)));
+}
+
+function encodeNullableSec(val: number | null | undefined): number {
+  if (val === null || val === undefined || !Number.isFinite(val)) return -1;
+  return clampInt(val, 0, 86400, -1);
+}
+
+function decodeNullableSec(val: unknown): number | null {
+  const num = Number(val);
+  if (!Number.isFinite(num) || num < 0) return null;
+  return Math.min(86400, Math.round(num));
+}
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+const TOKEN_SERVICE_STORAGE_KEY = 'passersi_token_service_disabled_v1';
+const TOKEN_SERVICE_PROJECT_REF = firebaseConfig.messagingSenderId || firebaseConfig.projectId;
+export const TOKEN_SERVICE_ACTIVATION_URL = `https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=${TOKEN_SERVICE_PROJECT_REF}`;
+
+let tokenServiceDisabledFlag = (() => {
+  if (typeof window === 'undefined') return false;
+  try {
+    return sessionStorage.getItem(TOKEN_SERVICE_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+const tokenServiceListeners = new Set<(disabled: boolean) => void>();
+
+export function isTokenServiceApiDisabled(): boolean {
+  return tokenServiceDisabledFlag;
+}
+
+export function subscribeTokenServiceStatus(cb: (disabled: boolean) => void): () => void {
+  tokenServiceListeners.add(cb);
+  cb(tokenServiceDisabledFlag);
+  return () => {
+    tokenServiceListeners.delete(cb);
+  };
+}
+
+function setTokenServiceDisabled(disabled: boolean): void {
+  if (typeof window !== 'undefined') {
+    try {
+      if (disabled) {
+        sessionStorage.setItem(TOKEN_SERVICE_STORAGE_KEY, '1');
+      } else {
+        sessionStorage.removeItem(TOKEN_SERVICE_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage restrictions
+    }
+  }
+  if (tokenServiceDisabledFlag !== disabled) {
+    tokenServiceDisabledFlag = disabled;
+    tokenServiceListeners.forEach((fn) => fn(disabled));
+  }
+}
+
+export function isTokenServiceError(error: unknown): boolean {
+  const code = String((error as { code?: string })?.code || '').toLowerCase();
+  const msg = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  return (
+    code.includes('token-service-api') ||
+    msg.includes('token-service-api') ||
+    msg.includes('securetoken.googleapis.com')
+  );
+}
+
+function isTransientOfflineFirestoreError(error: unknown): boolean {
+  if (isTokenServiceError(error)) return true;
+  const code = String((error as { code?: string })?.code || '').toLowerCase();
+  const msg = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  return (
+    code === 'unavailable' ||
+    code.includes('network-request-failed') ||
+    msg.includes('the client is offline') ||
+    msg.includes('fetching auth token failed') ||
+    msg.includes('could not reach cloud firestore backend')
+  );
+}
+
+let pendingAuthValidation: Promise<User | null> | null = null;
+let proactiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearProactiveRefreshTimer(): void {
+  if (proactiveRefreshTimer) {
+    clearTimeout(proactiveRefreshTimer);
+    proactiveRefreshTimer = null;
+  }
+}
+
+function getStsExpirationMs(user: User): number | null {
+  const exp = (
+    user as unknown as { stsTokenManager?: { expirationTime?: number } }
+  ).stsTokenManager?.expirationTime;
+  return typeof exp === 'number' && Number.isFinite(exp) ? exp : null;
+}
+
+function scheduleProactiveTokenRefresh(user: User): void {
+  clearProactiveRefreshTimer();
+  const expMs = getStsExpirationMs(user);
+  if (!expMs) return;
+  const delayMs = Math.max(5_000, expMs - Date.now() - 3 * 60_000);
+  proactiveRefreshTimer = setTimeout(() => {
+    void ensureValidFirestoreUser(true);
+  }, delayMs);
+}
+
+/**
+ * Verifies that any cached Firebase Auth user has a valid, refreshable ID token BEFORE
+ * Firestore opens a backend stream. If `securetoken.googleapis.com` is disabled in GCP,
+ * signs out the stale Firebase Auth cache cleanly (leaving PasserSI's Secretariat session intact)
+ * so `@firebase/firestore` never fails with `Fetching auth token failed`.
+ */
+export async function ensureValidFirestoreUser(forceRefresh = false): Promise<User | null> {
+  if (pendingAuthValidation && !forceRefresh) {
+    return pendingAuthValidation;
+  }
+
+  const run = (async (): Promise<User | null> => {
+    try {
+      if (typeof auth.authStateReady === 'function') {
+        await auth.authStateReady();
+      }
+    } catch {
+      // ignore
+    }
+
+    const current = auth.currentUser;
+    if (!current) {
+      clearProactiveRefreshTimer();
+      return null;
+    }
+
+    const expMs = getStsExpirationMs(current);
+    const nearExpiry = expMs !== null && expMs - Date.now() < 3 * 60_000;
+    const shouldForce = forceRefresh || nearExpiry;
+
+    try {
+      const token = await current.getIdToken(shouldForce);
+      if (!token) {
+        clearProactiveRefreshTimer();
+        await signOut(auth).catch(() => {});
+        return null;
+      }
+      if (shouldForce) {
+        setTokenServiceDisabled(false);
+      }
+      scheduleProactiveTokenRefresh(current);
+      return current;
+    } catch (err) {
+      clearProactiveRefreshTimer();
+      if (isTokenServiceError(err)) {
+        setTokenServiceDisabled(true);
+        await signOut(auth).catch(() => {});
+        return null;
+      }
+      const code = String((err as { code?: string })?.code || '').toLowerCase();
+      if (
+        code.includes('user-token-expired') ||
+        code.includes('invalid-user-token') ||
+        code.includes('user-disabled') ||
+        code.includes('user-not-found')
+      ) {
+        await signOut(auth).catch(() => {});
+        return null;
+      }
+      if (expMs !== null && expMs <= Date.now()) {
+        return null;
+      }
+      return current;
+    }
+  })();
+
+  pendingAuthValidation = run;
+  try {
+    return await run;
+  } finally {
+    if (pendingAuthValidation === run) {
+      pendingAuthValidation = null;
+    }
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && auth.currentUser) {
+      void ensureValidFirestoreUser(false);
+    }
+  });
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  if (isTokenServiceError(error)) {
+    setTokenServiceDisabled(true);
+    void signOut(auth).catch(() => {});
+  }
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+function handleWriteOrOfflineError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  if (isTokenServiceError(error)) {
+    setTokenServiceDisabled(true);
+    void signOut(auth).catch(() => {});
+    throw new Error(
+      'Token Service API (securetoken.googleapis.com) är inaktiverat i Google Cloud-projektet.'
+    );
+  }
+  if (isTransientOfflineFirestoreError(error)) {
+    throw new Error('Kunde inte nå Firestore i offlineläge.');
+  }
+  return handleFirestoreError(error, operationType, path);
+}
+
+// Validate connection to Firestore on boot (after ensuring cached auth token is healthy)
+async function testConnection(): Promise<void> {
+  try {
+    await ensureValidFirestoreUser();
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes('the client is offline') &&
+      !isTokenServiceApiDisabled() &&
+      (typeof navigator === 'undefined' || navigator.onLine !== false)
+    ) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+void testConnection();
+
+export function sanitizeFirestoreId(raw: string, fallbackPrefix = 'id'): string {
+  const cleaned = raw
+    .trim()
+    .replace(/[^a-zA-Z0-9_\-]/g, '_')
+    .slice(0, 128);
+  if (!cleaned || !SAFE_ID_REGEX.test(cleaned)) {
+    return `${fallbackPrefix}_${Date.now()}`;
+  }
+  return cleaned;
+}
+
+/**
+ * Deterministic, collision-safe invite document ID derived from normalized lowercase email.
+ * Matches ^[a-zA-Z0-9_\-]+$ and stays <= 128 characters.
+ */
+export function emailToInviteId(email: string): string {
+  const norm = email.trim().toLowerCase();
+  let hex = '';
+  for (let i = 0; i < norm.length; i++) {
+    hex += norm.charCodeAt(i).toString(16).padStart(2, '0');
+  }
+  return `inv_${hex}`.slice(0, 128);
+}
+
+export function subscribeFirebaseAuth(cb: (user: User | null) => void): () => void {
+  let cancelled = false;
+  const unsub = onAuthStateChanged(auth, (u) => {
+    if (!u) {
+      if (!cancelled) cb(null);
+      return;
+    }
+    void ensureValidFirestoreUser().then((validUser) => {
+      if (!cancelled) {
+        cb(validUser);
+      }
+    });
+  });
+  return () => {
+    cancelled = true;
+    unsub();
+  };
+}
+
+/**
+ * Pre-warms Firebase Auth's BrowserPopupRedirectResolver iframe (`gapi.iframes`) on desktop
+ * browsers so clicking "Logga in med Google" opens the OAuth window synchronously within the
+ * browser's transient user-activation window instead of timing out with `auth/popup-blocked`.
+ */
+export function prewarmGooglePopupAuth(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const internalAuth = auth as unknown as {
+      _popupRedirectResolver?: {
+        _initialize?: (authInstance: unknown) => Promise<unknown>;
+      };
+    };
+    if (typeof internalAuth._popupRedirectResolver?._initialize === 'function') {
+      void internalAuth._popupRedirectResolver._initialize(auth).catch(() => {
+        // Ignore background pre-warm errors (e.g., when offline in the forest)
+      });
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export async function signInWithGooglePopup(): Promise<{ user: User | null; idToken: string }> {
+  const credential = await signInWithPopup(auth, googleProvider);
+  let idToken = '';
+  try {
+    idToken = await credential.user.getIdToken(false);
+  } catch (err) {
+    const fallbackToken = (
+      credential.user as unknown as { stsTokenManager?: { accessToken?: string } }
+    ).stsTokenManager?.accessToken;
+    if (fallbackToken) {
+      idToken = fallbackToken;
+    } else {
+      throw err;
+    }
+  }
+
+  // Proactively verify whether Token Service API (`securetoken.googleapis.com`) is enabled in GCP.
+  // If disabled, keep `idToken` so Secretariat login succeeds, and clear Firebase Auth's local cache
+  // so Firestore never fails later when the 1h token expires.
+  try {
+    const refreshedToken = await credential.user.getIdToken(true);
+    if (refreshedToken) {
+      idToken = refreshedToken;
+    }
+    setTokenServiceDisabled(false);
+    scheduleProactiveTokenRefresh(credential.user);
+    return { user: credential.user, idToken };
+  } catch (refreshErr) {
+    clearProactiveRefreshTimer();
+    if (isTokenServiceError(refreshErr)) {
+      setTokenServiceDisabled(true);
+      await signOut(auth).catch(() => {});
+      return { user: null, idToken };
+    }
+    scheduleProactiveTokenRefresh(credential.user);
+    return { user: credential.user, idToken };
+  }
+}
+
+export async function signOutFirebase(): Promise<void> {
+  clearProactiveRefreshTimer();
+  if (auth.currentUser) {
+    await signOut(auth);
+  }
+}
+
+/**
+ * Claims or refreshes the verified Google user's non-PII `/admins/{uid}` role document in Firestore.
+ */
+export async function ensureAdminRoleInFirestore(
+  user: User
+): Promise<{ claimed: boolean; role: ClubAdminTier | null }> {
+  const validUser = await ensureValidFirestoreUser();
+  if (!validUser || validUser.uid !== user.uid || !user.email || !user.emailVerified) {
+    return { claimed: false, role: null };
+  }
+  const normalizedEmail = user.email.trim().toLowerCase();
+  const uid = sanitizeFirestoreId(user.uid, 'usr');
+  const displayName = (user.displayName || normalizedEmail.split('@')[0] || 'Tävlingsledare')
+    .trim()
+    .slice(0, 100);
+
+  const adminPath = `admins/${uid}`;
+  let existingRole: ClubAdminTier | null = null;
+
+  try {
+    const snap = await getDoc(doc(db, 'admins', uid));
+    if (snap.exists()) {
+      const data = snap.data() as { role?: ClubAdminTier; displayName?: string };
+      existingRole = data.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
+      if (data.displayName !== displayName) {
+        try {
+          await updateDoc(doc(db, 'admins', uid), {
+            displayName,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleWriteOrOfflineError(err, OperationType.UPDATE, adminPath);
+        }
+      }
+      return { claimed: true, role: existingRole };
+    }
+  } catch (err) {
+    if (isTransientOfflineFirestoreError(err)) {
+      return { claimed: false, role: null };
+    }
+    handleFirestoreError(err, OperationType.GET, adminPath);
+  }
+
+  // Bootstrapped primary owner
+  if (BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(normalizedEmail)) {
+    try {
+      const defaultName =
+        normalizedEmail === 'instagram.okosteraker@gmail.com'
+          ? 'OK Österåker (Huvudadmin)'
+          : 'Marcus Åhlén (Huvudadmin)';
+      await setDoc(doc(db, 'admins', uid), {
+        uid,
+        displayName: displayName || defaultName,
+        role: 'SUPER_ADMIN',
+        inviteId: 'bootstrap_super_admin',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return { claimed: true, role: 'SUPER_ADMIN' };
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.CREATE, adminPath);
+    }
+  }
+
+  // Otherwise check if an active invite exists for this verified email
+  const inviteId = emailToInviteId(normalizedEmail);
+  try {
+    const invSnap = await getDoc(doc(db, 'adminInvites', inviteId));
+    if (!invSnap.exists()) {
+      return { claimed: false, role: null };
+    }
+    const invData = invSnap.data() as { active?: boolean; role?: ClubAdminTier };
+    if (!invData.active) {
+      return { claimed: false, role: null };
+    }
+    const grantedRole: ClubAdminTier =
+      invData.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
+
+    try {
+      await setDoc(doc(db, 'admins', uid), {
+        uid,
+        displayName,
+        role: grantedRole,
+        inviteId,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return { claimed: true, role: grantedRole };
+    } catch (createErr) {
+      handleWriteOrOfflineError(createErr, OperationType.CREATE, adminPath);
+    }
+  } catch {
+    // Non-invited users receive PERMISSION_DENIED on /adminInvites/{inviteId} per PII isolation rules
+    return { claimed: false, role: null };
+  }
+}
+
+export interface FirestoreAdminInviteItem {
+  inviteId: string;
+  email: string;
+  displayName: string;
+  role: ClubAdminTier;
+  active: boolean;
+}
+
+export async function listMyAdminInvitesFromFirestore(): Promise<FirestoreAdminInviteItem[]> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) return [];
+  const path = 'adminInvites';
+  try {
+    const q = query(collection(db, 'adminInvites'), where('createdByUid', '==', current.uid));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => {
+      const data = d.data() as {
+        inviteId: string;
+        email: string;
+        displayName: string;
+        role: ClubAdminTier;
+        active: boolean;
+      };
+      return {
+        inviteId: data.inviteId,
+        email: data.email,
+        displayName: data.displayName,
+        role: data.role,
+        active: data.active,
+      };
+    });
+  } catch (err) {
+    if (isTransientOfflineFirestoreError(err)) {
+      return [];
+    }
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}
+
+export async function upsertAdminInviteInFirestore(params: {
+  email: string;
+  displayName: string;
+  role?: ClubAdminTier;
+  isSuperAdmin?: boolean;
+}): Promise<string | null> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) return null;
+
+  const normEmail = params.email.trim().toLowerCase().slice(0, 120);
+  if (!SAFE_EMAIL_REGEX.test(normEmail)) {
+    throw new Error('Ange en giltig e-postadress med små bokstäver.');
+  }
+  const cleanName = (params.displayName.trim() || normEmail.split('@')[0]).slice(0, 100);
+  const inviteId = emailToInviteId(normEmail);
+  const role: ClubAdminTier = params.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
+  const path = `adminInvites/${inviteId}`;
+
+  let existsAlready = false;
+  try {
+    const existing = await getDoc(doc(db, 'adminInvites', inviteId));
+    existsAlready = existing.exists();
+  } catch (err) {
+    handleWriteOrOfflineError(err, OperationType.GET, path);
+  }
+
+  if (existsAlready) {
+    try {
+      if (params.isSuperAdmin) {
+        await updateDoc(doc(db, 'adminInvites', inviteId), {
+          displayName: cleanName,
+          role,
+          active: true,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await updateDoc(doc(db, 'adminInvites', inviteId), {
+          displayName: cleanName,
+          active: true,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return inviteId;
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.UPDATE, path);
+    }
+  } else {
+    try {
+      await setDoc(doc(db, 'adminInvites', inviteId), {
+        inviteId,
+        email: normEmail,
+        displayName: cleanName,
+        role: params.isSuperAdmin ? role : 'RACE_ADMIN',
+        active: true,
+        createdByUid: sanitizeFirestoreId(current.uid, 'usr'),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return inviteId;
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.CREATE, path);
+    }
+  }
+}
+
+export async function removeAdminInviteFromFirestore(email: string): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) return;
+  const normEmail = email.trim().toLowerCase();
+  const inviteId = emailToInviteId(normEmail);
+  const path = `adminInvites/${inviteId}`;
+
+  let existsAlready = false;
+  try {
+    const snap = await getDoc(doc(db, 'adminInvites', inviteId));
+    existsAlready = snap.exists();
+  } catch (err) {
+    handleWriteOrOfflineError(err, OperationType.GET, path);
+  }
+  if (!existsAlready) return;
+
+  try {
+    await deleteDoc(doc(db, 'adminInvites', inviteId));
+  } catch (err) {
+    handleWriteOrOfflineError(err, OperationType.DELETE, path);
+  }
+}
+
+type QueuedBatchOp =
+  | { kind: 'set'; ref: DocumentReference; data: Record<string, unknown>; path: string }
+  | { kind: 'update'; ref: DocumentReference; data: Record<string, unknown>; path: string }
+  | { kind: 'delete'; ref: DocumentReference; path: string };
+
+async function commitQueuedBatchOps(ops: QueuedBatchOp[]): Promise<void> {
+  for (let i = 0; i < ops.length; i += BATCH_CHUNK_LIMIT) {
+    const slice = ops.slice(i, i + BATCH_CHUNK_LIMIT);
+    const batch = writeBatch(db);
+    for (const op of slice) {
+      if (op.kind === 'set') {
+        batch.set(op.ref, op.data);
+      } else if (op.kind === 'update') {
+        batch.update(op.ref, op.data);
+      } else {
+        batch.delete(op.ref);
+      }
+    }
+    try {
+      await batch.commit();
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.WRITE, slice[0]?.path || 'batch');
+    }
+  }
+}
+
+/**
+ * Deletes a competition and all of its child courses, classes, and competitors from Firestore.
+ * Deletes child subcollection documents first while the parent competition document still exists
+ * so Master Gate checks pass deterministically.
+ */
+export async function deleteCompetitionFromFirestore(rawCompetitionId: string): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) return;
+
+  const competitionId = sanitizeFirestoreId(rawCompetitionId, 'evt');
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const compPath = `competitions/${competitionId}`;
+
+  let compExists = false;
+  try {
+    const snap = await getDoc(doc(db, 'competitions', competitionId));
+    compExists = snap.exists();
+  } catch (err) {
+    handleWriteOrOfflineError(err, OperationType.GET, compPath);
+  }
+  if (!compExists) return;
+
+  const deleteOps: QueuedBatchOp[] = [];
+  for (const subName of ['courses', 'classes', 'competitors'] as const) {
+    const subPath = `competitions/${competitionId}/${subName}`;
+    try {
+      const q = query(
+        collection(db, 'competitions', competitionId, subName),
+        where('ownerUid', '==', ownerUid)
+      );
+      const subSnap = await getDocs(q);
+      for (const d of subSnap.docs) {
+        deleteOps.push({
+          kind: 'delete',
+          ref: doc(db, 'competitions', competitionId, subName, d.id),
+          path: `${subPath}/${d.id}`,
+        });
+      }
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.LIST, subPath);
+    }
+  }
+
+  if (deleteOps.length > 0) {
+    await commitQueuedBatchOps(deleteOps);
+  }
+
+  try {
+    await deleteDoc(doc(db, 'competitions', competitionId));
+  } catch (err) {
+    handleWriteOrOfflineError(err, OperationType.DELETE, compPath);
+  }
+}
+
+/**
+ * Syncs the entire club season (clubSettings, competitions, courses, classes, competitors, SI punches,
+ * role PINs, and empty/demoCleared states) to Firestore under Zero-Trust rules.
+ */
+export async function syncFullSeasonToFirestore(
+  snapshot: CloudSeasonSnapshot,
+  isSuperAdmin: boolean
+): Promise<{ syncedEvents: number }> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) {
+    return { syncedEvents: 0 };
+  }
+
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const competitionIds = snapshot.events
+    .slice(0, 100)
+    .map((ev) => sanitizeFirestoreId(ev.competition.id, 'evt'));
+
+  // 1. Upsert /clubSettings/default
+  const clubPath = 'clubSettings/default';
+  const clubMutable = {
+    clubName: (snapshot.clubSettings.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
+    eventorOrgId: (snapshot.clubSettings.eventorOrgId || '').trim().slice(0, 32),
+    swishNumber: (snapshot.clubSettings.swishNumber || '').trim().slice(0, 20),
+    swishRecipientName: (snapshot.clubSettings.swishRecipientName || '').trim().slice(0, 100),
+    defaultDirectEntryFeeSek: clampInt(
+      snapshot.clubSettings.defaultDirectEntryFeeSek,
+      0,
+      10000,
+      100
+    ),
+    rentalCardFeeSek: clampInt(snapshot.clubSettings.rentalCardFeeSek, 0, 5000, 30),
+    missingRentalFeeSek: clampInt(snapshot.clubSettings.missingRentalFeeSek, 0, 20000, 650),
+    portalTitle: (snapshot.clubSettings.portalTitle || '').trim().slice(0, 80),
+    logoDataUrl: sanitizeCloudLogoDataUrl(snapshot.clubSettings.logoDataUrl),
+    customBgColor: sanitizeCloudHexColor(snapshot.clubSettings.customBgColor),
+    customTextColor: sanitizeCloudHexColor(snapshot.clubSettings.customTextColor),
+    customAccentColor: sanitizeCloudHexColor(snapshot.clubSettings.customAccentColor),
+    activeEventId: snapshot.activeEventId
+      ? sanitizeFirestoreId(snapshot.activeEventId, 'evt')
+      : '',
+    demoCleared: Boolean(snapshot.demoCleared),
+    competitionIds,
+  };
+
+  let existingClubOwner: string | null = null;
+  try {
+    const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
+    if (clubSnap.exists()) {
+      existingClubOwner = (clubSnap.data() as { ownerUid?: string }).ownerUid || null;
+    }
+  } catch (err) {
+    handleWriteOrOfflineError(err, OperationType.GET, clubPath);
+  }
+
+  if (!existingClubOwner) {
+    try {
+      await setDoc(doc(db, 'clubSettings', 'default'), {
+        settingId: 'default',
+        ...clubMutable,
+        ownerUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.CREATE, clubPath);
+    }
+  } else if (existingClubOwner === ownerUid || isSuperAdmin) {
+    try {
+      await updateDoc(doc(db, 'clubSettings', 'default'), {
+        ...clubMutable,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.UPDATE, clubPath);
+    }
+  }
+
+  // 2. Sync each competition + its courses, classes, and competitors
+  let syncedEvents = 0;
+  const activeCompSet = new Set<string>(competitionIds);
+
+  for (const ev of snapshot.events.slice(0, 100)) {
+    const competitionId = sanitizeFirestoreId(ev.competition.id, 'evt');
+    const rawShort = sanitizeFirestoreId(ev.competition.shortCode || 'oko26', 'sc').slice(0, 32);
+    const shortCode = rawShort.length >= 2 ? rawShort : 'ev26';
+    const targetStatus: EventLifecycleStatus =
+      ev.competition.status === 'LIVE' ||
+      ev.competition.status === 'UPCOMING' ||
+      ev.competition.status === 'COMPLETED'
+        ? ev.competition.status
+        : 'LIVE';
+    const competitorCount = clampInt(ev.competitors.length, 0, 50000, 0);
+    const rawFinished = ev.competitors.filter(
+      (c) => c.status === 'OK' || c.status === 'MP' || c.status === 'PRELIMINARY_FIN'
+    ).length;
+    const finishedCount = Math.min(competitorCount, clampInt(rawFinished, 0, 50000, 0));
+
+    const compMutableBase = {
+      shortCode,
+      name: (ev.competition.name || 'Tävling').trim().slice(0, 140) || 'Tävling',
+      organizer: (ev.competition.organizer || 'Klubb').trim().slice(0, 100) || 'Klubb',
+      date: ISO_DATE_REGEX.test(ev.competition.date)
+        ? ev.competition.date
+        : getStockholmTodayIso(),
+      zeroTimeStr: CLOCK_REGEX.test(ev.competition.zeroTimeStr)
+        ? ev.competition.zeroTimeStr
+        : '10:00:00',
+      zeroTimeSec: clampInt(ev.competition.zeroTimeSec, 0, 86400, 36000),
+      arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
+      seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
+      allowSelfRegistration: ev.competition.allowSelfRegistration !== false,
+      enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
+      competitorCount,
+      finishedCount,
+      brokenControls: (ev.brokenControls || [])
+        .slice(0, 64)
+        .map((n) => clampInt(n, 1, 999, 31)),
+      pinStart: PIN_REGEX.test(ev.rolePins?.START || '') ? ev.rolePins.START : '1100',
+      pinReadout: PIN_REGEX.test(ev.rolePins?.READOUT || '') ? ev.rolePins.READOUT : '2200',
+      pinForest: PIN_REGEX.test(ev.rolePins?.FOREST || '') ? ev.rolePins.FOREST : '3300',
+      pinSpeaker: PIN_REGEX.test(ev.rolePins?.SPEAKER || '') ? ev.rolePins.SPEAKER : '4400',
+      pinsCustomized: Boolean(ev.pinsCustomized),
+    };
+
+    const compPath = `competitions/${competitionId}`;
+    let existingComp: { status?: string; ownerUid?: string } | null = null;
+    try {
+      const snap = await getDoc(doc(db, 'competitions', competitionId));
+      if (snap.exists()) {
+        existingComp = snap.data() as { status?: string; ownerUid?: string };
+      }
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.GET, compPath);
+    }
+
+    if (existingComp) {
+      const isOwner = existingComp.ownerUid === ownerUid;
+      const lockedTerminal = existingComp.status === 'COMPLETED' && !isSuperAdmin;
+      if ((!isOwner && !isSuperAdmin) || lockedTerminal) {
+        continue;
+      }
+    }
+
+    // Create parent competition first if missing so subcollection Master Gate exists() passes
+    const deferCompletedLock = !isSuperAdmin && targetStatus === 'COMPLETED';
+    if (!existingComp) {
+      try {
+        await setDoc(doc(db, 'competitions', competitionId), {
+          competitionId,
+          ...compMutableBase,
+          status: deferCompletedLock ? 'LIVE' : targetStatus,
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleWriteOrOfflineError(err, OperationType.CREATE, compPath);
+      }
+    }
+
+    // Sync courses, classes, and competitors in chunked batches
+    const childOps: QueuedBatchOp[] = [];
+
+    // 2a. Courses
+    const existingCourseIds = new Set<string>();
+    try {
+      const crsSnap = await getDocs(
+        query(
+          collection(db, 'competitions', competitionId, 'courses'),
+          where('ownerUid', '==', ownerUid)
+        )
+      );
+      crsSnap.docs.forEach((d) => existingCourseIds.add(d.id));
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/courses`);
+    }
+
+    const nextCourseIds = new Set<string>();
+    for (const crs of ev.courses) {
+      const courseId = sanitizeFirestoreId(crs.id, 'crs');
+      nextCourseIds.add(courseId);
+      const crsRef = doc(db, 'competitions', competitionId, 'courses', courseId);
+      const crsPath = `competitions/${competitionId}/courses/${courseId}`;
+      const crsMutable = {
+        name: (crs.name || 'Bana').trim().slice(0, 120) || 'Bana',
+        lengthMeters: clampInt(crs.lengthMeters, 0, 200000, 3000),
+        climbMeters: clampInt(crs.climbMeters, 0, 20000, 0),
+        controls: (crs.controls || []).slice(0, 128).map((c) => clampInt(c, 1, 999, 31)),
+      };
+      if (existingCourseIds.has(courseId)) {
+        childOps.push({
+          kind: 'update',
+          ref: crsRef,
+          path: crsPath,
+          data: { ...crsMutable, updatedAt: serverTimestamp() },
+        });
+      } else {
+        childOps.push({
+          kind: 'set',
+          ref: crsRef,
+          path: crsPath,
+          data: {
+            courseId,
+            competitionId,
+            ...crsMutable,
+            ownerUid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        });
+      }
+    }
+    for (const oldId of existingCourseIds) {
+      if (!nextCourseIds.has(oldId)) {
+        childOps.push({
+          kind: 'delete',
+          ref: doc(db, 'competitions', competitionId, 'courses', oldId),
+          path: `competitions/${competitionId}/courses/${oldId}`,
+        });
+      }
+    }
+
+    // 2b. Classes
+    const existingClassIds = new Set<string>();
+    try {
+      const clsSnap = await getDocs(
+        query(
+          collection(db, 'competitions', competitionId, 'classes'),
+          where('ownerUid', '==', ownerUid)
+        )
+      );
+      clsSnap.docs.forEach((d) => existingClassIds.add(d.id));
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/classes`);
+    }
+
+    const nextClassIds = new Set<string>();
+    for (const cls of ev.classes) {
+      const classId = sanitizeFirestoreId(cls.id, 'cls');
+      nextClassIds.add(classId);
+      const clsRef = doc(db, 'competitions', competitionId, 'classes', classId);
+      const clsPath = `competitions/${competitionId}/classes/${classId}`;
+      const classFormat: ClassCompetitionFormat =
+        cls.classFormat === 'FORKED' || cls.classFormat === 'ROGAINING'
+          ? cls.classFormat
+          : 'STANDARD';
+      const clsMutable = {
+        name: (cls.name || 'Klass').trim().slice(0, 80) || 'Klass',
+        courseId: cls.courseId ? sanitizeFirestoreId(cls.courseId, 'crs') : '',
+        classFormat,
+        forkCourseIds: (cls.forkCourseIds || [])
+          .slice(0, 32)
+          .map((id) => sanitizeFirestoreId(id, 'crs')),
+        rogainingMaxTimeSec:
+          cls.rogainingMaxTimeSec !== null && cls.rogainingMaxTimeSec !== undefined
+            ? clampInt(cls.rogainingMaxTimeSec, 0, 86400, -1)
+            : -1,
+        rogainingPenaltyPerMin:
+          cls.rogainingPenaltyPerMin !== null && cls.rogainingPenaltyPerMin !== undefined
+            ? clampInt(cls.rogainingPenaltyPerMin, 0, 1000, -1)
+            : -1,
+        allowDirectEntry: Boolean(cls.allowDirectEntry),
+        freeStart: Boolean(cls.freeStart),
+        autoMatchCourse: Boolean(cls.autoMatchCourse),
+        feeSek: clampInt(cls.feeSek, 0, 10000, 100),
+      };
+      if (existingClassIds.has(classId)) {
+        childOps.push({
+          kind: 'update',
+          ref: clsRef,
+          path: clsPath,
+          data: { ...clsMutable, updatedAt: serverTimestamp() },
+        });
+      } else {
+        childOps.push({
+          kind: 'set',
+          ref: clsRef,
+          path: clsPath,
+          data: {
+            classId,
+            competitionId,
+            ...clsMutable,
+            ownerUid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        });
+      }
+    }
+    for (const oldId of existingClassIds) {
+      if (!nextClassIds.has(oldId)) {
+        childOps.push({
+          kind: 'delete',
+          ref: doc(db, 'competitions', competitionId, 'classes', oldId),
+          path: `competitions/${competitionId}/classes/${oldId}`,
+        });
+      }
+    }
+
+    // 2c. Competitors (including raw punches & rental/payment flags)
+    const existingCompIds = new Set<string>();
+    try {
+      const cmpSnap = await getDocs(
+        query(
+          collection(db, 'competitions', competitionId, 'competitors'),
+          where('ownerUid', '==', ownerUid)
+        )
+      );
+      cmpSnap.docs.forEach((d) => existingCompIds.add(d.id));
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/competitors`);
+    }
+
+    const nextCompIds = new Set<string>();
+    for (const cmp of ev.competitors) {
+      const competitorId = sanitizeFirestoreId(cmp.id, 'cmp');
+      nextCompIds.add(competitorId);
+      const cmpRef = doc(db, 'competitions', competitionId, 'competitors', competitorId);
+      const cmpPath = `competitions/${competitionId}/competitors/${competitorId}`;
+      const rawPunches = (cmp.rawReadout?.punches ?? cmp.cardPunches ?? []).slice(0, 192);
+      const punchCodes = rawPunches.map((p) => clampInt(p.code, 1, 999, 31));
+      const punchTimes = rawPunches.map((p) => clampInt(p.timeSec, 0, 86400, 0));
+      const status: RunnerStatus =
+        cmp.status === 'REGISTERED' ||
+        cmp.status === 'CHECKED' ||
+        cmp.status === 'IN_FOREST' ||
+        cmp.status === 'PRELIMINARY_FIN' ||
+        cmp.status === 'OK' ||
+        cmp.status === 'MP' ||
+        cmp.status === 'DNF' ||
+        cmp.status === 'DNS'
+          ? cmp.status
+          : 'REGISTERED';
+
+      const cmpMutable = {
+        bib: clampInt(cmp.bib, 1, 99999, 1),
+        fullName: (cmp.fullName || 'Deltagare').trim().slice(0, 120) || 'Deltagare',
+        club: (cmp.club || 'Klubblös').trim().slice(0, 100) || 'Klubblös',
+        classId: sanitizeFirestoreId(cmp.classId || 'cls_open', 'cls'),
+        siNumber: clampInt(cmp.siNumber, 1, 99999999, 1000),
+        cardSeries: (cmp.cardSeries || 'SI-Card 10').trim().slice(0, 24) || 'SI-Card 10',
+        isRentalCard: Boolean(cmp.isRentalCard),
+        rentalReturned: Boolean(cmp.rentalReturned),
+        isSelfRegistered: Boolean(cmp.isSelfRegistered),
+        feePaid: Boolean(cmp.feePaid),
+        status,
+        allocatedStartSec: encodeNullableSec(cmp.allocatedStartSec),
+        checkTimeSec: encodeNullableSec(cmp.rawReadout?.checkTimeSec ?? cmp.checkTimeSec),
+        startTimeSec: encodeNullableSec(cmp.rawReadout?.startTimeSec ?? cmp.startTimeSec),
+        finishTimeSec: encodeNullableSec(cmp.rawReadout?.finishTimeSec ?? cmp.finishTimeSec),
+        manualFinishTimeSec: encodeNullableSec(cmp.manualFinishTimeSec),
+        runningTimeSec: encodeNullableSec(cmp.runningTimeSec),
+        readoutAtIso: (cmp.readoutAt || '').trim().slice(0, 40),
+        punchCodes,
+        punchTimes,
+      };
+
+      if (existingCompIds.has(competitorId)) {
+        childOps.push({
+          kind: 'update',
+          ref: cmpRef,
+          path: cmpPath,
+          data: { ...cmpMutable, updatedAt: serverTimestamp() },
+        });
+      } else {
+        childOps.push({
+          kind: 'set',
+          ref: cmpRef,
+          path: cmpPath,
+          data: {
+            competitorId,
+            competitionId,
+            ...cmpMutable,
+            ownerUid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+        });
+      }
+    }
+    for (const oldId of existingCompIds) {
+      if (!nextCompIds.has(oldId)) {
+        childOps.push({
+          kind: 'delete',
+          ref: doc(db, 'competitions', competitionId, 'competitors', oldId),
+          path: `competitions/${competitionId}/competitors/${oldId}`,
+        });
+      }
+    }
+
+    if (childOps.length > 0) {
+      await commitQueuedBatchOps(childOps);
+    }
+
+    // Update parent competition metadata (or finalize deferred COMPLETED lock)
+    if (existingComp || deferCompletedLock) {
+      try {
+        await updateDoc(doc(db, 'competitions', competitionId), {
+          ...compMutableBase,
+          status: targetStatus,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleWriteOrOfflineError(err, OperationType.UPDATE, compPath);
+      }
+    }
+
+    syncedEvents += 1;
+  }
+
+  // 3. Remove any competitions owned by this user that were deleted locally
+  try {
+    const ownedSnap = await getDocs(
+      query(collection(db, 'competitions'), where('ownerUid', '==', ownerUid))
+    );
+    for (const compDoc of ownedSnap.docs) {
+      if (!activeCompSet.has(compDoc.id)) {
+        await deleteCompetitionFromFirestore(compDoc.id);
+      }
+    }
+  } catch (err) {
+    handleWriteOrOfflineError(err, OperationType.LIST, 'competitions');
+  }
+
+  return { syncedEvents };
+}
+
+/**
+ * Loads the complete club season snapshot from Firestore for Cloud Run cold-start hydration.
+ * Returns null if `clubSettings/default` has not been created yet so fresh apps sync upward first.
+ */
+export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot | null> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) return null;
+
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const clubPath = 'clubSettings/default';
+
+  interface CloudClubDocData {
+    clubName?: string;
+    eventorOrgId?: string;
+    swishNumber?: string;
+    swishRecipientName?: string;
+    defaultDirectEntryFeeSek?: number;
+    rentalCardFeeSek?: number;
+    missingRentalFeeSek?: number;
+    portalTitle?: string;
+    logoDataUrl?: string;
+    customBgColor?: string;
+    customTextColor?: string;
+    customAccentColor?: string;
+    activeEventId?: string;
+    demoCleared?: boolean;
+    competitionIds?: string[];
+  }
+
+  let clubData: CloudClubDocData | null = null;
+
+  try {
+    const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
+    if (!clubSnap.exists()) {
+      return null;
+    }
+    clubData = clubSnap.data() as CloudClubDocData;
+  } catch (err) {
+    if (isTransientOfflineFirestoreError(err)) {
+      if (isTokenServiceError(err)) {
+        setTokenServiceDisabled(true);
+        void signOut(auth).catch(() => {});
+      }
+      return null;
+    }
+    handleFirestoreError(err, OperationType.GET, clubPath);
+  }
+
+  if (!clubData) return null;
+
+  const clubSettings: ClubSettings = {
+    clubName: clubData.clubName || 'OK Österåker',
+    eventorOrgId: clubData.eventorOrgId || '',
+    swishNumber: clubData.swishNumber || '',
+    swishRecipientName: clubData.swishRecipientName || clubData.clubName || 'OK Österåker',
+    defaultDirectEntryFeeSek: Number(clubData.defaultDirectEntryFeeSek ?? 100),
+    rentalCardFeeSek: Number(clubData.rentalCardFeeSek ?? 30),
+    missingRentalFeeSek: Number(clubData.missingRentalFeeSek ?? 650),
+    portalTitle: (clubData.portalTitle || '').trim().slice(0, 80),
+    logoDataUrl: sanitizeCloudLogoDataUrl(clubData.logoDataUrl),
+    customBgColor: sanitizeCloudHexColor(clubData.customBgColor),
+    customTextColor: sanitizeCloudHexColor(clubData.customTextColor),
+    customAccentColor: sanitizeCloudHexColor(clubData.customAccentColor),
+  };
+
+  const targetIds = Array.isArray(clubData.competitionIds) ? clubData.competitionIds : [];
+  if (targetIds.length === 0) {
+    return {
+      activeEventId: '',
+      demoCleared: Boolean(clubData.demoCleared),
+      clubSettings,
+      events: [],
+    };
+  }
+
+  const events: CloudEventExportItem[] = [];
+  for (const rawCompId of targetIds) {
+    const competitionId = sanitizeFirestoreId(rawCompId, 'evt');
+    const compPath = `competitions/${competitionId}`;
+    let compDocData: Record<string, unknown> | null = null;
+    try {
+      const cSnap = await getDoc(doc(db, 'competitions', competitionId));
+      if (cSnap.exists()) {
+        compDocData = cSnap.data() as Record<string, unknown>;
+      }
+    } catch (err) {
+      if (isTransientOfflineFirestoreError(err)) {
+        return null;
+      }
+      handleFirestoreError(err, OperationType.GET, compPath);
+    }
+    if (!compDocData) continue;
+
+    const compOwnerUid = String(compDocData.ownerUid || '');
+    const canListSubcollections = compOwnerUid === ownerUid;
+
+    const courses: Course[] = [];
+    const classes: CompClass[] = [];
+    const competitors: Competitor[] = [];
+
+    if (canListSubcollections) {
+      try {
+        const crsSnap = await getDocs(
+          query(
+            collection(db, 'competitions', competitionId, 'courses'),
+            where('ownerUid', '==', ownerUid)
+          )
+        );
+        for (const d of crsSnap.docs) {
+          const cd = d.data() as {
+            courseId: string;
+            name: string;
+            lengthMeters: number;
+            climbMeters: number;
+            controls: number[];
+          };
+          courses.push({
+            id: cd.courseId || d.id,
+            name: cd.name || 'Bana',
+            lengthMeters: Number(cd.lengthMeters || 0),
+            climbMeters: Number(cd.climbMeters || 0),
+            controls: Array.isArray(cd.controls) ? cd.controls.map(Number) : [],
+          });
+        }
+      } catch (err) {
+        if (isTransientOfflineFirestoreError(err)) {
+          return null;
+        }
+        handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/courses`);
+      }
+
+      try {
+        const clsSnap = await getDocs(
+          query(
+            collection(db, 'competitions', competitionId, 'classes'),
+            where('ownerUid', '==', ownerUid)
+          )
+        );
+        for (const d of clsSnap.docs) {
+          const cld = d.data() as {
+            classId: string;
+            name: string;
+            courseId: string;
+            classFormat: ClassCompetitionFormat;
+            forkCourseIds: string[];
+            rogainingMaxTimeSec: number;
+            rogainingPenaltyPerMin: number;
+            allowDirectEntry: boolean;
+            freeStart: boolean;
+            autoMatchCourse: boolean;
+            feeSek: number;
+          };
+          classes.push({
+            id: cld.classId || d.id,
+            name: cld.name || 'Klass',
+            courseId: cld.courseId ? cld.courseId : null,
+            classFormat: cld.classFormat || 'STANDARD',
+            forkCourseIds: Array.isArray(cld.forkCourseIds) ? cld.forkCourseIds : [],
+            rogainingMaxTimeSec: decodeNullableSec(cld.rogainingMaxTimeSec),
+            rogainingPenaltyPerMin:
+              Number(cld.rogainingPenaltyPerMin) >= 0 ? Number(cld.rogainingPenaltyPerMin) : null,
+            allowDirectEntry: Boolean(cld.allowDirectEntry),
+            freeStart: Boolean(cld.freeStart),
+            autoMatchCourse: Boolean(cld.autoMatchCourse),
+            feeSek: Number(cld.feeSek ?? 100),
+          });
+        }
+      } catch (err) {
+        if (isTransientOfflineFirestoreError(err)) {
+          return null;
+        }
+        handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/classes`);
+      }
+
+      try {
+        const cmpSnap = await getDocs(
+          query(
+            collection(db, 'competitions', competitionId, 'competitors'),
+            where('ownerUid', '==', ownerUid)
+          )
+        );
+        for (const d of cmpSnap.docs) {
+          const cmd = d.data() as {
+            competitorId: string;
+            bib: number;
+            fullName: string;
+            club: string;
+            classId: string;
+            siNumber: number;
+            cardSeries: SICardSeries;
+            isRentalCard: boolean;
+            rentalReturned: boolean;
+            isSelfRegistered: boolean;
+            feePaid: boolean;
+            status: RunnerStatus;
+            allocatedStartSec: number;
+            checkTimeSec: number;
+            startTimeSec: number;
+            finishTimeSec: number;
+            manualFinishTimeSec: number;
+            runningTimeSec: number;
+            readoutAtIso: string;
+            punchCodes: number[];
+            punchTimes: number[];
+          };
+          const codes = Array.isArray(cmd.punchCodes) ? cmd.punchCodes.map(Number) : [];
+          const times = Array.isArray(cmd.punchTimes) ? cmd.punchTimes.map(Number) : [];
+          const len = Math.min(codes.length, times.length);
+          const punches = [];
+          for (let idx = 0; idx < len; idx++) {
+            punches.push({ code: codes[idx], timeSec: times[idx] });
+          }
+          const checkSec = decodeNullableSec(cmd.checkTimeSec);
+          const startSec = decodeNullableSec(cmd.startTimeSec);
+          const finishSec = decodeNullableSec(cmd.finishTimeSec);
+          const hasReadout = Boolean(cmd.readoutAtIso) || punches.length > 0;
+
+          competitors.push({
+            id: cmd.competitorId || d.id,
+            bib: Number(cmd.bib || 1),
+            fullName: cmd.fullName || 'Deltagare',
+            club: cmd.club || 'Klubblös',
+            classId: cmd.classId || classes[0]?.id || 'cls_open',
+            siNumber: Number(cmd.siNumber || 1000),
+            cardSeries: cmd.cardSeries || 'SI-Card 10',
+            isRentalCard: Boolean(cmd.isRentalCard),
+            rentalReturned: Boolean(cmd.rentalReturned),
+            isSelfRegistered: Boolean(cmd.isSelfRegistered),
+            feePaid: Boolean(cmd.feePaid),
+            status: cmd.status || 'REGISTERED',
+            allocatedStartSec: decodeNullableSec(cmd.allocatedStartSec),
+            checkTimeSec: checkSec,
+            startTimeSec: startSec,
+            finishTimeSec: finishSec,
+            manualFinishTimeSec: decodeNullableSec(cmd.manualFinishTimeSec),
+            runningTimeSec: decodeNullableSec(cmd.runningTimeSec),
+            lastSeenControl: punches.length > 0 ? 1 : null,
+            lastSeenTimeSec: finishSec ?? startSec ?? checkSec,
+            readoutAt: cmd.readoutAtIso ? cmd.readoutAtIso : null,
+            radioSplits: [],
+            cardPunches: punches,
+            rawReadout: hasReadout
+              ? {
+                  checkTimeSec: checkSec,
+                  startTimeSec: startSec,
+                  finishTimeSec: finishSec,
+                  punches,
+                  receivedAt: cmd.readoutAtIso || new Date().toISOString(),
+                }
+              : null,
+            validation: null,
+          });
+        }
+        competitors.sort((a, b) => a.bib - b.bib);
+      } catch (err) {
+        if (isTransientOfflineFirestoreError(err)) {
+          return null;
+        }
+        handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/competitors`);
+      }
+    }
+
+    const statusRaw = String(compDocData.status || 'LIVE');
+    const status: EventLifecycleStatus =
+      statusRaw === 'LIVE' || statusRaw === 'UPCOMING' || statusRaw === 'COMPLETED'
+        ? statusRaw
+        : 'LIVE';
+
+    events.push({
+      competition: {
+        id: competitionId,
+        shortCode: String(compDocData.shortCode || 'oko26'),
+        status,
+        name: String(compDocData.name || 'Tävling'),
+        organizer: String(compDocData.organizer || clubSettings.clubName),
+        date: String(compDocData.date || getStockholmTodayIso()),
+        zeroTimeStr: String(compDocData.zeroTimeStr || '10:00:00'),
+        zeroTimeSec: Number(compDocData.zeroTimeSec ?? 36000),
+        arenaInfo: String(compDocData.arenaInfo || ''),
+        seriesName: String(compDocData.seriesName || ''),
+        allowSelfRegistration: compDocData.allowSelfRegistration !== false,
+        enableFeesAndSwish: Boolean(compDocData.enableFeesAndSwish),
+      },
+      courses,
+      classes,
+      competitors,
+      brokenControls: Array.isArray(compDocData.brokenControls)
+        ? (compDocData.brokenControls as unknown[]).map(Number)
+        : [],
+      rolePins: {
+        START: String(compDocData.pinStart || '1100'),
+        READOUT: String(compDocData.pinReadout || '2200'),
+        FOREST: String(compDocData.pinForest || '3300'),
+        SPEAKER: String(compDocData.pinSpeaker || '4400'),
+      },
+      pinsCustomized: Boolean(compDocData.pinsCustomized),
+    });
+  }
+
+  return {
+    activeEventId: clubData.activeEventId || events[0]?.competition.id || '',
+    demoCleared: Boolean(clubData.demoCleared),
+    clubSettings,
+    events,
+  };
+}
+
+export async function listMyCloudCompetitionsFromFirestore(): Promise<
+  CloudCompetitionRecord[]
+> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) return [];
+  const path = 'competitions';
+  try {
+    const q = query(collection(db, 'competitions'), where('ownerUid', '==', current.uid));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => {
+      const data = d.data() as {
+        competitionId: string;
+        shortCode: string;
+        name: string;
+        organizer: string;
+        date: string;
+        status: EventLifecycleStatus;
+        seriesName?: string;
+        enableFeesAndSwish?: boolean;
+        competitorCount: number;
+        finishedCount: number;
+        ownerUid: string;
+        updatedAt?: Timestamp;
+      };
+      return {
+        competitionId: data.competitionId,
+        shortCode: data.shortCode,
+        name: data.name,
+        organizer: data.organizer,
+        date: data.date,
+        status: data.status,
+        seriesName: data.seriesName || '',
+        enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
+        competitorCount: data.competitorCount,
+        finishedCount: data.finishedCount,
+        ownerUid: data.ownerUid,
+        updatedAtIso:
+          data.updatedAt && typeof data.updatedAt.toDate === 'function'
+            ? data.updatedAt.toDate().toISOString()
+            : null,
+      };
+    });
+  } catch (err) {
+    if (isTransientOfflineFirestoreError(err)) {
+      if (isTokenServiceError(err)) {
+        setTokenServiceDisabled(true);
+        void signOut(auth).catch(() => {});
+      }
+      return [];
+    }
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
+}

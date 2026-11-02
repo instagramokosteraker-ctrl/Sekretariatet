@@ -1,0 +1,8 @@
+{
+  "name": "Kopia av OKÖ-sekretariatet ",
+  "description": "Realtidsapplikation för direktkommunikation med SPORTident-hårdvara via USB/Web Serial, hantering av SI-brickor, zonbehörighet och live-inpasseringsdata.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

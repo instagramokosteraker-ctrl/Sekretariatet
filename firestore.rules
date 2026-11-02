@@ -1,0 +1,1057 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Hardened Global Primitives
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidOptionalId(id) {
+      return id is string && id.size() <= 128 && (id.size() == 0 || id.matches('^[a-zA-Z0-9_\\-]+$'));
+    }
+
+    function isValidHexColorField(val) {
+      return val is string && val.size() <= 7 && (val.size() == 0 || val.matches('^#[0-9a-fA-F]{6}$'));
+    }
+
+    function isValidLogoDataUrlField(val) {
+      return val is string &&
+        val.size() <= 200000 &&
+        (
+          val.size() == 0 ||
+          (
+            val.size() >= 24 &&
+            (
+              val[0:22] == 'data:image/png;base64,' ||
+              val[0:23] == 'data:image/jpeg;base64,'
+            )
+          )
+        );
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'instagram.okosteraker@gmail.com' ||
+        request.auth.token.email == 'marcus.o.ahlen@gmail.com'
+      );
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'SUPER_ADMIN'
+      );
+    }
+
+    function parentCompetitionExists(competitionId) {
+      return exists(/databases/$(database)/documents/competitions/$(competitionId));
+    }
+
+    function parentCompetitionData(competitionId) {
+      return get(/databases/$(database)/documents/competitions/$(competitionId)).data;
+    }
+
+    // =========================================================================
+    // Blueprint Validation Helpers (Anti-Update-Gap)
+    // =========================================================================
+    function isValidAdminRole(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'inviteId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'role', 'inviteId', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.role is string && data.role.size() >= 10 && data.role.size() <= 11 &&
+        (data.role == 'SUPER_ADMIN' || data.role == 'RACE_ADMIN') &&
+        data.inviteId is string && data.inviteId.size() >= 1 && data.inviteId.size() <= 128 && data.inviteId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminInvite(data) {
+      return data.keys().hasAll(['inviteId', 'email', 'displayName', 'role', 'active', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['inviteId', 'email', 'displayName', 'role', 'active', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.inviteId is string && data.inviteId.size() >= 1 && data.inviteId.size() <= 128 && data.inviteId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.email is string && data.email.size() >= 5 && data.email.size() <= 120 &&
+        data.email.matches('^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$') &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.role is string && data.role.size() >= 10 && data.role.size() <= 11 &&
+        (data.role == 'SUPER_ADMIN' || data.role == 'RACE_ADMIN') &&
+        data.active is bool &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 && data.createdByUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidClubSettings(data) {
+      return data.keys().hasAll([
+          'settingId',
+          'clubName',
+          'eventorOrgId',
+          'swishNumber',
+          'swishRecipientName',
+          'defaultDirectEntryFeeSek',
+          'rentalCardFeeSek',
+          'missingRentalFeeSek',
+          'activeEventId',
+          'demoCleared',
+          'competitionIds',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'settingId',
+          'clubName',
+          'eventorOrgId',
+          'swishNumber',
+          'swishRecipientName',
+          'defaultDirectEntryFeeSek',
+          'rentalCardFeeSek',
+          'missingRentalFeeSek',
+          'portalTitle',
+          'logoDataUrl',
+          'customBgColor',
+          'customTextColor',
+          'customAccentColor',
+          'activeEventId',
+          'demoCleared',
+          'competitionIds',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.settingId is string && data.settingId.size() >= 1 && data.settingId.size() <= 64 && data.settingId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.clubName is string && data.clubName.size() >= 1 && data.clubName.size() <= 100 &&
+        data.eventorOrgId is string && data.eventorOrgId.size() <= 32 &&
+        data.swishNumber is string && data.swishNumber.size() <= 20 &&
+        data.swishRecipientName is string && data.swishRecipientName.size() <= 100 &&
+        data.defaultDirectEntryFeeSek is int && data.defaultDirectEntryFeeSek >= 0 && data.defaultDirectEntryFeeSek <= 10000 &&
+        data.rentalCardFeeSek is int && data.rentalCardFeeSek >= 0 && data.rentalCardFeeSek <= 5000 &&
+        data.missingRentalFeeSek is int && data.missingRentalFeeSek >= 0 && data.missingRentalFeeSek <= 20000 &&
+        (!('portalTitle' in data) || (data.portalTitle is string && data.portalTitle.size() <= 80)) &&
+        (!('logoDataUrl' in data) || isValidLogoDataUrlField(data.logoDataUrl)) &&
+        (!('customBgColor' in data) || isValidHexColorField(data.customBgColor)) &&
+        (!('customTextColor' in data) || isValidHexColorField(data.customTextColor)) &&
+        (!('customAccentColor' in data) || isValidHexColorField(data.customAccentColor)) &&
+        isValidOptionalId(data.activeEventId) &&
+        data.demoCleared is bool &&
+        data.competitionIds is list && data.competitionIds.size() <= 100 &&
+        (data.competitionIds.size() == 0 || (data.competitionIds[0] is string && data.competitionIds[0].size() <= 128)) &&
+        data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 && data.ownerUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCloudCompetition(data) {
+      return data.keys().hasAll([
+          'competitionId',
+          'shortCode',
+          'name',
+          'organizer',
+          'date',
+          'status',
+          'zeroTimeStr',
+          'zeroTimeSec',
+          'arenaInfo',
+          'seriesName',
+          'allowSelfRegistration',
+          'enableFeesAndSwish',
+          'competitorCount',
+          'finishedCount',
+          'brokenControls',
+          'pinStart',
+          'pinReadout',
+          'pinForest',
+          'pinSpeaker',
+          'pinsCustomized',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'competitionId',
+          'shortCode',
+          'name',
+          'organizer',
+          'date',
+          'status',
+          'zeroTimeStr',
+          'zeroTimeSec',
+          'arenaInfo',
+          'seriesName',
+          'allowSelfRegistration',
+          'enableFeesAndSwish',
+          'competitorCount',
+          'finishedCount',
+          'brokenControls',
+          'pinStart',
+          'pinReadout',
+          'pinForest',
+          'pinSpeaker',
+          'pinsCustomized',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.competitionId is string && data.competitionId.size() >= 1 && data.competitionId.size() <= 128 && data.competitionId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.shortCode is string && data.shortCode.size() >= 2 && data.shortCode.size() <= 32 && data.shortCode.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 140 &&
+        data.organizer is string && data.organizer.size() >= 1 && data.organizer.size() <= 100 &&
+        data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.status is string && data.status.size() >= 4 && data.status.size() <= 9 &&
+        (data.status == 'LIVE' || data.status == 'UPCOMING' || data.status == 'COMPLETED') &&
+        data.zeroTimeStr is string && data.zeroTimeStr.size() >= 5 && data.zeroTimeStr.size() <= 8 && data.zeroTimeStr.matches('^\\d{2}:\\d{2}(:\\d{2})?$') &&
+        data.zeroTimeSec is int && data.zeroTimeSec >= 0 && data.zeroTimeSec <= 86400 &&
+        data.arenaInfo is string && data.arenaInfo.size() <= 500 &&
+        data.seriesName is string && data.seriesName.size() <= 80 &&
+        data.allowSelfRegistration is bool &&
+        data.enableFeesAndSwish is bool &&
+        data.competitorCount is int && data.competitorCount >= 0 && data.competitorCount <= 50000 &&
+        data.finishedCount is int && data.finishedCount >= 0 && data.finishedCount <= 50000 &&
+        data.finishedCount <= data.competitorCount &&
+        data.brokenControls is list && data.brokenControls.size() <= 64 &&
+        (data.brokenControls.size() == 0 || data.brokenControls[0] is int) &&
+        data.pinStart is string && data.pinStart.size() >= 4 && data.pinStart.size() <= 6 && data.pinStart.matches('^\\d{4,6}$') &&
+        data.pinReadout is string && data.pinReadout.size() >= 4 && data.pinReadout.size() <= 6 && data.pinReadout.matches('^\\d{4,6}$') &&
+        data.pinForest is string && data.pinForest.size() >= 4 && data.pinForest.size() <= 6 && data.pinForest.matches('^\\d{4,6}$') &&
+        data.pinSpeaker is string && data.pinSpeaker.size() >= 4 && data.pinSpeaker.size() <= 6 && data.pinSpeaker.matches('^\\d{4,6}$') &&
+        data.pinsCustomized is bool &&
+        data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 && data.ownerUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCloudCourse(data) {
+      return data.keys().hasAll([
+          'courseId',
+          'competitionId',
+          'name',
+          'lengthMeters',
+          'climbMeters',
+          'controls',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'courseId',
+          'competitionId',
+          'name',
+          'lengthMeters',
+          'climbMeters',
+          'controls',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.courseId) &&
+        isValidId(data.competitionId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.lengthMeters is int && data.lengthMeters >= 0 && data.lengthMeters <= 200000 &&
+        data.climbMeters is int && data.climbMeters >= 0 && data.climbMeters <= 20000 &&
+        data.controls is list && data.controls.size() <= 128 &&
+        (data.controls.size() == 0 || data.controls[0] is int) &&
+        isValidId(data.ownerUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCloudClass(data) {
+      return data.keys().hasAll([
+          'classId',
+          'competitionId',
+          'name',
+          'courseId',
+          'classFormat',
+          'forkCourseIds',
+          'rogainingMaxTimeSec',
+          'rogainingPenaltyPerMin',
+          'allowDirectEntry',
+          'freeStart',
+          'autoMatchCourse',
+          'feeSek',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'classId',
+          'competitionId',
+          'name',
+          'courseId',
+          'classFormat',
+          'forkCourseIds',
+          'rogainingMaxTimeSec',
+          'rogainingPenaltyPerMin',
+          'allowDirectEntry',
+          'freeStart',
+          'autoMatchCourse',
+          'feeSek',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.classId) &&
+        isValidId(data.competitionId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        isValidOptionalId(data.courseId) &&
+        data.classFormat is string && data.classFormat.size() >= 6 && data.classFormat.size() <= 9 &&
+        (data.classFormat == 'STANDARD' || data.classFormat == 'FORKED' || data.classFormat == 'ROGAINING') &&
+        data.forkCourseIds is list && data.forkCourseIds.size() <= 32 &&
+        (data.forkCourseIds.size() == 0 || (data.forkCourseIds[0] is string && data.forkCourseIds[0].size() <= 128)) &&
+        data.rogainingMaxTimeSec is int && data.rogainingMaxTimeSec >= -1 && data.rogainingMaxTimeSec <= 86400 &&
+        data.rogainingPenaltyPerMin is int && data.rogainingPenaltyPerMin >= -1 && data.rogainingPenaltyPerMin <= 1000 &&
+        data.allowDirectEntry is bool &&
+        data.freeStart is bool &&
+        data.autoMatchCourse is bool &&
+        data.feeSek is int && data.feeSek >= 0 && data.feeSek <= 10000 &&
+        isValidId(data.ownerUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCloudCompetitor(data) {
+      return data.keys().hasAll([
+          'competitorId',
+          'competitionId',
+          'bib',
+          'fullName',
+          'club',
+          'classId',
+          'siNumber',
+          'cardSeries',
+          'isRentalCard',
+          'rentalReturned',
+          'isSelfRegistered',
+          'feePaid',
+          'status',
+          'allocatedStartSec',
+          'checkTimeSec',
+          'startTimeSec',
+          'finishTimeSec',
+          'manualFinishTimeSec',
+          'runningTimeSec',
+          'readoutAtIso',
+          'punchCodes',
+          'punchTimes',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'competitorId',
+          'competitionId',
+          'bib',
+          'fullName',
+          'club',
+          'classId',
+          'siNumber',
+          'cardSeries',
+          'isRentalCard',
+          'rentalReturned',
+          'isSelfRegistered',
+          'feePaid',
+          'status',
+          'allocatedStartSec',
+          'checkTimeSec',
+          'startTimeSec',
+          'finishTimeSec',
+          'manualFinishTimeSec',
+          'runningTimeSec',
+          'readoutAtIso',
+          'punchCodes',
+          'punchTimes',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.competitorId) &&
+        isValidId(data.competitionId) &&
+        data.bib is int && data.bib >= 1 && data.bib <= 99999 &&
+        data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120 &&
+        data.club is string && data.club.size() >= 1 && data.club.size() <= 100 &&
+        isValidId(data.classId) &&
+        data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
+        data.cardSeries is string && data.cardSeries.size() >= 1 && data.cardSeries.size() <= 24 &&
+        data.isRentalCard is bool &&
+        data.rentalReturned is bool &&
+        data.isSelfRegistered is bool &&
+        data.feePaid is bool &&
+        data.status is string && data.status.size() >= 2 && data.status.size() <= 15 &&
+        (
+          data.status == 'REGISTERED' ||
+          data.status == 'CHECKED' ||
+          data.status == 'IN_FOREST' ||
+          data.status == 'PRELIMINARY_FIN' ||
+          data.status == 'OK' ||
+          data.status == 'MP' ||
+          data.status == 'DNF' ||
+          data.status == 'DNS'
+        ) &&
+        data.allocatedStartSec is int && data.allocatedStartSec >= -1 && data.allocatedStartSec <= 86400 &&
+        data.checkTimeSec is int && data.checkTimeSec >= -1 && data.checkTimeSec <= 86400 &&
+        data.startTimeSec is int && data.startTimeSec >= -1 && data.startTimeSec <= 86400 &&
+        data.finishTimeSec is int && data.finishTimeSec >= -1 && data.finishTimeSec <= 86400 &&
+        data.manualFinishTimeSec is int && data.manualFinishTimeSec >= -1 && data.manualFinishTimeSec <= 86400 &&
+        data.runningTimeSec is int && data.runningTimeSec >= -1 && data.runningTimeSec <= 86400 &&
+        data.readoutAtIso is string && data.readoutAtIso.size() <= 40 &&
+        data.punchCodes is list && data.punchCodes.size() <= 192 &&
+        data.punchTimes is list && data.punchTimes.size() <= 192 &&
+        data.punchCodes.size() == data.punchTimes.size() &&
+        (data.punchCodes.size() == 0 || (data.punchCodes[0] is int && data.punchTimes[0] is int)) &&
+        isValidId(data.ownerUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // 1. /admins/{userId} — Non-PII RBAC Profiles
+    // =========================================================================
+    match /admins/{userId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(userId) &&
+        (request.auth.uid == userId || isAdmin());
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        userId == request.auth.uid &&
+        isValidAdminRole(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            isBootstrappedAdmin() &&
+            incoming().role == 'SUPER_ADMIN' &&
+            incoming().inviteId == 'bootstrap_super_admin'
+          ) ||
+          (
+            exists(/databases/$(database)/documents/adminInvites/$(incoming().inviteId)) &&
+            get(/databases/$(database)/documents/adminInvites/$(incoming().inviteId)).data.active == true &&
+            get(/databases/$(database)/documents/adminInvites/$(incoming().inviteId)).data.email == request.auth.token.email &&
+            incoming().role == get(/databases/$(database)/documents/adminInvites/$(incoming().inviteId)).data.role
+          )
+        );
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidAdminRole(incoming()) &&
+        isValidId(userId) &&
+        resource != null &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Owner updates displayName only (RBAC fields locked)
+          (
+            request.auth.uid == userId &&
+            incoming().role == existing().role &&
+            incoming().inviteId == existing().inviteId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+          ) ||
+          // Action 2: Super Admin role management override
+          (
+            isSuperAdmin() &&
+            incoming().inviteId == existing().inviteId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'updatedAt'])
+          )
+        )
+      );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(userId) &&
+        resource != null &&
+        userId != request.auth.uid &&
+        isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 2. /adminInvites/{inviteId} — PII-Isolated Club Admin Invitations
+    // =========================================================================
+    match /adminInvites/{inviteId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(inviteId) &&
+        (
+          (resource != null && resource.data.email == request.auth.token.email) ||
+          isAdmin()
+        );
+
+      allow list: if isVerifiedUser() &&
+        resource.data.createdByUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(inviteId) &&
+        isValidAdminInvite(incoming()) &&
+        incoming().inviteId == inviteId &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isAdmin() &&
+        (incoming().role == 'RACE_ADMIN' || isSuperAdmin());
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidAdminInvite(incoming()) &&
+        isValidId(inviteId) &&
+        resource != null &&
+        incoming().inviteId == existing().inviteId &&
+        incoming().email == existing().email &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Creator toggles active state or updates displayName
+          (
+            existing().createdByUid == request.auth.uid &&
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'active', 'updatedAt']) &&
+            isAdmin()
+          ) ||
+          // Action 2: Super Admin override
+          (
+            isSuperAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'active', 'updatedAt'])
+          )
+        )
+      );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(inviteId) &&
+        resource != null &&
+        (
+          (existing().createdByUid == request.auth.uid && isAdmin()) ||
+          isSuperAdmin()
+        );
+    }
+
+    // =========================================================================
+    // 3. /clubSettings/{settingId} — Singleton Club & Swish Configuration
+    // =========================================================================
+    match /clubSettings/{settingId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        settingId == 'default' &&
+        (
+          (resource != null && resource.data.ownerUid == request.auth.uid) ||
+          isAdmin()
+        );
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        settingId == 'default' &&
+        isValidClubSettings(incoming()) &&
+        incoming().settingId == settingId &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidClubSettings(incoming()) &&
+        isValidId(settingId) &&
+        settingId == 'default' &&
+        resource != null &&
+        incoming().settingId == existing().settingId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Owner admin updates club settings
+          (
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'clubName',
+              'eventorOrgId',
+              'swishNumber',
+              'swishRecipientName',
+              'defaultDirectEntryFeeSek',
+              'rentalCardFeeSek',
+              'missingRentalFeeSek',
+              'portalTitle',
+              'logoDataUrl',
+              'customBgColor',
+              'customTextColor',
+              'customAccentColor',
+              'activeEventId',
+              'demoCleared',
+              'competitionIds',
+              'updatedAt'
+            ]) &&
+            isAdmin()
+          ) ||
+          // Action 2: Super Admin escape hatch
+          (
+            isSuperAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'clubName',
+              'eventorOrgId',
+              'swishNumber',
+              'swishRecipientName',
+              'defaultDirectEntryFeeSek',
+              'rentalCardFeeSek',
+              'missingRentalFeeSek',
+              'portalTitle',
+              'logoDataUrl',
+              'customBgColor',
+              'customTextColor',
+              'customAccentColor',
+              'activeEventId',
+              'demoCleared',
+              'competitionIds',
+              'updatedAt'
+            ])
+          )
+        )
+      );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        resource != null &&
+        isSuperAdmin();
+    }
+
+    // =========================================================================
+    // 4. /competitions/{competitionId} — Cloud-Persisted Competitions + Subcollections
+    // =========================================================================
+    match /competitions/{competitionId} {
+      allow get: if isVerifiedUser() &&
+        isValidId(competitionId) &&
+        (
+          (resource != null && resource.data.ownerUid == request.auth.uid) ||
+          isAdmin()
+        );
+
+      allow list: if isVerifiedUser() &&
+        resource.data.ownerUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(competitionId) &&
+        isValidCloudCompetition(incoming()) &&
+        incoming().competitionId == competitionId &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+
+      allow update: if (
+        isVerifiedUser() &&
+        isValidCloudCompetition(incoming()) &&
+        isValidId(competitionId) &&
+        resource != null &&
+        incoming().competitionId == existing().competitionId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Race Admin updates active/upcoming competition (Terminal State Locked once COMPLETED)
+          (
+            existing().ownerUid == request.auth.uid &&
+            existing().status != 'COMPLETED' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'shortCode',
+              'name',
+              'organizer',
+              'date',
+              'status',
+              'zeroTimeStr',
+              'zeroTimeSec',
+              'arenaInfo',
+              'seriesName',
+              'allowSelfRegistration',
+              'enableFeesAndSwish',
+              'competitorCount',
+              'finishedCount',
+              'brokenControls',
+              'pinStart',
+              'pinReadout',
+              'pinForest',
+              'pinSpeaker',
+              'pinsCustomized',
+              'updatedAt'
+            ]) &&
+            isAdmin()
+          ) ||
+          // Action 2: Super Admin escape hatch (can also update/reopen COMPLETED competitions)
+          (
+            isSuperAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'shortCode',
+              'name',
+              'organizer',
+              'date',
+              'status',
+              'zeroTimeStr',
+              'zeroTimeSec',
+              'arenaInfo',
+              'seriesName',
+              'allowSelfRegistration',
+              'enableFeesAndSwish',
+              'competitorCount',
+              'finishedCount',
+              'brokenControls',
+              'pinStart',
+              'pinReadout',
+              'pinForest',
+              'pinSpeaker',
+              'pinsCustomized',
+              'updatedAt'
+            ])
+          )
+        )
+      );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(competitionId) &&
+        resource != null &&
+        (
+          (existing().ownerUid == request.auth.uid && existing().status != 'COMPLETED' && isAdmin()) ||
+          isSuperAdmin()
+        );
+
+      // -----------------------------------------------------------------------
+      // 4a. /competitions/{competitionId}/courses/{courseId} (Master Gate)
+      // -----------------------------------------------------------------------
+      match /courses/{courseId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(courseId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (resource != null && resource.data.ownerUid == request.auth.uid) ||
+            isAdmin()
+          );
+
+        allow list: if isVerifiedUser() &&
+          resource.data.ownerUid == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(courseId) &&
+          isValidCloudCourse(incoming()) &&
+          incoming().courseId == courseId &&
+          incoming().competitionId == competitionId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+
+        allow update: if (
+          isVerifiedUser() &&
+          isValidCloudCourse(incoming()) &&
+          isValidId(competitionId) &&
+          isValidId(courseId) &&
+          resource != null &&
+          incoming().courseId == existing().courseId &&
+          incoming().competitionId == existing().competitionId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'name',
+                'lengthMeters',
+                'climbMeters',
+                'controls',
+                'updatedAt'
+              ]) &&
+              isAdmin()
+            ) ||
+            (
+              isSuperAdmin() &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'name',
+                'lengthMeters',
+                'climbMeters',
+                'controls',
+                'updatedAt'
+              ])
+            )
+          )
+        );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(courseId) &&
+          resource != null &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionExists(competitionId) &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+      }
+
+      // -----------------------------------------------------------------------
+      // 4b. /competitions/{competitionId}/classes/{classId} (Master Gate)
+      // -----------------------------------------------------------------------
+      match /classes/{classId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(classId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (resource != null && resource.data.ownerUid == request.auth.uid) ||
+            isAdmin()
+          );
+
+        allow list: if isVerifiedUser() &&
+          resource.data.ownerUid == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(classId) &&
+          isValidCloudClass(incoming()) &&
+          incoming().classId == classId &&
+          incoming().competitionId == competitionId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+
+        allow update: if (
+          isVerifiedUser() &&
+          isValidCloudClass(incoming()) &&
+          isValidId(competitionId) &&
+          isValidId(classId) &&
+          resource != null &&
+          incoming().classId == existing().classId &&
+          incoming().competitionId == existing().competitionId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'name',
+                'courseId',
+                'classFormat',
+                'forkCourseIds',
+                'rogainingMaxTimeSec',
+                'rogainingPenaltyPerMin',
+                'allowDirectEntry',
+                'freeStart',
+                'autoMatchCourse',
+                'feeSek',
+                'updatedAt'
+              ]) &&
+              isAdmin()
+            ) ||
+            (
+              isSuperAdmin() &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'name',
+                'courseId',
+                'classFormat',
+                'forkCourseIds',
+                'rogainingMaxTimeSec',
+                'rogainingPenaltyPerMin',
+                'allowDirectEntry',
+                'freeStart',
+                'autoMatchCourse',
+                'feeSek',
+                'updatedAt'
+              ])
+            )
+          )
+        );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(classId) &&
+          resource != null &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionExists(competitionId) &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+      }
+
+      // -----------------------------------------------------------------------
+      // 4c. /competitions/{competitionId}/competitors/{competitorId} (Master Gate)
+      // -----------------------------------------------------------------------
+      match /competitors/{competitorId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(competitorId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (resource != null && resource.data.ownerUid == request.auth.uid) ||
+            isAdmin()
+          );
+
+        allow list: if isVerifiedUser() &&
+          resource.data.ownerUid == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(competitorId) &&
+          isValidCloudCompetitor(incoming()) &&
+          incoming().competitorId == competitorId &&
+          incoming().competitionId == competitionId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+
+        allow update: if (
+          isVerifiedUser() &&
+          isValidCloudCompetitor(incoming()) &&
+          isValidId(competitionId) &&
+          isValidId(competitorId) &&
+          resource != null &&
+          incoming().competitorId == existing().competitorId &&
+          incoming().competitionId == existing().competitionId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'bib',
+                'fullName',
+                'club',
+                'classId',
+                'siNumber',
+                'cardSeries',
+                'isRentalCard',
+                'rentalReturned',
+                'isSelfRegistered',
+                'feePaid',
+                'status',
+                'allocatedStartSec',
+                'checkTimeSec',
+                'startTimeSec',
+                'finishTimeSec',
+                'manualFinishTimeSec',
+                'runningTimeSec',
+                'readoutAtIso',
+                'punchCodes',
+                'punchTimes',
+                'updatedAt'
+              ]) &&
+              isAdmin()
+            ) ||
+            (
+              isSuperAdmin() &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'bib',
+                'fullName',
+                'club',
+                'classId',
+                'siNumber',
+                'cardSeries',
+                'isRentalCard',
+                'rentalReturned',
+                'isSelfRegistered',
+                'feePaid',
+                'status',
+                'allocatedStartSec',
+                'checkTimeSec',
+                'startTimeSec',
+                'finishTimeSec',
+                'manualFinishTimeSec',
+                'runningTimeSec',
+                'readoutAtIso',
+                'punchCodes',
+                'punchTimes',
+                'updatedAt'
+              ])
+            )
+          )
+        );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(competitorId) &&
+          resource != null &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionExists(competitionId) &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+      }
+    }
+  }
+}

@@ -1,0 +1,88 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root {
+  --club-bg: #f8fafc;
+  --club-surface: #ffffff;
+  --club-surface-subtle: #f1f5f9;
+  --club-border: #e2e8f0;
+  --club-text: #0f172a;
+  --club-muted: #64748b;
+  --club-accent: #dc2626;
+  --club-accent-hover: #b91c1c;
+  --club-accent-fg: #ffffff;
+}
+
+.dark {
+  --club-bg: #020617;
+  --club-surface: #0f172a;
+  --club-surface-subtle: #1e293b;
+  --club-border: #1e293b;
+  --club-text: #f1f5f9;
+  --club-muted: #94a3b8;
+}
+
+@layer base {
+  html,
+  body {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    overflow-x: clip;
+    background-color: var(--club-bg);
+    color: var(--club-text);
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .club-canvas {
+    background-color: var(--club-bg);
+    color: var(--club-text);
+  }
+
+  html:not(.dark)[data-club-custom="true"] .club-surface {
+    background-color: var(--club-surface);
+    border-color: var(--club-border);
+    color: var(--club-text);
+  }
+
+  html:not(.dark)[data-club-custom="true"] .club-muted {
+    color: var(--club-muted);
+  }
+
+  .club-accent-btn {
+    background-color: var(--club-accent);
+    color: var(--club-accent-fg);
+  }
+
+  .club-accent-btn:hover:not(:disabled) {
+    background-color: var(--club-accent-hover);
+  }
+
+  .club-accent-tab-active {
+    border-color: var(--club-accent);
+    color: var(--club-accent);
+  }
+
+  .dark .club-accent-tab-active {
+    border-color: var(--club-accent);
+    color: #f8fafc;
+  }
+
+  .club-accent-text {
+    color: var(--club-accent);
+  }
+}
