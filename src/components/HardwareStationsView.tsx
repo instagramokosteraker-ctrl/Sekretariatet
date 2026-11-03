@@ -1,63 +1,52 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  CloudDownload,
-  Database,
-  Download,
+  AlertTriangle,
+  Binary,
+  Clock,
   ExternalLink,
-  FileCode,
   Plus,
   Radio,
   RefreshCw,
   Sliders,
   Smartphone,
   Trash2,
-  Upload,
   Usb,
   Volume2,
+  Wrench,
   X,
 } from 'lucide-react';
 import type {
+  CompClass,
   CompetitionMeta,
-  EventorIntegrationStatus,
+  Competitor,
+  Course,
+  EmergencySettings,
   HardwareModel,
   RocIntegrationStatus,
   SIStation,
   StationFunction,
 } from '../types/sportident';
-import { getStockholmTodayIso } from '../firebase';
 import type { SerialConnectionStatus, UsbStationMode } from '../services/sportidentWebSerial';
 import { formatStationFunctionLabel } from './StatusLabels';
-import {
-  SAMPLE_EVENTOR_COMPETITOR_XML,
-  SAMPLE_EVENTOR_ENTRY_XML,
-  SAMPLE_OCAD_COURSE_XML,
-  buildEffectiveCourseImportBatch,
-  parseIofXmlDocument,
-  triggerTextFileDownload,
-  type ParsedIofClassAssignment,
-  type ParsedIofCourse,
-} from '../utils/iofXml';
-import { apiFetch } from '../services/authClient';
 
 interface HardwareStationsViewProps {
   isAdmin?: boolean;
   competition: CompetitionMeta;
-  eventor: EventorIntegrationStatus;
+  courses: Course[];
+  classes: CompClass[];
+  competitors: Competitor[];
+  emergency: EmergencySettings;
   roc: RocIntegrationStatus;
-  runnerDbCount: number;
   stations: SIStation[];
   serialStatus: SerialConnectionStatus;
-  onUpdateCompetition: (patch: Partial<CompetitionMeta>) => Promise<void>;
-  onOpenPublicPortal: () => void;
-  onUpdateEventorSettings: (patch: { autoCreateFromRunnerDbOnReadout: boolean }) => Promise<void>;
-  onSyncEventorClub: () => Promise<{
-    ok: boolean;
-    message: string;
+  onUpdateEmergency: (patch: Partial<EmergencySettings>) => Promise<{
+    recalculatedCount: number;
   }>;
-  onImportEventorEvent: (eventId: string) => Promise<{
-    ok: boolean;
-    message: string;
-  }>;
+  onRecalculateAll: () => Promise<{ recalculatedCount: number }>;
+  onAssignManualFinish: (params: {
+    competitorId: string;
+    finishClockStr: string;
+  }) => Promise<string | null>;
   onUpdateRocSettings: (patch: Partial<RocIntegrationStatus>) => Promise<void>;
   onPollRocNow: () => Promise<{ ingested: number; error: string | null }>;
   onSimulateRocBatch: () => Promise<{ ingested: number; samplePayload: string }>;
@@ -71,25 +60,7 @@ interface HardwareStationsViewProps {
   onTriggerStationBeep: () => Promise<void>;
   onCreateStation: (payload: Partial<SIStation>) => Promise<string | null>;
   onDeleteStation: (id: string) => Promise<void>;
-  onImportIofBatch: (batch: {
-    courses: ParsedIofCourse[];
-    classes: ParsedIofClassAssignment[];
-    entries: { fullName: string; club: string; className: string; siNumber: number }[];
-    runnerDbEntries: {
-      siNumber: number;
-      fullName: string;
-      club: string;
-      birthYear?: number | null;
-      defaultClassName?: string | null;
-      eventorPersonId?: string | null;
-    }[];
-  }) => Promise<{
-    addedCourses: number;
-    addedClasses: number;
-    addedEntries: number;
-    syncedRunnerDb?: number;
-  }>;
-  onResetDemoSeed: () => Promise<void>;
+  onOpenProtocolInspector?: () => void;
 }
 
 const HARDWARE_MODELS: HardwareModel[] = [
@@ -113,16 +84,16 @@ const STATION_FUNCTIONS: StationFunction[] = [
 export function HardwareStationsView({
   isAdmin = true,
   competition,
-  eventor,
+  courses,
+  classes,
+  competitors,
+  emergency,
   roc,
-  runnerDbCount,
   stations,
   serialStatus,
-  onUpdateCompetition,
-  onOpenPublicPortal,
-  onUpdateEventorSettings,
-  onSyncEventorClub,
-  onImportEventorEvent,
+  onUpdateEmergency,
+  onRecalculateAll,
+  onAssignManualFinish,
   onUpdateRocSettings,
   onPollRocNow,
   onSimulateRocBatch,
@@ -136,255 +107,32 @@ export function HardwareStationsView({
   onTriggerStationBeep,
   onCreateStation,
   onDeleteStation,
-  onImportIofBatch,
-  onResetDemoSeed,
+  onOpenProtocolInspector,
 }: HardwareStationsViewProps) {
-  // Competition form synced when switching active competition
-  const [compName, setCompName] = useState(competition.name);
-  const [compDate, setCompDate] = useState(competition.date);
-  const [compZero, setCompZero] = useState(competition.zeroTimeStr);
-  const [compArena, setCompArena] = useState(competition.arenaInfo ?? '');
-  const [compSelfReg, setCompSelfReg] = useState(
-    competition.allowSelfRegistration !== false
-  );
-  const [compFeesAndSwish, setCompFeesAndSwish] = useState(
-    Boolean(competition.enableFeesAndSwish)
-  );
-  const [compSavedMsg, setCompSavedMsg] = useState<string | null>(null);
+  // New station modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [stationCode, setStationCode] = useState('73');
+  const [stationName, setStationName] = useState('');
+  const [hardwareModel, setHardwareModel] = useState<HardwareModel>('BSM8-USB');
+  const [stationFunction, setStationFunction] = useState<StationFunction>('READOUT');
+  const [stationErr, setStationErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    setCompName(competition.name);
-    setCompDate(competition.date);
-    setCompZero(competition.zeroTimeStr);
-    setCompArena(competition.arenaInfo ?? '');
-    setCompSelfReg(competition.allowSelfRegistration !== false);
-    setCompFeesAndSwish(Boolean(competition.enableFeesAndSwish));
-  }, [competition]);
-
-  // Eventor REST API state
-  const [eventorEventId, setEventorEventId] = useState(eventor.connectedEventId ?? '');
-  const [eventorBusy, setEventorBusy] = useState(false);
-  const [eventorFeedback, setEventorFeedback] = useState<{ ok: boolean; msg: string } | null>(
+  // Emergency Form State
+  const [brokenCodeInput, setBrokenCodeInput] = useState<string>('');
+  const [offsetCodeInput, setOffsetCodeInput] = useState<string>('');
+  const [offsetSecInput, setOffsetSecInput] = useState<number>(0);
+  const [manualRunnerId, setManualRunnerId] = useState<string>(competitors[0]?.id ?? '');
+  const [manualFinishClock, setManualFinishClock] = useState<string>('11:45:00');
+  const [emergencyBusy, setEmergencyBusy] = useState(false);
+  const [emergencyFeedback, setEmergencyFeedback] = useState<{ ok: boolean; msg: string } | null>(
     null
   );
 
-  // ROC state
-  const [rocUnitInput, setRocUnitInput] = useState(roc.unitId);
-  const [rocIntervalInput, setRocIntervalInput] = useState(roc.pollIntervalSec);
+  // ROC Form State
+  const [rocPassId, setRocPassId] = useState(roc.unitId ?? '');
+  const [rocAutoPoll, setRocAutoPoll] = useState(roc.enabled);
   const [rocBusy, setRocBusy] = useState(false);
   const [rocFeedback, setRocFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
-
-  useEffect(() => {
-    setRocUnitInput(roc.unitId);
-    setRocIntervalInput(roc.pollIntervalSec);
-  }, [roc.unitId, roc.pollIntervalSec]);
-
-  // XML Import state
-  const [xmlInput, setXmlInput] = useState('');
-  const [xmlFeedback, setXmlFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
-
-  // Add Station modal
-  const [modalOpen, setModalOpen] = useState(false);
-  const [stationCode, setStationCode] = useState('61');
-  const [stationName, setStationName] = useState('');
-  const [hardwareModel, setHardwareModel] = useState<HardwareModel>('SRR-USB (Air+)');
-  const [stationFunction, setStationFunction] = useState<StationFunction>('RADIO');
-  const [stationErr, setStationErr] = useState<string | null>(null);
-
-  const [confirmReset, setConfirmReset] = useState(false);
-  const [backupFeedback, setBackupFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
-
-  const handleDownloadBackup = async () => {
-    setBackupFeedback(null);
-    try {
-      const res = await apiFetch('/api/system/backup');
-      if (!res.ok) {
-        setBackupFeedback({ ok: false, msg: 'Kunde inte hämta säkerhetskopian.' });
-        return;
-      }
-      const text = await res.text();
-      const dateStamp = new Date().toISOString().slice(0, 10);
-      triggerTextFileDownload(
-        `passersi-season-db-${dateStamp}.json`,
-        text,
-        'application/json;charset=utf-8;'
-      );
-      setBackupFeedback({
-        ok: true,
-        msg: 'Säsongsdatabasen (.json) har laddats ner till din enhet.',
-      });
-    } catch {
-      setBackupFeedback({ ok: false, msg: 'Nätverksfel vid nedladdning av säkerhetskopia.' });
-    }
-  };
-
-  const handleRestoreBackupUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setBackupFeedback(null);
-    try {
-      const rawText = await file.text();
-      const parsed = JSON.parse(rawText) as unknown;
-      const res = await apiFetch('/api/system/restore', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsed),
-      });
-      const payload = (await res.json()) as {
-        ok?: boolean;
-        eventCount?: number;
-        runnerDbCount?: number;
-        error?: string;
-      };
-      if (!res.ok) {
-        setBackupFeedback({
-          ok: false,
-          msg: payload.error ?? 'Kunde inte återställa säkerhetskopian.',
-        });
-      } else {
-        setBackupFeedback({
-          ok: true,
-          msg: `Säsongsdatabas återställd (${payload.eventCount ?? 0} tävlingar, ${
-            payload.runnerDbCount ?? 0
-          } löpare i registret).`,
-        });
-      }
-    } catch {
-      setBackupFeedback({
-        ok: false,
-        msg: 'Filen kunde inte läsas som en giltig JSON-säkerhetskopia.',
-      });
-    } finally {
-      e.target.value = '';
-    }
-  };
-
-  const handleSaveComp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await onUpdateCompetition({
-      name: compName,
-      date: compDate,
-      zeroTimeStr: compZero,
-      arenaInfo: compArena,
-      allowSelfRegistration: compSelfReg,
-      enableFeesAndSwish: compFeesAndSwish,
-    });
-    setCompSavedMsg('Tävlingsinställningar sparade.');
-    setTimeout(() => setCompSavedMsg(null), 3000);
-  };
-
-  const handleSyncClubClick = async () => {
-    setEventorBusy(true);
-    setEventorFeedback(null);
-    try {
-      const res = await onSyncEventorClub();
-      setEventorFeedback({ ok: res.ok, msg: res.message });
-    } finally {
-      setEventorBusy(false);
-    }
-  };
-
-  const handleImportEventSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!eventorEventId.trim()) return;
-    setEventorBusy(true);
-    setEventorFeedback(null);
-    try {
-      const res = await onImportEventorEvent(eventorEventId.trim());
-      setEventorFeedback({ ok: res.ok, msg: res.message });
-    } finally {
-      setEventorBusy(false);
-    }
-  };
-
-  const handleSaveRocSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await onUpdateRocSettings({
-      unitId: rocUnitInput.trim(),
-      pollIntervalSec: rocIntervalInput,
-    });
-    setRocFeedback({ ok: true, msg: 'ROC-konfiguration sparad.' });
-  };
-
-  const handlePollRocClick = async () => {
-    setRocBusy(true);
-    setRocFeedback(null);
-    try {
-      await onUpdateRocSettings({ unitId: rocUnitInput.trim() });
-      const res = await onPollRocNow();
-      if (res.error) {
-        setRocFeedback({ ok: false, msg: res.error });
-      } else {
-        setRocFeedback({
-          ok: true,
-          msg: `ROC kontrollerad — läste in ${res.ingested} nya radiostämplingar.`,
-        });
-      }
-    } finally {
-      setRocBusy(false);
-    }
-  };
-
-  const handleSimulateRocClick = async () => {
-    setRocBusy(true);
-    setRocFeedback(null);
-    try {
-      const res = await onSimulateRocBatch();
-      setRocFeedback({
-        ok: true,
-        msg: `Simulerade ROC-paket (${res.ingested} radiostämplingar inlästa till tävlingen).`,
-      });
-    } finally {
-      setRocBusy(false);
-    }
-  };
-
-  const handleXmlImport = async (rawXml: string) => {
-    try {
-      setXmlFeedback(null);
-      const parsed = parseIofXmlDocument(rawXml);
-      const effectiveBatch =
-        parsed.type === 'CourseData'
-          ? {
-              ...parsed,
-              ...buildEffectiveCourseImportBatch(parsed, {
-                autoCreateClassesIfMissing: true,
-                freeStart: true,
-              }),
-            }
-          : parsed;
-      const res = await onImportIofBatch(effectiveBatch);
-      setXmlFeedback({
-        ok: true,
-        msg: `Importerade IOF XML ${parsed.iofVersion ?? '3.0'} (${parsed.type}): +${res.addedCourses} banor, +${res.addedClasses} klasser, +${res.addedEntries} anmälda, +${res.syncedRunnerDb ?? 0} i Löpardatabasen.`,
-      });
-    } catch (err: unknown) {
-      setXmlFeedback({
-        ok: false,
-        msg: err instanceof Error ? err.message : 'Kunde inte tolka XML-filen.',
-      });
-    }
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-    setXmlInput(text);
-    await handleXmlImport(text);
-    e.target.value = '';
-  };
-
-  const handleDownloadMopXml = async () => {
-    const res = await apiFetch('/api/mop/xml');
-    if (!res.ok) return;
-    const text = await res.text();
-    triggerTextFileDownload(
-      `mop-complete-${competition.date}.xml`,
-      text,
-      'application/xml;charset=utf-8;'
-    );
-  };
 
   const handleCreateStationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -404,37 +152,205 @@ export function HardwareStationsView({
     }
   };
 
+  const handleAddBrokenControl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = Number(brokenCodeInput);
+    if (!Number.isFinite(code) || code <= 0) return;
+    if (emergency.brokenControls.includes(code)) return;
+    setEmergencyBusy(true);
+    setEmergencyFeedback(null);
+    try {
+      const next = [...emergency.brokenControls, code].sort((a, b) => a - b);
+      const res = await onUpdateEmergency({ brokenControls: next });
+      setBrokenCodeInput('');
+      setEmergencyFeedback({
+        ok: true,
+        msg: `Kontroll ${code} är nu undantagen (ur funktion). Räknade om ${res.recalculatedCount} avlästa brickor.`,
+      });
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
+
+  const handleRemoveBrokenControl = async (code: number) => {
+    setEmergencyBusy(true);
+    setEmergencyFeedback(null);
+    try {
+      const next = emergency.brokenControls.filter((c) => c !== code);
+      const res = await onUpdateEmergency({ brokenControls: next });
+      setEmergencyFeedback({
+        ok: true,
+        msg: `Kontroll ${code} återaktiverad. Räknade om ${res.recalculatedCount} avlästa brickor.`,
+      });
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
+
+  const handleSetTimeOffset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = Number(offsetCodeInput);
+    if (!Number.isFinite(code) || code <= 0) return;
+    setEmergencyBusy(true);
+    setEmergencyFeedback(null);
+    try {
+      const nextOffsets = { ...emergency.controlTimeOffsets };
+      if (offsetSecInput === 0) {
+        delete nextOffsets[String(code)];
+      } else {
+        nextOffsets[String(code)] = offsetSecInput;
+      }
+      const res = await onUpdateEmergency({ controlTimeOffsets: nextOffsets });
+      setEmergencyFeedback({
+        ok: true,
+        msg: `Tidsjustering på ${offsetSecInput > 0 ? `+${offsetSecInput}` : offsetSecInput}s satt för kontroll ${code}. Räknade om ${res.recalculatedCount} brickor.`,
+      });
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
+
+  const handleRemoveOffset = async (codeStr: string) => {
+    setEmergencyBusy(true);
+    setEmergencyFeedback(null);
+    try {
+      const nextOffsets = { ...emergency.controlTimeOffsets };
+      delete nextOffsets[codeStr];
+      const res = await onUpdateEmergency({ controlTimeOffsets: nextOffsets });
+      setEmergencyFeedback({
+        ok: true,
+        msg: `Tidsjustering borttagen för kontroll ${codeStr}. Räknade om ${res.recalculatedCount} brickor.`,
+      });
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
+
+  const handleManualFinishSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetId = manualRunnerId || competitors[0]?.id;
+    if (!targetId) return;
+    setEmergencyBusy(true);
+    setEmergencyFeedback(null);
+    try {
+      const err = await onAssignManualFinish({
+        competitorId: targetId,
+        finishClockStr: manualFinishClock,
+      });
+      if (err) {
+        setEmergencyFeedback({ ok: false, msg: err });
+      } else {
+        const r = competitors.find((c) => c.id === targetId);
+        setEmergencyFeedback({
+          ok: true,
+          msg: `Manuell måltid (${manualFinishClock}) registrerad för ${r?.fullName ?? 'löpare'}.`,
+        });
+      }
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
+
+  const handleRecalcClick = async () => {
+    setEmergencyBusy(true);
+    setEmergencyFeedback(null);
+    try {
+      const res = await onRecalculateAll();
+      setEmergencyFeedback({
+        ok: true,
+        msg: `Räknade om ${res.recalculatedCount} utlästa SI-brickor från arkiverad rådata mot aktuella banor och inställningar.`,
+      });
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
+
+  const handleSaveRocPassId = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await onUpdateRocSettings({ unitId: rocPassId.trim() });
+    setRocFeedback({ ok: true, msg: 'ROC Passnings-ID sparat!' });
+  };
+
+  const handleToggleRocAuto = async () => {
+    const next = !rocAutoPoll;
+    setRocAutoPoll(next);
+    await onUpdateRocSettings({ enabled: next });
+  };
+
+  const handlePollRoc = async () => {
+    setRocBusy(true);
+    setRocFeedback(null);
+    try {
+      const res = await onPollRocNow();
+      if (res.error) {
+        setRocFeedback({ ok: false, msg: res.error });
+      } else {
+        setRocFeedback({
+          ok: true,
+          msg: `ROC-hämtning klar: ${res.ingested} nya stämplingar mottagna.`,
+        });
+      }
+    } finally {
+      setRocBusy(false);
+    }
+  };
+
+  const handleSimulateRoc = async () => {
+    setRocBusy(true);
+    setRocFeedback(null);
+    try {
+      const res = await onSimulateRocBatch();
+      setRocFeedback({
+        ok: true,
+        msg: `Simulerade ROC: ${res.ingested} radiostämplingar injicerade.`,
+      });
+    } finally {
+      setRocBusy(false);
+    }
+  };
+
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-4">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div>
-          <h1 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-slate-100">
-            {isAdmin
-              ? 'Tävling, Eventor, ROC, WebUSB & XML'
-              : 'USB-avläsare, Android OTG & Radiokontroller'}
+          <h1 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+            <Radio className="w-5 h-5 text-red-600 dark:text-red-400" />
+            <span>SportIdent, ROC & USB</span>
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            {isAdmin
-              ? 'Konfigurera tävlingsdata, publik QR-sida, Eventor, ROC-radiokontroller samt USB-anslutning.'
-              : 'Anslut SPORTident-enhet via USB eller Android OTG och övervaka radiokontroller.'}
+            SPORTident USB-avläsare, nödlägen i skogen & omräkning, ROC-radiokontroller samt hårdvarustationer.
           </p>
         </div>
 
-        {isAdmin && (
-          <button
-            type="button"
-            onClick={() => setModalOpen((v) => !v)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
-          >
-            {modalOpen ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-            <span>{modalOpen ? 'Stäng formulär' : 'Ny SI-station'}</span>
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {onOpenProtocolInspector && (
+            <button
+              type="button"
+              onClick={onOpenProtocolInspector}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+            >
+              <Binary className="w-3.5 h-3.5" />
+              <span>Protokollinspektör</span>
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setModalOpen((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap"
+            >
+              {modalOpen ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+              <span>{modalOpen ? 'Stäng formulär' : 'Ny SI-station'}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {modalOpen && (
         <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800">
             <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               Lägg till SI-station / Radiokontroll
             </h2>
@@ -447,7 +363,7 @@ export function HardwareStationsView({
               <X className="w-4 h-4" />
             </button>
           </div>
-          <form onSubmit={handleCreateStationSubmit} className="p-3.5 space-y-3">
+          <form onSubmit={handleCreateStationSubmit} className="p-4 space-y-3">
             {stationErr && (
               <div className="px-3 py-1.5 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-lg">
                 {stationErr}
@@ -461,71 +377,54 @@ export function HardwareStationsView({
                 <input
                   type="number"
                   min={1}
-                  max={511}
+                  max={999}
                   value={stationCode}
                   onChange={(e) => setStationCode(e.target.value)}
-                  className="w-full px-3 py-2 text-sm font-mono tabular-nums bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                  className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
                   required
                 />
               </div>
-              <div>
+              <div className="col-span-2">
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Benämning
+                  Namn / Placering
                 </label>
                 <input
                   type="text"
+                  placeholder="t.ex. Målstation 1 eller Radiokontroll 33"
                   value={stationName}
                   onChange={(e) => setStationName(e.target.value)}
-                  placeholder="t.ex. Radiokontroll K61"
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
                   required
                 />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Funktion i tävlingen
+                  Funktion
                 </label>
                 <select
                   value={stationFunction}
                   onChange={(e) => setStationFunction(e.target.value as StationFunction)}
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
+                  className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
                 >
-                  {STATION_FUNCTIONS.map((fn) => (
-                    <option key={fn} value={fn}>
-                      {formatStationFunctionLabel(fn)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Hårdvarumodell
-                </label>
-                <select
-                  value={hardwareModel}
-                  onChange={(e) => setHardwareModel(e.target.value as HardwareModel)}
-                  className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
-                >
-                  {HARDWARE_MODELS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+                  {STATION_FUNCTIONS.map((f) => (
+                    <option key={f} value={f}>
+                      {formatStationFunctionLabel(f)}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
-                className="px-4 py-2 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap shrink-0"
+                className="px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
               >
                 Avbryt
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg whitespace-nowrap shrink-0"
+                className="px-3.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
               >
                 Skapa station
               </button>
@@ -534,147 +433,10 @@ export function HardwareStationsView({
         </section>
       )}
 
-      {/* 1. Competition Settings & Public QR Link (Admin only) */}
-      {isAdmin && (
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Tävlingsinställningar & Självregistrering
-            </h2>
-            <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-              /t/{competition.shortCode}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {compSavedMsg && (
-              <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                {compSavedMsg}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={onOpenPublicPortal}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Publiksida & QR</span>
-            </button>
-          </div>
-        </div>
-
-        <form onSubmit={handleSaveComp} className="space-y-2.5">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 items-end">
-            <div className="col-span-2">
-              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Tävlingsnamn
-              </label>
-              <input
-                type="text"
-                value={compName}
-                onChange={(e) => setCompName(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Datum
-              </label>
-              <input
-                type="date"
-                value={compDate}
-                onChange={(e) => setCompDate(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Nolltid (HH:MM:SS)
-              </label>
-              <input
-                type="text"
-                value={compZero}
-                onChange={(e) => setCompZero(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-                required
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end">
-            <div className="sm:col-span-3">
-              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Arenainfo / PM på publiksidan
-              </label>
-              <input
-                type="text"
-                value={compArena}
-                onChange={(e) => setCompArena(e.target.value)}
-                placeholder="t.ex. Samling Nyby IP, mål stänger 20:30"
-                className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-              />
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                type="submit"
-                className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-              >
-                Spara tävling
-              </button>
-              {competition.date === getStockholmTodayIso() && competition.status === 'LIVE' && (
-                <button
-                  type="button"
-                  onClick={() => void onUpdateCompetition({ status: 'COMPLETED' })}
-                  title="Markera dagens tävling som avslutad i förtid (stänger självregistrering)"
-                  className="px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap shrink-0"
-                >
-                  Avsluta nu
-                </button>
-              )}
-              {competition.date === getStockholmTodayIso() && competition.status === 'COMPLETED' && (
-                <button
-                  type="button"
-                  onClick={() => void onUpdateCompetition({ status: 'LIVE' })}
-                  className="px-2.5 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-lg whitespace-nowrap shrink-0"
-                >
-                  Återöppna
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 pt-0.5">
-            <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={compSelfReg}
-                onChange={(e) => setCompSelfReg(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-slate-300 text-red-600"
-              />
-              <span>Tillåt mobil självregistrering via QR</span>
-            </label>
-
-            <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={compFeesAndSwish}
-                onChange={(e) => setCompFeesAndSwish(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-slate-300 text-red-600"
-              />
-              <span>Avgift / Swish-QR aktiv</span>
-            </label>
-          </div>
-        </form>
-      </section>
-      )}
-
-      {/* 2. Web Serial (PC/Mac) & WebUSB CP210x (Android OTG) + SI5/SI6/SIAC */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-          <div className="space-y-0.5">
+      {/* 1. SPORTident USB-avläsare — Web Serial & WebUSB CP210x (Android OTG) */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div>
             <div className="flex items-center gap-2">
               <Usb className="w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0" />
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -682,209 +444,412 @@ export function HardwareStationsView({
               </h2>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Stödjer SI-Card 5 (<span className="font-mono">0xB1</span>), SI-Card 6 (
-              <span className="font-mono">0xE1</span>) samt SI-Card 8–11 & SIAC (
-              <span className="font-mono">0xEF</span> / <span className="font-mono">0xD3</span>).
+              Koppla USB-master (BSM7, BSM8, SRR) direkt i Chrome/Edge på PC, Mac eller Android OTG.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-            <select
-              value={serialStatus.baudRate}
-              disabled={serialStatus.connected}
-              onChange={(e) => onSetBaudRate(Number(e.target.value) as 38400 | 4800)}
-              className="px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                serialStatus.connected
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
+              }`}
             >
-              <option value={38400}>38400 bps</option>
-              <option value={4800}>4800 bps</option>
-            </select>
-
-            <select
-              value={serialStatus.usbMode}
-              onChange={(e) => onSetUsbMode(e.target.value as UsbStationMode)}
-              className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-            >
-              <option value="READOUT">Målavläsning & Radio</option>
-              <option value="START_CORRAL">Startfålla & Brickbyte</option>
-              <option value="REGISTRATION">Direktanmälan</option>
-            </select>
-
-            {serialStatus.connected ? (
-              <button
-                type="button"
-                onClick={() => void onDisconnectUsb()}
-                className="px-3 py-1.5 text-xs font-medium border border-slate-300 dark:border-slate-700 rounded-lg whitespace-nowrap"
-              >
-                Koppla från USB
-              </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  disabled={serialStatus.connecting}
-                  onClick={() => void onConnectUsb(serialStatus.baudRate)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg whitespace-nowrap"
-                >
-                  <Usb className="w-3.5 h-3.5" />
-                  <span>PC / Mac</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={serialStatus.connecting}
-                  onClick={() => void onConnectWebUsb(serialStatus.baudRate)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded-lg whitespace-nowrap"
-                >
-                  <Smartphone className="w-3.5 h-3.5" />
-                  <span>Android OTG</span>
-                </button>
-              </>
-            )}
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  serialStatus.connected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                }`}
+              />
+              <span>{serialStatus.connected ? 'USB Ansluten' : 'Ingen enhet ansluten'}</span>
+            </span>
           </div>
         </div>
 
-        {serialStatus.error && (
-          <div className="px-3 py-2 text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-lg">
-            {serialStatus.error}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Connection Controls */}
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+              Anslut SPORTident-hårdvara
+            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              {!serialStatus.connected ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void onConnectUsb(38400)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <Usb className="w-3.5 h-3.5" />
+                    <span>Web Serial (38400 baud)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void onConnectUsb(4800)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <span>Äldre enhet (4800 baud)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void onConnectWebUsb(38400)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <Smartphone className="w-3.5 h-3.5" />
+                    <span>Android WebUSB (OTG)</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void onDisconnectUsb()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Koppla från USB</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void onTriggerStationBeep()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>Skicka test-pip</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void onRequestSysConfig()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Läs stationsinfo</span>
+                  </button>
+                </>
+              )}
+            </div>
+            {serialStatus.error && (
+              <p className="text-xs text-red-600 dark:text-red-400 font-medium">
+                {serialStatus.error}
+              </p>
+            )}
           </div>
-        )}
 
-        <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-slate-600 dark:text-slate-400">
-            Status:{' '}
-            <strong className="text-slate-900 dark:text-slate-100">
-              {serialStatus.connected
-                ? `Ansluten (${serialStatus.vendorProductLabel})`
-                : 'Ej ansluten'}
-            </strong>
-          </span>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={!serialStatus.connected}
-              onClick={() => void onSendDirectMode()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700 rounded-lg disabled:opacity-40"
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span>Direktläge (0xF0)</span>
-            </button>
-            <button
-              type="button"
-              disabled={!serialStatus.connected}
-              onClick={() => void onRequestSysConfig()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700 rounded-lg disabled:opacity-40"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Systeminfo (0x83)</span>
-            </button>
-            <button
-              type="button"
-              disabled={!serialStatus.connected}
-              onClick={() => void onTriggerStationBeep()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700 rounded-lg disabled:opacity-40"
-            >
-              <Volume2 className="w-3.5 h-3.5" />
-              <span>Pip (0xF9)</span>
-            </button>
+          {/* Mode & Station Info */}
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+              Arbetsläge för USB-enheten
+            </h3>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => onSetUsbMode('READOUT')}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border text-center transition-colors ${
+                  serialStatus.usbMode === 'READOUT'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900'
+                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
+                }`}
+              >
+                Målavläsning
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetUsbMode('START_CORRAL')}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border text-center transition-colors ${
+                  serialStatus.usbMode === 'START_CORRAL'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900'
+                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
+                }`}
+              >
+                Start / Check
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetUsbMode('REGISTRATION')}
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border text-center transition-colors ${
+                  serialStatus.usbMode === 'REGISTRATION'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900'
+                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
+                }`}
+              >
+                Direktanmälan
+              </button>
+            </div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono flex items-center justify-between">
+              <span>Baud: {serialStatus.baudRate} bps</span>
+              <span>Drivrutin: {serialStatus.activeTransport ? (serialStatus.activeTransport === 'WEB_USB' ? 'WebUSB (CP210x)' : 'WebSerial') : 'Ingen'}</span>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* 3. ROC Radio Controls (roc.olresultat.se) */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-          <div className="space-y-0.5">
+      {/* 2. Nödlägen i skogen & Omräkning */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div>
             <div className="flex items-center gap-2">
-              <Radio className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+              <Wrench className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Nödlägen i skogen & Omräkning
+              </h2>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Undanta trasiga kontroller, justera felställda enhetsklockor eller tilldela manuell måltid.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            disabled={emergencyBusy}
+            onClick={() => void handleRecalcClick()}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start md:self-auto"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${emergencyBusy ? 'animate-spin' : ''}`} />
+            <span>Räkna om alla sparade avläsningar</span>
+          </button>
+        </div>
+
+        {emergencyFeedback && (
+          <div
+            className={`px-3 py-2 text-xs font-medium rounded-lg border ${
+              emergencyFeedback.ok
+                ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/60'
+                : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60'
+            }`}
+          >
+            {emergencyFeedback.msg}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Kontroll ur funktion */}
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+              <span>Kontroll ur funktion</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Stryk stämplingskrav för trasig eller stulen kontrollenhet.
+            </p>
+            <form onSubmit={handleAddBrokenControl} className="flex gap-2">
+              <input
+                type="number"
+                placeholder="Kod (t.ex. 42)"
+                value={brokenCodeInput}
+                onChange={(e) => setBrokenCodeInput(e.target.value)}
+                className="w-24 px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
+              />
+              <button
+                type="submit"
+                disabled={emergencyBusy || !brokenCodeInput}
+                className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg"
+              >
+                Undanta
+              </button>
+            </form>
+            {emergency.brokenControls.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {emergency.brokenControls.map((c) => (
+                  <span
+                    key={c}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900 rounded-md"
+                  >
+                    <span>K{c}</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveBrokenControl(c)}
+                      className="text-red-500 hover:text-red-800"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Tidsjustering */}
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-blue-500" />
+              <span>Tidsjustering stationsklocka</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Kompensera för felställd enhetsklocka (+/- sekunder).
+            </p>
+            <form onSubmit={handleSetTimeOffset} className="flex flex-wrap gap-2">
+              <input
+                type="number"
+                placeholder="Kod"
+                value={offsetCodeInput}
+                onChange={(e) => setOffsetCodeInput(e.target.value)}
+                className="w-16 px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
+              />
+              <input
+                type="number"
+                placeholder="+/- sekunder"
+                value={offsetSecInput || ''}
+                onChange={(e) => setOffsetSecInput(Number(e.target.value))}
+                className="w-24 px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
+              />
+              <button
+                type="submit"
+                disabled={emergencyBusy || !offsetCodeInput}
+                className="px-2.5 py-1 text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 disabled:opacity-50 rounded-lg"
+              >
+                Sätt offset
+              </button>
+            </form>
+            {Object.keys(emergency.controlTimeOffsets).length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {Object.entries(emergency.controlTimeOffsets).map(([code, off]) => (
+                  <span
+                    key={code}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900 rounded-md"
+                  >
+                    <span>K{code}: {off > 0 ? `+${off}` : off}s</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveOffset(code)}
+                      className="text-blue-500 hover:text-blue-800"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Manuell måltid */}
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Manuell måltid (Reservklocka)</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Tilldela måltid från måldomarklocka om målstämpel saknas på brickan.
+            </p>
+            <form onSubmit={handleManualFinishSubmit} className="space-y-2">
+              <select
+                value={manualRunnerId}
+                onChange={(e) => setManualRunnerId(e.target.value)}
+                className="w-full px-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg font-medium"
+              >
+                {competitors.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.bib ? `#${c.bib} ` : ''}{c.fullName} ({c.club})
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualFinishClock}
+                  onChange={(e) => setManualFinishClock(e.target.value)}
+                  className="w-24 px-2.5 py-1 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
+                />
+                <button
+                  type="submit"
+                  disabled={emergencyBusy || !manualRunnerId}
+                  className="flex-1 px-2.5 py-1 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg"
+                >
+                  Registrera måltid
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      {/* 3. ROC Radiokontroller i skogen (roc.olresultat.se) */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div>
+            <div className="flex items-center gap-2">
+              <Radio className="w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0" />
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 ROC Radiokontroller i skogen (roc.olresultat.se)
               </h2>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Hämtar online-stämplingar via <span className="font-mono break-all">{roc.baseUrl}</span> ·
-              Mottagna:{' '}
-              <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">
-                {roc.totalReceived} st
-              </strong>{' '}
-              (senaste ID: <span className="font-mono">{roc.lastPunchId}</span>).
+              Live-stämplingar från 4G/GPRS-radiomodem i skogen via ROC REST API.
             </p>
           </div>
 
-          <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 dark:text-slate-200 cursor-pointer select-none shrink-0">
-            <input
-              type="checkbox"
-              checked={roc.enabled}
-              onChange={(e) =>
-                void onUpdateRocSettings({
-                  enabled: e.target.checked,
-                  unitId: rocUnitInput.trim(),
-                })
-              }
-              className="w-3.5 h-3.5 rounded border-slate-300 text-red-600"
-            />
-            <span>Automatisk ROC-polling</span>
-          </label>
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                roc.enabled
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  roc.enabled ? 'bg-emerald-500' : 'bg-slate-400'
+                }`}
+              />
+              <span>{roc.enabled ? 'ROC Aktiv' : 'ROC Ej aktiv'}</span>
+            </span>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-end justify-between gap-2.5">
-          <form onSubmit={handleSaveRocSettings} className="flex flex-wrap items-end gap-2">
-            <div>
-              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
-                ROC Enhets-ID
-              </label>
-              <input
-                type="text"
-                value={rocUnitInput}
-                onChange={(e) => setRocUnitInput(e.target.value)}
-                placeholder="t.ex. 1042"
-                className="w-28 px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Intervall
-              </label>
-              <select
-                value={rocIntervalInput}
-                onChange={(e) => setRocIntervalInput(Number(e.target.value))}
-                className="px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-              >
-                <option value={3}>3 s</option>
-                <option value={5}>5 s</option>
-                <option value={10}>10 s</option>
-                <option value={20}>20 s</option>
-              </select>
-            </div>
-
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <form onSubmit={handleSaveRocPassId} className="flex flex-wrap items-center gap-2">
+            <label htmlFor="roc-unit-id" className="text-xs font-medium text-slate-700 dark:text-slate-300">
+              ROC Passnings-ID:
+            </label>
+            <input
+              id="roc-unit-id"
+              type="text"
+              value={rocPassId}
+              onChange={(e) => setRocPassId(e.target.value)}
+              placeholder="t.ex. 1042"
+              className="w-28 px-2.5 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+            />
             <button
               type="submit"
-              className="px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 rounded-lg whitespace-nowrap"
+              className="px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
             >
-              Spara ROC
+              Spara ID
             </button>
           </form>
 
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={rocBusy}
-              onClick={() => void handlePollRocClick()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap"
+              onClick={handleToggleRocAuto}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                rocAutoPoll
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
+              }`}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${rocBusy ? 'animate-spin' : ''}`} />
-              <span>Hämta ROC nu</span>
+              {rocAutoPoll ? 'Automatisk polling (var 15s)' : 'Manuell polling'}
             </button>
 
             <button
               type="button"
               disabled={rocBusy}
-              onClick={() => void handleSimulateRocClick()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg whitespace-nowrap"
+              onClick={() => void handlePollRoc()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
             >
-              <Radio className="w-3.5 h-3.5" />
-              <span>Simulera ROC-stämplingar</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${rocBusy ? 'animate-spin' : ''}`} />
+              <span>Hämta nu</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={rocBusy}
+              onClick={() => void handleSimulateRoc()}
+              className="px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+            >
+              Simulera ROC-stämpling
             </button>
           </div>
         </div>
@@ -902,369 +867,68 @@ export function HardwareStationsView({
         )}
       </section>
 
-      {/* 4. Eventor REST API & Automatic Runner Database Lookup (Admin only) */}
-      {isAdmin && (
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-2.5">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2">
-              <Database className="w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0" />
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Eventor-koppling & Automatisk brickuppslagning (Löpardatabas)
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Synka medlemmar och tävlingar från{' '}
-              <span className="font-mono break-all">{eventor.baseUrl}</span> · Löpardatabas:{' '}
-              <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">
-                {runnerDbCount}
-              </strong>{' '}
-              SI-brickor.
-            </p>
-          </div>
-
-          <div className="text-xs text-slate-600 dark:text-slate-400 flex flex-wrap items-center gap-x-2 shrink-0">
-            <span>Servernyckel:</span>
-            <strong
-              className={
-                eventor.apiKeyConfigured
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : 'text-amber-700 dark:text-amber-400'
-              }
-            >
-              {eventor.apiKeyConfigured ? 'EVENTOR_API_KEY aktiv' : 'EVENTOR_API_KEY ej satt'}
-            </strong>
-            {eventor.connectedOrgName && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span>{eventor.connectedOrgName}</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {!eventor.apiKeyConfigured && (
-          <div className="px-3 py-2 text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-lg">
-            För live-hämtning från Eventor: lägg in{' '}
-            <span className="font-mono font-semibold">EVENTOR_API_KEY</span> i Secrets-panelen. Den
-            lokala Löpardatabasen ({runnerDbCount} brickor) fungerar direkt även utan nyckel.
-          </div>
-        )}
-
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-          <button
-            type="button"
-            disabled={eventorBusy || !eventor.apiKeyConfigured}
-            onClick={() => void handleSyncClubClick()}
-            className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap self-start"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${eventorBusy ? 'animate-spin' : ''}`} />
-            <span>Synka klubbmedlemmar från Eventor</span>
-          </button>
-
-          <form onSubmit={handleImportEventSubmit} className="flex flex-wrap items-center gap-2">
-            <label
-              htmlFor="eventor-id-input"
-              className="text-xs text-slate-600 dark:text-slate-400"
-            >
-              Tävlings-ID:
-            </label>
-            <input
-              id="eventor-id-input"
-              type="text"
-              inputMode="numeric"
-              value={eventorEventId}
-              onChange={(e) => setEventorEventId(e.target.value)}
-              placeholder="t.ex. 48210"
-              className="w-28 px-2.5 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-            />
-            <button
-              type="submit"
-              disabled={eventorBusy || !eventor.apiKeyConfigured || !eventorEventId.trim()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap"
-            >
-              <CloudDownload className="w-3.5 h-3.5" />
-              <span>Hämta tävling</span>
-            </button>
-          </form>
-        </div>
-
-        {eventorFeedback && (
-          <div
-            className={`px-3 py-2 text-xs font-medium rounded-lg border ${
-              eventorFeedback.ok
-                ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/60'
-                : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60'
-            }`}
-          >
-            {eventorFeedback.msg}
-          </div>
-        )}
-
-        <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800">
-          <label className="inline-flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={eventor.autoCreateFromRunnerDbOnReadout}
-              onChange={(e) =>
-                void onUpdateEventorSettings({
-                  autoCreateFromRunnerDbOnReadout: e.target.checked,
-                })
-              }
-              className="mt-0.5 w-3.5 h-3.5 rounded border-slate-300 text-red-600 focus:ring-red-600"
-            />
-            <span>
-              <strong>Automatisk deltagarregistrering vid brickavläsning:</strong> Slår upp oanmäld
-              bricka i Löpardatabasen och matchar bana/klass direkt.
-            </span>
-          </label>
-        </div>
-      </section>
-      )}
-
-      {/* 5. IOF XML 3.0 Import (OCAD / Purple Pen / Eventor) & MOP Export (Admin only) */}
-      {isAdmin && (
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 space-y-3">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              IOF XML 3.0 (OCAD / Purple Pen / Eventor) & MeOS Online Protocol (MOP)
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Importera <span className="font-mono">CourseData</span>,{' '}
-              <span className="font-mono">EntryList</span> och{' '}
-              <span className="font-mono">CompetitorList</span>, eller exportera MOP-flöde.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer whitespace-nowrap">
-              <Upload className="w-3.5 h-3.5" />
-              <span>Läs in IOF XML</span>
-              <input
-                type="file"
-                accept=".xml,text/xml,application/xml"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-            </label>
-
-            <button
-              type="button"
-              onClick={() => void handleDownloadMopXml()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>MOP XML</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setXmlInput(SAMPLE_OCAD_COURSE_XML);
-              void handleXmlImport(SAMPLE_OCAD_COURSE_XML);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg"
-          >
-            <FileCode className="w-3.5 h-3.5" />
-            <span>Testa importera Purple Pen CourseData</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setXmlInput(SAMPLE_EVENTOR_ENTRY_XML);
-              void handleXmlImport(SAMPLE_EVENTOR_ENTRY_XML);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg"
-          >
-            <FileCode className="w-3.5 h-3.5" />
-            <span>Testa importera Eventor EntryList</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setXmlInput(SAMPLE_EVENTOR_COMPETITOR_XML);
-              void handleXmlImport(SAMPLE_EVENTOR_COMPETITOR_XML);
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg"
-          >
-            <FileCode className="w-3.5 h-3.5" />
-            <span>Testa importera Eventor CompetitorList</span>
-          </button>
-        </div>
-
-        {xmlFeedback && (
-          <div
-            className={`px-4 py-2.5 text-xs font-medium rounded-lg border ${
-              xmlFeedback.ok
-                ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/60'
-                : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60'
-            }`}
-          >
-            {xmlFeedback.msg}
-          </div>
-        )}
-
-        {xmlInput && (
-          <textarea
-            rows={4}
-            value={xmlInput}
-            onChange={(e) => setXmlInput(e.target.value)}
-            className="w-full p-3 text-[11px] font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-700 dark:text-slate-300"
-          />
-        )}
-      </section>
-      )}
-
-      {/* 5B. Portable Season Database Backup & Restore (Admin only) */}
-      {isAdmin && (
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 space-y-2.5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-          <div>
-            <div className="flex items-center gap-2">
-              <Database className="w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0" />
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Säsongsdatabas & Säkerhetskopiering (.json)
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Ladda ner komplett säkerhetskopia eller flytta säsongen mellan dator och molnserver.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => void handleDownloadBackup()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Ladda ner (.json)</span>
-            </button>
-
-            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0">
-              <Upload className="w-3.5 h-3.5" />
-              <span>Återställ .json</span>
-              <input
-                type="file"
-                accept=".json,application/json"
-                onChange={(e) => void handleRestoreBackupUpload(e)}
-                className="hidden"
-              />
-            </label>
-          </div>
-        </div>
-
-        {backupFeedback && (
-          <div
-            className={`px-3 py-2 text-xs font-medium rounded-lg border ${
-              backupFeedback.ok
-                ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/60'
-                : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60'
-            }`}
-          >
-            {backupFeedback.msg}
-          </div>
-        )}
-      </section>
-      )}
-
-      {/* 6. Stations Table */}
+      {/* 4. Konfigurerade SI-stationer & Radiokontroller */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-        <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Konfigurerade SI-stationer & Radiokontroller ({stations.length})
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Mappar stationskoder (CN) för onlinekontroller/ROC i skogen. Din USB-anslutna BSM8 växlar roll automatiskt efter öppen vy (Direktanmälan, Startfålla eller Målavläsning).
-            </p>
-          </div>
-
-          {isAdmin &&
-            (!confirmReset ? (
-              <button
-                type="button"
-                onClick={() => setConfirmReset(true)}
-                className="text-xs font-medium text-slate-500 hover:text-slate-900 dark:hover:text-slate-200"
-              >
-                Återställ exempeldata
-              </button>
-            ) : (
-              <div className="inline-flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await onResetDemoSeed();
-                    setConfirmReset(false);
-                  }}
-                  className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 rounded-md"
-                >
-                  Bekräfta
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmReset(false)}
-                  className="px-2 py-1 text-xs text-slate-600 dark:text-slate-300"
-                >
-                  Avbryt
-                </button>
-              </div>
-            ))}
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            Konfigurerade SI-stationer & Radiokontroller ({stations.length})
+          </h2>
         </div>
 
-        <div>
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
-                <th className="py-2 pl-3.5 pr-2">Kod</th>
-                <th className="py-2 px-2">Benämning</th>
-                <th className="hidden sm:table-cell py-2 px-2">Tävlingsfunktion</th>
-                <th className="hidden md:table-cell py-2 px-2">Hårdvara</th>
-                {isAdmin && <th className="py-2 pl-2 pr-3.5 text-right">Ta bort</th>}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+              <tr>
+                <th className="px-4 py-2.5">Kod (CN)</th>
+                <th className="px-4 py-2.5">Namn / Placering</th>
+                <th className="px-4 py-2.5">Funktion</th>
+                <th className="px-4 py-2.5">Hårdvara</th>
+                <th className="px-4 py-2.5">Baud</th>
+                <th className="px-4 py-2.5 text-right">Åtgärd</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
-              {stations.map((st) => (
-                <tr key={st.id}>
-                  <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                    CN {st.stationCode}
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {stations.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-slate-400">
+                    Inga stationer konfigurerade.
                   </td>
-                  <td className="py-1.5 px-2 max-w-[170px] sm:max-w-[260px]">
-                    <div className="flex items-baseline gap-1.5 min-w-0 truncate">
-                      <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                        {st.name}
-                      </span>
-                      <span className="sm:hidden text-[11px] text-slate-500 truncate">
-                        · {formatStationFunctionLabel(st.stationFunction)}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="hidden sm:table-cell py-1.5 px-2 text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                    {formatStationFunctionLabel(st.stationFunction)}
-                  </td>
-                  <td className="hidden md:table-cell py-1.5 px-2 font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                    {st.hardwareModel} · {st.batteryMv} mV
-                  </td>
-                  {isAdmin && (
-                    <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => void onDeleteStation(st.id)}
-                        className="p-1 text-slate-400 hover:text-red-600 rounded"
-                        aria-label={`Ta bort ${st.name}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  )}
                 </tr>
-              ))}
+              ) : (
+                stations.map((st) => (
+                  <tr key={st.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                    <td className="px-4 py-2.5 font-mono font-bold text-slate-900 dark:text-slate-100">
+                      {st.stationCode}
+                    </td>
+                    <td className="px-4 py-2.5 font-medium text-slate-900 dark:text-slate-100">
+                      {st.name}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className="inline-flex px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        {formatStationFunctionLabel(st.stationFunction)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400">
+                      {st.hardwareModel}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-slate-500">
+                      {st.baudRate}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => void onDeleteStation(st.id)}
+                          className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
+                          title="Ta bort station"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

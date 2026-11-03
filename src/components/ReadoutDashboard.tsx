@@ -138,6 +138,45 @@ export function ReadoutDashboard({
     [competitors]
   );
 
+  // MeOS Control Status (Kontrollintagning)
+  const controlStatusList = useMemo(() => {
+    const allCodes = Array.from(
+      new Set(courses.flatMap((c) => c.controls))
+    ).sort((a, b) => a - b);
+
+    return allCodes.map((code) => {
+      const matchingCourseIds = new Set(
+        courses.filter((crs) => crs.controls.includes(code)).map((c) => c.id)
+      );
+      const matchingClassIds = new Set(
+        classes.filter((cls) => cls.courseId && matchingCourseIds.has(cls.courseId)).map((c) => c.id)
+      );
+      const activeRunnersRemaining = competitors.filter((cmp) => {
+        if (
+          cmp.status !== 'REGISTERED' &&
+          cmp.status !== 'CHECKED' &&
+          cmp.status !== 'IN_FOREST'
+        ) {
+          return false;
+        }
+        if (!matchingClassIds.has(cmp.classId)) return false;
+        const punched = cmp.cardPunches.some((p) => p.code === code);
+        return !punched;
+      }).length;
+
+      return {
+        code,
+        courseCount: matchingCourseIds.size,
+        activeRunnersRemaining,
+      };
+    });
+  }, [courses, classes, competitors]);
+
+  const rentalList = useMemo(
+    () => competitors.filter((c) => c.isRentalCard),
+    [competitors]
+  );
+
   // Pick inspected runner (either explicitly selected, or most recently read out)
   const inspectedRunner = useMemo(() => {
     if (selectedRunnerId) {
@@ -1053,6 +1092,109 @@ export function ReadoutDashboard({
             </form>
           </section>
         </div>
+      </div>
+
+      {/* Bottom Grid: 3. Kontrollstatus i skogen & 4. Hyrbrickor */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 pt-1">
+        {/* Kontrollstatus i skogen (Kontrollintagning) */}
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Kontrollstatus i skogen (Kontrollintagning)
+            </h2>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              Antal löpare i terrängen med kontrollen kvar
+            </span>
+          </div>
+
+          <div className="p-3 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 max-h-56 overflow-y-auto">
+            {controlStatusList.length === 0 ? (
+              <div className="col-span-full py-4 text-center text-xs text-slate-400">
+                Inga kontroller registrerade på banorna.
+              </div>
+            ) : (
+              controlStatusList.map((item) => (
+                <div
+                  key={item.code}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40"
+                >
+                  <div className="flex items-baseline justify-between gap-1">
+                    <span className="font-mono tabular-nums text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      K{item.code}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">{item.courseCount}b</span>
+                  </div>
+                  <div
+                    className={`mt-0.5 text-[11px] font-mono tabular-nums font-medium truncate ${
+                      item.activeRunnersRemaining === 0
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-amber-700 dark:text-amber-400'
+                    }`}
+                  >
+                    {item.activeRunnersRemaining === 0 ? 'Klart' : `${item.activeRunnersRemaining} kvar`}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* Utlånade SI-hyrbrickor */}
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden flex flex-col justify-between">
+          <div>
+            <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Utlånade SI-hyrbrickor ({unreturnedRentals} ej återlämnade)
+              </h2>
+              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                Totalt {rentalList.length} hyrbrickor
+              </span>
+            </div>
+
+            <div className="max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+              {rentalList.length === 0 ? (
+                <div className="py-6 text-center text-slate-400">
+                  Inga hyrbrickor utlånade i tävlingen.
+                </div>
+              ) : (
+                rentalList.map((r) => {
+                  const isReturned = r.rentalReturned;
+                  return (
+                    <div
+                      key={r.id}
+                      className="px-3.5 py-2 flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                          {r.fullName} ({r.club})
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          SI {r.siNumber} · Status: {r.status}
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center gap-2">
+                        {isReturned ? (
+                          <span className="inline-flex px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                            Återlämnad
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void onMarkRentalReturned(r.id)}
+                            className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            Markera återlämnad
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );

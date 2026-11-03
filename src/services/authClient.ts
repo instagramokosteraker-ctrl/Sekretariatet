@@ -1,5 +1,17 @@
-import type { AuthPublicInfoPayload, AuthSessionUser } from '../types/sportident';
-import { signOutFirebase } from '../firebase';
+import {
+  signInWithPopup,
+  signOut,
+} from 'firebase/auth';
+import {
+  auth,
+  googleProvider,
+  BOOTSTRAP_SUPER_ADMIN_EMAILS,
+} from '../firebase';
+import type {
+  AuthPublicInfoPayload,
+  AuthSessionUser,
+  OfficialRoleMode,
+} from '../types/sportident';
 
 export interface StoredAuthSession {
   token: string;
@@ -48,7 +60,7 @@ export function subscribeAuthSession(cb: AuthListener): () => void {
 
 /**
  * Wrapper around fetch for Secretariat `/api/*` endpoints that automatically
- * attaches the active session token (`x-passersi-token`).
+ * attaches the active session token (`x-passersi-token`) if available.
  */
 export async function apiFetch(
   input: RequestInfo | URL,
@@ -59,160 +71,170 @@ export async function apiFetch(
   if (session?.token) {
     headers.set('x-passersi-token', session.token);
   }
-  const response = await fetch(input, {
+  return fetch(input, {
     ...init,
     headers,
   });
-
-  if (response.status === 401 && session) {
-    // Token invalidated by server (and we actually reached the server, not offline)
-    setStoredAuthSession(null);
-  }
-  return response;
 }
 
-export async function fetchAuthPublicInfo(): Promise<AuthPublicInfoPayload | null> {
+/**
+ * Client-side session verification. Does NOT call /api/auth/...
+ */
+export async function verifyStoredSessionOnline(): Promise<StoredAuthSession | null> {
+  return getStoredAuthSession();
+}
+
+/**
+ * Client-side Firebase Google sign-in using signInWithPopup & GoogleAuthProvider.
+ * Zero requests to /api/auth/...
+ */
+export async function loginWithGoogleClient(): Promise<
+  { ok: true; session: StoredAuthSession } | { ok: false; error: string; code?: string }
+> {
   try {
-    const res = await fetch('/api/auth/public-info');
-    if (!res.ok) return null;
-    return (await res.json()) as AuthPublicInfoPayload;
-  } catch {
-    return null;
+    const credential = await signInWithPopup(auth, googleProvider);
+    const user = credential.user;
+    const token = await user.getIdToken();
+    const emailLower = (user.email ?? '').toLowerCase();
+    const isSuper = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(emailLower);
+
+    const session: StoredAuthSession = {
+      token,
+      user: {
+        sessionKind: 'ADMIN',
+        uid: user.uid,
+        displayName: user.displayName || user.email || 'Administratör',
+        email: user.email,
+        adminTier: isSuper ? 'SUPER_ADMIN' : 'RACE_ADMIN',
+        officialRole: 'ALL',
+        lockedEventId: null,
+        lockedEventName: null,
+        authMethod: 'GOOGLE',
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+      },
+    };
+    setStoredAuthSession(session);
+    return { ok: true, session };
+  } catch (err: unknown) {
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? String((err as { code: unknown }).code)
+        : '';
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Google-inloggning misslyckades.',
+      code,
+    };
   }
 }
 
 /**
- * Verifies the stored session against `/api/auth/me` when online.
- * If the tablet/laptop is offline in the forest, keeps the non-expired cached session active!
+ * Client-side PIN verification against competition role pins.
+ * Zero requests to /api/auth/...
  */
-export async function verifyStoredSessionOnline(): Promise<StoredAuthSession | null> {
-  const existing = getStoredAuthSession();
-  if (!existing) return null;
-  try {
-    const res = await fetch('/api/auth/me', {
-      headers: { 'x-passersi-token': existing.token },
-    });
-    if (res.status === 401) {
-      setStoredAuthSession(null);
-      return null;
-    }
-    if (res.ok) {
-      const data = (await res.json()) as { user: AuthSessionUser };
-      const updated: StoredAuthSession = {
-        token: existing.token,
-        user: data.user,
-      };
-      setStoredAuthSession(updated);
-      return updated;
-    }
-    return existing;
-  } catch {
-    // Offline in the forest — preserve local official/admin session
-    return existing;
-  }
-}
-
-export async function loginWithGoogleTokenOnServer(params: {
-  idToken: string;
-  firestoreClaimedRole?: 'SUPER_ADMIN' | 'RACE_ADMIN' | null;
-}): Promise<{ ok: true; session: StoredAuthSession } | { ok: false; error: string }> {
-  try {
-    const res = await fetch('/api/auth/login-google', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      token?: string;
-      user?: AuthSessionUser;
-      error?: string;
-    };
-    if (!res.ok || !data.token || !data.user) {
-      return {
-        ok: false,
-        error: data.error || 'Kunde inte verifiera Google-inloggningen.',
-      };
-    }
-    const session: StoredAuthSession = { token: data.token, user: data.user };
-    setStoredAuthSession(session);
-    return { ok: true, session };
-  } catch {
-    return {
-      ok: false,
-      error:
-        'Ingen internetanslutning kunde nås för Google-verifiering. Använd Offline reservkod om du är ute i skogen.',
-    };
-  }
-}
-
-export async function loginWithPinOnServer(params: {
+export function loginWithPinClient(params: {
   eventId: string;
+  eventName?: string;
   pin: string;
-}): Promise<{ ok: true; session: StoredAuthSession } | { ok: false; error: string }> {
-  try {
-    const res = await fetch('/api/auth/login-pin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      token?: string;
-      user?: AuthSessionUser;
-      error?: string;
-    };
-    if (!res.ok || !data.token || !data.user) {
-      return {
-        ok: false,
-        error: data.error || 'Felaktig funktionärs-PIN för den valda tävlingen.',
-      };
-    }
-    const session: StoredAuthSession = { token: data.token, user: data.user };
-    setStoredAuthSession(session);
-    return { ok: true, session };
-  } catch {
+  rolePins?: Record<string, string>;
+}): { ok: true; session: StoredAuthSession } | { ok: false; error: string } {
+  const {
+    eventId,
+    eventName = 'Tävling',
+    pin,
+    rolePins = {
+      START: '1100',
+      READOUT: '2200',
+      FOREST: '3300',
+      SPEAKER: '4400',
+    },
+  } = params;
+
+  let matchedRole: OfficialRoleMode | null = null;
+  let roleLabel = '';
+
+  if (pin === (rolePins.START || '1100')) {
+    matchedRole = 'START';
+    roleLabel = 'Startpersonal & Startfålla';
+  } else if (pin === (rolePins.READOUT || '2200')) {
+    matchedRole = 'READOUT';
+    roleLabel = 'Mål & Avläsning';
+  } else if (pin === (rolePins.FOREST || '3300')) {
+    matchedRole = 'FOREST';
+    roleLabel = 'Skogssäkerhet & Sök';
+  } else if (pin === (rolePins.SPEAKER || '4400')) {
+    matchedRole = 'SPEAKER';
+    roleLabel = 'Speaker & Resultat';
+  }
+
+  if (!matchedRole) {
     return {
       ok: false,
-      error: 'Kunde inte nå tävlingsservern. Kontrollera uppkopplingen.',
+      error: 'Felaktig funktionärs-PIN. Kontrollera din 4-siffriga kod.',
     };
   }
+
+  const session: StoredAuthSession = {
+    token: `pin_token_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    user: {
+      sessionKind: 'PIN_OFFICIAL',
+      uid: `pin_${matchedRole.toLowerCase()}_${eventId}`,
+      displayName: `${roleLabel} (PIN-inloggad)`,
+      email: null,
+      adminTier: null,
+      officialRole: matchedRole,
+      lockedEventId: eventId,
+      lockedEventName: eventName,
+      authMethod: 'PIN',
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+    },
+  };
+  setStoredAuthSession(session);
+  return { ok: true, session };
 }
 
-export async function loginWithOfflineCodeOnServer(
+/**
+ * Client-side offline admin code verification.
+ * Zero requests to /api/auth/...
+ */
+export function loginWithOfflineCodeClient(
   code: string
-): Promise<{ ok: true; session: StoredAuthSession } | { ok: false; error: string }> {
-  try {
-    const res = await fetch('/api/auth/login-offline', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      token?: string;
-      user?: AuthSessionUser;
-      error?: string;
-    };
-    if (!res.ok || !data.token || !data.user) {
-      return {
-        ok: false,
-        error: data.error || 'Felaktig offline reservkod.',
-      };
-    }
-    const session: StoredAuthSession = { token: data.token, user: data.user };
-    setStoredAuthSession(session);
-    return { ok: true, session };
-  } catch {
+): { ok: true; session: StoredAuthSession } | { ok: false; error: string } {
+  const clean = code.trim().toLowerCase();
+  if (clean !== 'okosteraker2026' && clean !== 'oklinne2026') {
     return {
       ok: false,
-      error: 'Kunde inte nå den lokala tävlingsservern.',
+      error: 'Felaktig offline reservkod.',
     };
   }
+
+  const session: StoredAuthSession = {
+    token: `offline_token_${Date.now()}`,
+    user: {
+      sessionKind: 'ADMIN',
+      uid: 'offline_emergency_admin',
+      displayName: 'Tävlingsledare (Offline reservläge)',
+      email: null,
+      adminTier: 'RACE_ADMIN',
+      officialRole: 'ALL',
+      lockedEventId: null,
+      lockedEventName: null,
+      authMethod: 'OFFLINE_CODE',
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+    },
+  };
+  setStoredAuthSession(session);
+  return { ok: true, session };
 }
 
 export async function logoutSecretariatSession(): Promise<void> {
   setStoredAuthSession(null);
   try {
-    await signOutFirebase();
+    await signOut(auth);
   } catch {
-    // ignore offline signOut errors
+    // Ignore offline signOut errors
   }
 }

@@ -162,12 +162,15 @@ export function CompetitionSettingsView({
     try {
       const text = await file.text();
       const doc = parseIofXmlDocument(text);
-      const effectiveBatch = buildEffectiveCourseImportBatch(doc);
+      const effectiveBatch = buildEffectiveCourseImportBatch(doc, {
+        autoCreateClassesIfMissing: true,
+        freeStart: false,
+      });
       const res = await onImportIofBatch({
         courses: effectiveBatch.courses,
         classes: effectiveBatch.classes,
-        entries: effectiveBatch.entries,
-        runnerDbEntries: effectiveBatch.runnerDbEntries,
+        entries: doc.entries,
+        runnerDbEntries: doc.runnerDbEntries,
       });
       setXmlFeedback({
         ok: true,
@@ -189,12 +192,15 @@ export function CompetitionSettingsView({
     setXmlFeedback(null);
     try {
       const doc = parseIofXmlDocument(sampleXml);
-      const effectiveBatch = buildEffectiveCourseImportBatch(doc);
+      const effectiveBatch = buildEffectiveCourseImportBatch(doc, {
+        autoCreateClassesIfMissing: true,
+        freeStart: false,
+      });
       const res = await onImportIofBatch({
         courses: effectiveBatch.courses,
         classes: effectiveBatch.classes,
-        entries: effectiveBatch.entries,
-        runnerDbEntries: effectiveBatch.runnerDbEntries,
+        entries: doc.entries,
+        runnerDbEntries: doc.runnerDbEntries,
       });
       setXmlFeedback({
         ok: true,

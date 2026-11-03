@@ -13,25 +13,33 @@ import {
   Sun,
   WifiOff,
 } from 'lucide-react';
-import type { AuthPublicInfoPayload, EventLifecycleStatus } from '../types/sportident';
+import type { ClubSettings, EventLifecycleStatus } from '../types/sportident';
+import { prewarmGooglePopupAuth } from '../firebase';
 import {
-  ensureAdminRoleInFirestore,
-  prewarmGooglePopupAuth,
-  signInWithGooglePopup,
-} from '../firebase';
-import {
-  fetchAuthPublicInfo,
-  loginWithGoogleTokenOnServer,
-  loginWithOfflineCodeOnServer,
-  loginWithPinOnServer,
+  loginWithGoogleClient,
+  loginWithOfflineCodeClient,
+  loginWithPinClient,
   type StoredAuthSession,
 } from '../services/authClient';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
+
+export interface GateCompetitionItem {
+  id: string;
+  shortCode: string;
+  name: string;
+  organizer: string;
+  date: string;
+  status: EventLifecycleStatus;
+  pinsCustomized?: boolean;
+  demoPinHints?: Record<string, string>;
+}
 
 interface AuthGateViewProps {
   darkMode: boolean;
   onToggleDarkMode: () => void;
   preferredPublicShortCode?: string | null;
+  competitions?: GateCompetitionItem[];
+  clubSettings?: ClubSettings;
   onAuthenticated: (session: StoredAuthSession) => void;
   onOpenPublicPortal: (shortCode: string | null) => void;
 }
@@ -43,7 +51,12 @@ function formatStatusText(status: EventLifecycleStatus): string {
 }
 
 function extractFirebaseErrorCode(err: unknown): string {
-  if (err && typeof err === 'object' && 'code' in err && typeof (err as { code?: unknown }).code === 'string') {
+  if (
+    err &&
+    typeof err === 'object' &&
+    'code' in err &&
+    typeof (err as { code?: unknown }).code === 'string'
+  ) {
     return (err as { code: string }).code;
   }
   const msg = err instanceof Error ? err.message : String(err ?? '');
@@ -51,26 +64,59 @@ function extractFirebaseErrorCode(err: unknown): string {
   return match ? match[0].toLowerCase() : '';
 }
 
+const DEFAULT_DEMO_COMPETITIONS: GateCompetitionItem[] = [
+  {
+    id: 'evt-live',
+    shortCode: 'oko26a',
+    name: 'Höstsprinten & Natt-KM 2026',
+    organizer: 'OK Österåker',
+    date: '2026-11-02',
+    status: 'LIVE',
+    pinsCustomized: false,
+    demoPinHints: { START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' },
+  },
+  {
+    id: 'evt-upcoming',
+    shortCode: 'oko26b',
+    name: 'Torsdagsträning Lunsen — Nattintervaller',
+    organizer: 'OK Österåker',
+    date: '2026-11-05',
+    status: 'UPCOMING',
+    pinsCustomized: false,
+    demoPinHints: { START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' },
+  },
+  {
+    id: 'evt-completed',
+    shortCode: 'oko26c',
+    name: 'Klubbserien Etapp 1 — Nåsten',
+    organizer: 'OK Österåker',
+    date: '2026-10-21',
+    status: 'COMPLETED',
+    pinsCustomized: false,
+    demoPinHints: { START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' },
+  },
+];
+
 export function AuthGateView({
   darkMode,
   onToggleDarkMode,
   preferredPublicShortCode,
+  competitions = DEFAULT_DEMO_COMPETITIONS,
+  clubSettings,
   onAuthenticated,
   onOpenPublicPortal,
 }: AuthGateViewProps) {
-  const [publicInfo, setPublicInfo] = useState<AuthPublicInfoPayload | null>(null);
-  const [loadingInfo, setLoadingInfo] = useState<boolean>(true);
-  const [selectedEventId, setSelectedEventId] = useState<string>('');
-  const [userChangedEvent, setUserChangedEvent] = useState<boolean>(false);
+  const compList = competitions && competitions.length > 0 ? competitions : DEFAULT_DEMO_COMPETITIONS;
+  const [selectedEventId, setSelectedEventId] = useState<string>(() => compList[0]?.id || 'evt-live');
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
 
   useEffect(() => {
     setLogoBroken(false);
-  }, [publicInfo?.clubSettings?.logoDataUrl]);
+  }, [clubSettings?.logoDataUrl]);
 
   useEffect(() => {
-    applyClubThemeToDocument(publicInfo?.clubSettings, darkMode);
-  }, [publicInfo?.clubSettings, darkMode]);
+    applyClubThemeToDocument(clubSettings, darkMode);
+  }, [clubSettings, darkMode]);
 
   const isEmbeddedIframe = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -101,33 +147,17 @@ export function AuthGateView({
 
   useEffect(() => {
     prewarmGooglePopupAuth();
-    let active = true;
-    fetchAuthPublicInfo()
-      .then((info) => {
-        if (!active) return;
-        setPublicInfo(info);
-        if (info) {
-          setSelectedEventId(info.activeEventId || info.competitions[0]?.id || '');
-        }
-      })
-      .finally(() => {
-        if (active) setLoadingInfo(false);
-      });
-    return () => {
-      active = false;
-    };
   }, []);
 
   const selectedCompetition = useMemo(() => {
-    if (!publicInfo) return null;
     return (
-      publicInfo.competitions.find((c) => c.id === selectedEventId) ??
-      publicInfo.competitions[0] ??
+      compList.find((c) => c.id === selectedEventId) ??
+      compList[0] ??
       null
     );
-  }, [publicInfo, selectedEventId]);
+  }, [compList, selectedEventId]);
 
-  const submitPin = async (codeToSubmit: string) => {
+  const submitPin = (codeToSubmit: string) => {
     const clean = codeToSubmit.replace(/\D/g, '');
     if (clean.length < 4) {
       setPinError('Ange din 4-siffriga funktionärs-PIN.');
@@ -141,8 +171,9 @@ export function AuthGateView({
 
     setPinBusy(true);
     setPinError(null);
-    const result = await loginWithPinOnServer({
+    const result = loginWithPinClient({
       eventId: targetId,
+      eventName: selectedCompetition?.name,
       pin: clean,
     });
     setPinBusy(false);
@@ -161,7 +192,7 @@ export function AuthGateView({
     const next = (pinValue + digit).replace(/\D/g, '').slice(0, 6);
     setPinValue(next);
     if (next.length === 4) {
-      void submitPin(next);
+      submitPin(next);
     }
   };
 
@@ -175,82 +206,27 @@ export function AuthGateView({
     setAdminError(null);
     setAdminErrorCode(null);
     try {
-      const { user, idToken } = await signInWithGooglePopup();
-      let claimedRole: 'SUPER_ADMIN' | 'RACE_ADMIN' | null = null;
-      if (user) {
-        try {
-          const claimRes = await ensureAdminRoleInFirestore(user);
-          claimedRole = claimRes.role;
-        } catch {
-          // Server still verifies Google token authoritatively
-        }
-      }
-      const serverRes = await loginWithGoogleTokenOnServer({
-        idToken,
-        firestoreClaimedRole: claimedRole,
-      });
-      if (serverRes.ok === false) {
-        setAdminError(serverRes.error);
+      const result = await loginWithGoogleClient();
+      if (!result.ok) {
+        if (result.code) setAdminErrorCode(result.code);
+        setAdminError(result.error);
+        if (isEmbeddedIframe) setOfflineExpanded(true);
         return;
       }
-      onAuthenticated(serverRes.session);
+      onAuthenticated(result.session);
     } catch (err: unknown) {
       const code = extractFirebaseErrorCode(err);
       setAdminErrorCode(code || null);
-      const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
-
-      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-        setAdminError(
-          isEmbeddedIframe
-            ? 'Google-fönstret kunde inte slutföras inuti förhandsgranskningsramen. Öppna appen i en egen webbläsarflik eller använd reservkoden nedan.'
-            : 'Google-inloggningen stängdes innan den slutfördes. Klicka igen och välj ditt Google-konto.'
-        );
-        if (isEmbeddedIframe) setOfflineExpanded(true);
-      } else if (code === 'auth/popup-blocked') {
-        setAdminError(
-          isEmbeddedIframe
-            ? 'Webbläsaren blockerade inloggningsfönstret inuti förhandsgranskningen. Öppna sekretariatet i en egen webbläsarflik eller använd reservkoden nedan.'
-            : 'Webbläsaren blockerade Google-fönstret. Tillåt popup-fönster för den här sidan i adressfältet och klicka igen.'
-        );
-        setOfflineExpanded(true);
-      } else if (code === 'auth/web-storage-unsupported' || code === 'auth/cors-unsupported') {
-        setAdminError(
-          isEmbeddedIframe
-            ? 'Tredjepartslagring är isolerad inuti förhandsgranskningsramen. Öppna sekretariatet i en egen webbläsarflik för Google-inloggning, eller använd reservkoden nedan.'
-            : 'Webbläsaren blockerar tredjepartslagring (t.ex. inkognitoläge, Safari ITP eller Brave Shield). Tillåt kakor/lagring för Google-inloggning eller använd reservkoden nedan.'
-        );
-        setOfflineExpanded(true);
-      } else if (code === 'auth/unauthorized-domain') {
-        setAdminError(
-          `Domänen (${hostname}) saknas under Authorized domains i Firebase Authentication. Lägg till den där eller använd reservkoden nedan.`
-        );
-        setOfflineExpanded(true);
-      } else if (code.includes('token-service-api')) {
-        setAdminErrorCode('auth/token-service-api-disabled');
-        setAdminError(
-          'Google Cloud-projektets Token Service API (securetoken.googleapis.com) är inte aktiverat ännu för automatisk tokenförnyelse.'
-        );
-        setOfflineExpanded(true);
-      } else if (code === 'auth/network-request-failed') {
-        setAdminError(
-          'Ingen internetanslutning för Google-inloggning. Använd klubbens offline reservkod nedan.'
-        );
-        setOfflineExpanded(true);
-      } else {
-        setAdminErrorCode(code ? code.slice(0, 64) : null);
-        setAdminError(
-          isEmbeddedIframe
-            ? 'Google-inloggning blockerades av förhandsgranskningsramen. Öppna sekretariatet i en egen webbläsarflik eller använd reservkoden nedan.'
-            : 'Kunde inte slutföra Google-inloggningen i den här webbläsarvy. Öppna i egen flik eller använd reservkoden nedan.'
-        );
-        setOfflineExpanded(true);
-      }
+      setAdminError(
+        err instanceof Error ? err.message : 'Google-inloggningen misslyckades. Använd reservkod nedan.'
+      );
+      setOfflineExpanded(true);
     } finally {
       setGoogleBusy(false);
     }
   };
 
-  const submitOfflineCodeValue = async (rawCode: string) => {
+  const submitOfflineCodeValue = (rawCode: string) => {
     const clean = rawCode.trim();
     if (!clean) {
       setAdminError('Ange klubbens offline reservkod.');
@@ -259,7 +235,7 @@ export function AuthGateView({
     setOfflineBusy(true);
     setAdminError(null);
     setAdminErrorCode(null);
-    const res = await loginWithOfflineCodeOnServer(clean);
+    const res = loginWithOfflineCodeClient(clean);
     setOfflineBusy(false);
     if (res.ok === false) {
       setAdminError(res.error);
@@ -268,439 +244,274 @@ export function AuthGateView({
     onAuthenticated(res.session);
   };
 
-  const handleOfflineSubmit = async (e: React.FormEvent) => {
+  const handleOfflineSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    await submitOfflineCodeValue(offlineCode);
+    submitOfflineCodeValue(offlineCode);
   };
 
   return (
     <div className="min-h-screen overflow-x-clip flex flex-col club-canvas bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-      {/* Strict Top Bar Contract: Brand Left — General Actions Right */}
+      {/* Strict Top Bar */}
       <header className="min-h-12 py-1.5 px-3 sm:px-6 lg:px-8 club-surface bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
-        <a
-          href="/"
-          onClick={(e) => e.preventDefault()}
-          className="inline-flex items-center gap-2.5 text-sm sm:text-base font-display font-bold tracking-tight min-w-0"
-        >
-          {publicInfo?.clubSettings?.logoDataUrl && !logoBroken && (
+        <div className="flex items-center gap-2.5 min-w-0">
+          {clubSettings?.logoDataUrl && !logoBroken ? (
             <img
-              src={publicInfo.clubSettings.logoDataUrl}
-              alt={`${publicInfo.clubSettings.clubName || 'Klubb'} logotyp`}
+              src={clubSettings.logoDataUrl}
+              alt={`${clubSettings.clubName || 'Klubb'} logotyp`}
               referrerPolicy="no-referrer"
               onError={() => setLogoBroken(true)}
-              className="h-7 w-auto max-w-[100px] sm:max-w-[120px] object-contain shrink-0"
+              className="h-7 w-auto max-w-[120px] object-contain shrink-0"
             />
+          ) : (
+            <div className="w-7 h-7 rounded-lg club-accent-bg flex items-center justify-center text-white font-bold text-xs shrink-0">
+              OK
+            </div>
           )}
-          <span className="truncate">
-            {publicInfo?.clubSettings?.portalTitle?.trim() || 'PasserSI'}
+          <span className="text-sm sm:text-base font-display font-bold tracking-tight truncate">
+            {clubSettings?.portalTitle?.trim() || `${clubSettings?.clubName || 'OK Österåker'} — Sekretariat`}
           </span>
-        </a>
+        </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => onOpenPublicPortal(null)}
-            className="hidden sm:inline-flex px-2 py-1 text-xs font-medium club-muted text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+            onClick={() => onOpenPublicPortal(preferredPublicShortCode || selectedCompetition?.shortCode || null)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
           >
-            Säsongsöversikt
+            <Eye className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Publiksida & Resultat</span>
+            <span className="sm:hidden">Publik</span>
           </button>
 
           <button
             type="button"
             onClick={onToggleDarkMode}
-            className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors shrink-0"
-            aria-label="Växla tema"
+            className="p-1.5 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 rounded-lg border border-slate-200 dark:border-slate-800"
+            aria-label="Växla mörkt läge"
           >
-            {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
-
-          <button
-            type="button"
-            onClick={() =>
-              onOpenPublicPortal(
-                !userChangedEvent && preferredPublicShortCode !== undefined
-                  ? preferredPublicShortCode
-                  : (selectedCompetition?.shortCode ?? null)
-              )
-            }
-            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/80 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-          >
-            <Eye className="w-3.5 h-3.5 shrink-0" />
-            <span>Publik vy</span>
+            {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
           </button>
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
-        <div className="max-w-2xl mb-4">
-          <p className="text-xs font-medium club-muted text-slate-500 dark:text-slate-400">
-            {publicInfo?.clubSettings?.clubName
-              ? `${publicInfo.clubSettings.clubName} · Sekretariat & Funktionärsinloggning`
-              : 'Sekretariat & Funktionärsinloggning · SPORTident tidtagning'}
-          </p>
-          <h1 className="mt-0.5 text-xl sm:text-2xl font-display font-bold tracking-tight [text-wrap:balance]">
-            Öppna sekretariatet eller funktionärsstation
-          </h1>
-          <p className="mt-1 text-xs sm:text-sm club-muted text-slate-600 dark:text-slate-400">
-            Funktionärer loggar in direkt med tävlingens 4-siffriga PIN-kod. Tävlingsledare loggar
-            in med Google-konto.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
-          {/* Column 1: Official 4-digit PIN Login */}
-          <section className="min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-display font-bold text-slate-900 dark:text-slate-100">
-                  Funktionär på tävlingsdagen
-                </h2>
-                <KeyRound className="w-4 h-4 text-slate-400 shrink-0" />
+      {/* Main Container */}
+      <main className="flex-1 flex items-center justify-center p-4 sm:p-6 lg:p-8">
+        <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* Card 1: Funktionärs-PIN */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col justify-between space-y-4 shadow-sm">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+                  <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                    Funktionärs-PIN
+                  </h2>
+                </div>
+                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                  Station
+                </span>
               </div>
-              <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
-                För lånedatorer och surfplattor vid startfålla, målavläsning, skogssäkerhet eller
-                speaker.
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                Logga in på en station (Start, Mål, Skog eller Speaker) med din 4-siffriga PIN.
               </p>
 
-              <div className="mt-3">
-                <label
-                  htmlFor="pin-competition-select"
-                  className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
-                >
-                  Tävling eller träning
+              {/* Event selector */}
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  Välj tävling:
                 </label>
-                {loadingInfo ? (
-                  <div className="h-9 bg-slate-100 dark:bg-slate-800 rounded-lg animate-pulse" />
-                ) : (
-                  <select
-                    id="pin-competition-select"
-                    value={selectedCompetition?.id || ''}
-                    onChange={(e) => {
-                      setSelectedEventId(e.target.value);
-                      setUserChangedEvent(true);
-                      setPinError(null);
-                    }}
-                    className="w-full px-3 py-1.5 text-xs sm:text-sm font-medium bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                  >
-                    {(publicInfo?.competitions ?? []).map((ev) => (
-                      <option key={ev.id} value={ev.id}>
-                        {ev.name} ({formatStatusText(ev.status)} · {ev.date})
-                      </option>
-                    ))}
-                  </select>
-                )}
+                <select
+                  value={selectedEventId}
+                  onChange={(e) => setSelectedEventId(e.target.value)}
+                  className="w-full px-3 py-2 text-xs font-medium bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100"
+                >
+                  {compList.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.date})
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void submitPin(pinValue);
-                }}
-                className="mt-3 space-y-2.5"
-              >
-                <div>
-                  <label
-                    htmlFor="official-pin-input"
-                    className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
-                  >
-                    4-siffrig funktionärs-PIN
-                  </label>
-                  <input
-                    id="official-pin-input"
-                    type="password"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    maxLength={6}
-                    value={pinValue}
-                    onChange={(e) => {
-                      const clean = e.target.value.replace(/\D/g, '').slice(0, 6);
-                      setPinValue(clean);
-                      setPinError(null);
-                    }}
-                    placeholder="••••"
-                    className="w-full px-3 py-2 text-center text-xl font-mono tabular-nums tracking-[0.35em] bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-red-600"
-                  />
+              {/* PIN input display */}
+              <div className="pt-2">
+                <div className="flex justify-center gap-3">
+                  {[0, 1, 2, 3].map((idx) => {
+                    const digit = pinValue[idx];
+                    return (
+                      <div
+                        key={idx}
+                        className={`w-11 h-12 rounded-xl border-2 flex items-center justify-center text-lg font-mono font-bold transition-all ${
+                          digit
+                            ? 'border-red-600 dark:border-red-500 text-slate-900 dark:text-slate-100 bg-red-50/20 dark:bg-red-950/20'
+                            : 'border-slate-200 dark:border-slate-800 text-slate-400 bg-slate-50/50 dark:bg-slate-950/50'
+                        }`}
+                      >
+                        {digit ? '•' : ''}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {pinError && (
-                  <div className="px-3 py-1.5 text-xs font-medium text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-lg">
+                  <p className="text-xs text-red-600 dark:text-red-400 text-center font-medium mt-2">
                     {pinError}
-                  </div>
+                  </p>
                 )}
-
-                {/* Touch-friendly keypad for iPad/field tablets */}
-                <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Sifferknappsats">
-                  {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
-                    <button
-                      key={digit}
-                      type="button"
-                      onClick={() => handleNumpadDigit(digit)}
-                      className="min-h-[40px] text-sm font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors"
-                    >
-                      {digit}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPinValue('');
-                      setPinError(null);
-                    }}
-                    className="min-h-[40px] text-xs font-medium text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    Rensa
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleNumpadDigit('0')}
-                    className="min-h-[40px] text-sm font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors"
-                  >
-                    0
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleBackspace}
-                    aria-label="Sudda sista siffran"
-                    className="min-h-[40px] inline-flex items-center justify-center text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors"
-                  >
-                    <Delete className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={pinBusy || pinValue.length < 4}
-                  className="w-full min-h-[40px] px-4 py-2 text-xs sm:text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
-                >
-                  {pinBusy ? 'Kontrollerar PIN...' : 'Öppna funktionärsvy'}
-                </button>
-              </form>
-            </div>
-
-            {selectedCompetition?.demoPinHints && !selectedCompetition.pinsCustomized && (
-              <div className="mt-5 pt-4 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
-                <div className="font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Förvalda standardkoder (tills tävlingsledaren byter dem):
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono tabular-nums">
-                  <button
-                    type="button"
-                    onClick={() => void submitPin(selectedCompetition.demoPinHints!.START)}
-                    className="hover:text-slate-900 dark:hover:text-slate-100 hover:underline"
-                  >
-                    Startfålla {selectedCompetition.demoPinHints.START}
-                  </button>
-                  <span aria-hidden="true">·</span>
-                  <button
-                    type="button"
-                    onClick={() => void submitPin(selectedCompetition.demoPinHints!.READOUT)}
-                    className="hover:text-slate-900 dark:hover:text-slate-100 hover:underline"
-                  >
-                    Mål {selectedCompetition.demoPinHints.READOUT}
-                  </button>
-                  <span aria-hidden="true">·</span>
-                  <button
-                    type="button"
-                    onClick={() => void submitPin(selectedCompetition.demoPinHints!.FOREST)}
-                    className="hover:text-slate-900 dark:hover:text-slate-100 hover:underline"
-                  >
-                    Skogssäkerhet {selectedCompetition.demoPinHints.FOREST}
-                  </button>
-                  <span aria-hidden="true">·</span>
-                  <button
-                    type="button"
-                    onClick={() => void submitPin(selectedCompetition.demoPinHints!.SPEAKER)}
-                    className="hover:text-slate-900 dark:hover:text-slate-100 hover:underline"
-                  >
-                    Speaker {selectedCompetition.demoPinHints.SPEAKER}
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Column 2: Race Director / Club Admin (Google Auth + Offline Code) */}
-          <section className="min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 flex flex-col justify-between">
-            <div className="space-y-3.5">
-              <div>
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-base font-display font-bold text-slate-900 dark:text-slate-100">
-                    Tävlingsledare & Klubbadmin
-                  </h2>
-                  <ShieldCheck className="w-4 h-4 text-slate-400 shrink-0" />
-                </div>
-                <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
-                  Full behörighet att skapa tävlingar, ladda upp banor, synka Eventor, hantera
-                  säkerhetskopior och ställa in funktionärernas PIN-koder.
-                </p>
               </div>
 
-              {adminError && (
-                <div className="px-3 py-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-lg space-y-1.5 overflow-hidden">
-                  <div className="font-medium leading-snug break-words">{adminError}</div>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-red-600/90 dark:text-red-300/80 min-w-0">
-                    {adminErrorCode && (
-                      <span className="font-mono tabular-nums break-all">
-                        Kod: {adminErrorCode}
-                      </span>
-                    )}
-                    {adminErrorCode === 'auth/token-service-api-disabled' ? (
-                      <a
-                        href="https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=671017021565"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 font-semibold underline underline-offset-2 hover:text-red-800 dark:hover:text-red-100 break-words"
-                      >
-                        <span>Aktivera Token Service API i Google Cloud</span>
-                        <ExternalLink className="w-3 h-3 shrink-0" />
-                      </a>
-                    ) : (
-                      <a
-                        href={standaloneHref}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 font-semibold underline underline-offset-2 hover:text-red-800 dark:hover:text-red-100"
-                      >
-                        <span>Öppna i egen webbläsarflik</span>
-                        <ExternalLink className="w-3 h-3 shrink-0" />
-                      </a>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-2.5">
+              {/* Numpad */}
+              <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto pt-2">
+                {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
+                  <button
+                    key={digit}
+                    type="button"
+                    onClick={() => handleNumpadDigit(digit)}
+                    className="h-11 rounded-xl text-base font-semibold bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 transition-all"
+                  >
+                    {digit}
+                  </button>
+                ))}
                 <button
                   type="button"
-                  onClick={() => void handleGoogleSignIn()}
-                  disabled={googleBusy}
-                  className="w-full min-h-[40px] inline-flex items-center justify-center gap-2 px-4 py-2 text-xs sm:text-sm font-medium text-white bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
+                  onClick={() => setPinValue('')}
+                  className="h-11 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
                 >
-                  <Lock className="w-4 h-4 shrink-0" />
-                  <span>{googleBusy ? 'Verifierar Google-konto...' : 'Logga in med Google'}</span>
+                  Rensa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleNumpadDigit('0')}
+                  className="h-11 rounded-xl text-base font-semibold bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 transition-all"
+                >
+                  0
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBackspace}
+                  className="h-11 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  aria-label="Radera siffra"
+                >
+                  <Delete className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2 text-[11px] text-slate-400 text-center border-t border-slate-100 dark:border-slate-800">
+              Standard-PIN: Start 1100 · Mål 2200 · Skog 3300 · Speaker 4400
+            </div>
+          </div>
+
+          {/* Card 2: Administratör (Google & Offline reservkod) */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col justify-between space-y-4 shadow-sm">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-slate-900 dark:text-slate-100 shrink-0" />
+                  <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                    Administratör & Tävlingsledare
+                  </h2>
+                </div>
+                <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
+                  Full behörighet
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                Logga in med klubbens administratörskonto via Google för full behörighet till alla funktioner.
+              </p>
+
+              {/* Google Sign In Button */}
+              <div className="space-y-3 pt-2">
+                <button
+                  type="button"
+                  disabled={googleBusy}
+                  onClick={() => void handleGoogleSignIn()}
+                  className="w-full flex items-center justify-center gap-3 px-4 py-3 text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 rounded-xl transition-all shadow-sm"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                    />
+                  </svg>
+                  <span>{googleBusy ? 'Loggar in...' : 'Logga in med Google'}</span>
                 </button>
 
-                {isEmbeddedIframe && (
-                  <div className="pt-1 space-y-2">
-                    <p className="text-xs text-amber-800 dark:text-amber-300">
-                      Du kör appen i en förhandsgranskningsram där Google-popup ibland isoleras.
-                      Öppna i egen flik eller använd reservkoden:
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2">
+                {adminError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-xl text-xs text-red-700 dark:text-red-300">
+                    <p className="font-semibold">{adminError}</p>
+                    {isEmbeddedIframe && (
                       <a
                         href={standaloneHref}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                        className="inline-flex items-center gap-1 font-semibold text-red-700 dark:text-red-400 underline mt-1.5"
                       >
                         <span>Öppna i egen webbläsarflik</span>
-                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                        <ExternalLink className="w-3 h-3" />
                       </a>
-                      {publicInfo?.demoOfflineCodeHint && !publicInfo.offlineCodeCustomized && (
-                        <button
-                          type="button"
-                          disabled={offlineBusy}
-                          onClick={() =>
-                            void submitOfflineCodeValue(publicInfo.demoOfflineCodeHint!)
-                          }
-                          className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                        >
-                          <span>Öppna med reservkod</span>
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
                 )}
-
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Verifieras mot Firebase Authentication och klubbens behörighetslista i Firestore.
-                </p>
               </div>
 
-              {publicInfo?.offlineCodeEnabled !== false && (
-                <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOfflineExpanded((v) => !v);
-                      setAdminError(null);
-                      setAdminErrorCode(null);
-                    }}
-                    className="w-full flex items-center justify-between gap-2 text-left text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 py-0.5"
-                  >
-                    <span className="inline-flex items-center gap-2 min-w-0">
-                      <WifiOff className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="truncate">Saknar mobiltäckning? Använd offline reservkod</span>
-                    </span>
-                    {offlineExpanded ? (
-                      <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
-                    )}
-                  </button>
-
-                  {offlineExpanded && (
-                    <form onSubmit={handleOfflineSubmit} className="mt-2.5 space-y-2">
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Lås upp sekretariatet utan internet med klubbens lokala reservkod.
-                      </p>
-                      <div className="flex flex-col sm:flex-row gap-2">
-                        <input
-                          type="password"
-                          value={offlineCode}
-                          onChange={(e) => {
-                            setOfflineCode(e.target.value);
-                            setAdminError(null);
-                            setAdminErrorCode(null);
-                          }}
-                          placeholder="Ange offline reservkod"
-                          className="flex-1 min-w-0 px-3 py-1.5 text-xs sm:text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                        />
-                        <button
-                          type="submit"
-                          disabled={offlineBusy || !offlineCode.trim()}
-                          className="px-3.5 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 border border-slate-300 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                        >
-                          {offlineBusy ? 'Kontrollerar...' : 'Lås upp offline'}
-                        </button>
-                      </div>
-                      {publicInfo?.demoOfflineCodeHint && !publicInfo.offlineCodeCustomized && (
-                        <div className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                          <span>Förvald reservkod: </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void submitOfflineCodeValue(publicInfo.demoOfflineCodeHint!)
-                            }
-                            className="font-semibold text-slate-700 dark:text-slate-200 hover:underline"
-                          >
-                            {publicInfo.demoOfflineCodeHint}
-                          </button>
-                        </div>
-                      )}
-                    </form>
+              {/* Offline reservkod collapsible */}
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setOfflineExpanded((v) => !v)}
+                  className="w-full flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 py-1"
+                >
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <WifiOff className="w-3.5 h-3.5" />
+                    <span>Offline reservkod (skogsbruk utan nät)</span>
+                  </span>
+                  {offlineExpanded ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
                   )}
-                </div>
-              )}
+                </button>
+
+                {offlineExpanded && (
+                  <form onSubmit={handleOfflineSubmit} className="mt-2 space-y-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        placeholder="Ange reservkod (okosteraker2026)"
+                        value={offlineCode}
+                        onChange={(e) => setOfflineCode(e.target.value)}
+                        className="flex-1 px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
+                      />
+                      <button
+                        type="submit"
+                        disabled={offlineBusy || !offlineCode}
+                        className="px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg whitespace-nowrap"
+                      >
+                        {offlineBusy ? '...' : 'Öppna'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800">
-              <div className="text-xs text-slate-500 dark:text-slate-400 mb-2">
-                Löpare och publik behöver aldrig logga in för att se resultat eller registrera
-                SI-bricka.
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  onOpenPublicPortal(selectedCompetition?.shortCode ?? null)
-                }
-                className="inline-flex items-center gap-1.5 text-xs font-semibold club-accent-text hover:underline whitespace-nowrap"
-              >
-                <span>Gå till öppen publikvy & liveresultat</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+            <div className="text-[11px] text-slate-400 text-center">
+              Huvudkonto: <span className="font-mono text-slate-600 dark:text-slate-300">instagram.okosteraker@gmail.com</span>
             </div>
-          </section>
+          </div>
         </div>
       </main>
     </div>

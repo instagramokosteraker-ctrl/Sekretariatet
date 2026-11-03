@@ -22,6 +22,7 @@ import {
   Plus,
   Radio,
   Shuffle,
+  SlidersHorizontal,
   Sun,
   Timer,
   Upload,
@@ -80,6 +81,7 @@ import {
 import {
   apiFetch,
   getStoredAuthSession,
+  setStoredAuthSession,
   logoutSecretariatSession,
   subscribeAuthSession,
   verifyStoredSessionOnline,
@@ -90,12 +92,17 @@ import {
   loadFullSeasonFromFirestore,
   subscribeFirebaseAuth,
   syncFullSeasonToFirestore,
+  auth,
+  googleProvider,
+  BOOTSTRAP_SUPER_ADMIN_EMAILS,
 } from './firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
 import { ForestSafetyView } from './components/ForestSafetyView';
 import { SpeakerResultsView } from './components/SpeakerResultsView';
 import { EntriesRegistrationView } from './components/EntriesRegistrationView';
-import { DrawAndEmergencyView } from './components/DrawAndEmergencyView';
+import { DrawView } from './components/DrawView';
+import { CompetitionSettingsView } from './components/CompetitionSettingsView';
 import { CoursesClassesView } from './components/CoursesClassesView';
 import { HardwareStationsView } from './components/HardwareStationsView';
 import { ProtocolInspectorView } from './components/ProtocolInspectorView';
@@ -112,13 +119,14 @@ import {
 } from './utils/iofXml';
 
 type MeosTab =
+  | 'competition_settings'
+  | 'courses'
+  | 'entries'
   | 'readout'
   | 'start_corral'
   | 'forest'
   | 'results'
-  | 'entries'
-  | 'draw_emergency'
-  | 'courses'
+  | 'draw'
   | 'hardware'
   | 'access'
   | 'protocol';
@@ -153,16 +161,16 @@ const NAV_ITEMS: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }[] = [
+  { id: 'competition_settings', label: 'Tävlingsinställningar', icon: SlidersHorizontal },
+  { id: 'courses', label: 'Banor & Klasser', icon: GitBranch },
+  { id: 'entries', label: 'Direktanmälan', icon: UserPlus },
   { id: 'readout', label: 'Avläsning & Översikt', icon: Activity },
-  { id: 'start_corral', label: 'Startfålla & E-start', icon: Timer },
+  { id: 'start_corral', label: 'Startfålla och startlista', icon: Timer },
   { id: 'forest', label: 'Kvar i skogen', icon: Compass },
   { id: 'results', label: 'Speaker & Resultat', icon: Mic },
-  { id: 'entries', label: 'Direktanmälan', icon: UserPlus },
-  { id: 'draw_emergency', label: 'Lottning & Nödlägen', icon: Shuffle },
-  { id: 'courses', label: 'Banor & Klasser', icon: GitBranch },
-  { id: 'hardware', label: 'Tävling, ROC & USB', icon: Radio },
-  { id: 'access', label: 'Klubbadmin & Behörighet', icon: KeyRound },
-  { id: 'protocol', label: 'Protokollinspektör', icon: Binary },
+  { id: 'draw', label: 'Lottning', icon: Shuffle },
+  { id: 'hardware', label: 'SportIdent, ROC & USB', icon: Radio },
+  { id: 'access', label: 'Klubbadmin och behörighet', icon: KeyRound },
 ];
 
 const ROLE_MODE_LABELS: Record<OfficialRoleMode, string> = {
@@ -175,20 +183,21 @@ const ROLE_MODE_LABELS: Record<OfficialRoleMode, string> = {
 
 const ROLE_ALLOWED_TABS: Record<OfficialRoleMode, MeosTab[]> = {
   ALL: [
+    'competition_settings',
+    'courses',
+    'entries',
     'readout',
     'start_corral',
     'forest',
     'results',
-    'entries',
-    'draw_emergency',
-    'courses',
+    'draw',
     'hardware',
     'access',
     'protocol',
   ],
   READOUT: ['readout', 'entries', 'forest', 'results', 'hardware'],
-  START: ['start_corral', 'entries', 'forest', 'hardware'],
-  FOREST: ['forest', 'start_corral', 'readout', 'draw_emergency'],
+  START: ['start_corral', 'draw', 'entries', 'forest', 'hardware'],
+  FOREST: ['forest', 'start_corral', 'readout', 'hardware'],
   SPEAKER: ['results', 'readout', 'forest', 'start_corral'],
 };
 
@@ -246,14 +255,50 @@ export default function App() {
   const [createEventModalOpen, setCreateEventModalOpen] = useState(false);
 
   useEffect(() => {
-    const unsub = subscribeAuthSession((next) => {
-      setAuthSession(next);
-    });
-    void verifyStoredSessionOnline().finally(() => {
+    const unsubAuth = onAuthStateChanged(auth, async (u) => {
+      if (u) {
+        try {
+          const token = await u.getIdToken();
+          const emailLower = (u.email ?? '').toLowerCase();
+          const isSuper = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(emailLower);
+          const session: StoredAuthSession = {
+            token,
+            user: {
+              sessionKind: 'ADMIN',
+              uid: u.uid,
+              displayName: u.displayName || u.email || 'Administratör',
+              email: u.email,
+              adminTier: isSuper ? 'SUPER_ADMIN' : 'RACE_ADMIN',
+              officialRole: 'ALL',
+              lockedEventId: null,
+              lockedEventName: null,
+              authMethod: 'GOOGLE',
+              issuedAt: new Date().toISOString(),
+              expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+            },
+          };
+          setStoredAuthSession(session);
+          setAuthSession(session);
+        } catch {
+          // If token fetch fails, preserve existing session
+        }
+      } else {
+        const existing = getStoredAuthSession();
+        if (!existing || existing.user.authMethod === 'GOOGLE') {
+          setStoredAuthSession(null);
+          setAuthSession(null);
+        }
+      }
       setAuthReady(true);
     });
+
+    const unsubSession = subscribeAuthSession((next) => {
+      setAuthSession(next);
+    });
+
     return () => {
-      unsub();
+      unsubAuth();
+      unsubSession();
     };
   }, []);
 
@@ -500,7 +545,8 @@ export default function App() {
       activeTab === 'readout' ||
       activeTab === 'results' ||
       activeTab === 'forest' ||
-      activeTab === 'draw_emergency' ||
+      activeTab === 'draw' ||
+      activeTab === 'hardware' ||
       activeTab === 'courses'
     ) {
       sportidentSerial.setUsbMode('READOUT');
@@ -1100,6 +1146,16 @@ export default function App() {
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode((d) => !d)}
         preferredPublicShortCode={lastPublicShortCode}
+        competitions={competitionsList.map((c) => ({
+          id: c.id,
+          shortCode: c.shortCode,
+          name: c.name,
+          organizer: c.organizer,
+          date: c.date,
+          status: c.status,
+          pinsCustomized: false,
+        }))}
+        clubSettings={clubSettings}
         onAuthenticated={(sess) => {
           setAuthSession(sess);
           if (sess.user.sessionKind === 'PIN_OFFICIAL') {
@@ -1359,7 +1415,7 @@ export default function App() {
                     {forestCount}
                   </span>
                 )}
-                {item.id === 'draw_emergency' && emergencyActiveCount > 0 && (
+                {item.id === 'hardware' && emergencyActiveCount > 0 && (
                   <span
                     className={`text-xs font-mono tabular-nums ${
                       isActive
@@ -1986,6 +2042,85 @@ export default function App() {
             </section>
           ) : (
             <>
+              {activeTab === 'competition_settings' && (
+                <CompetitionSettingsView
+                  isAdmin={isAdminSession}
+                  competition={competition}
+                  eventor={eventor}
+                  runnerDbCount={runnerDb.length}
+                  onUpdateCompetition={async (patch) => {
+                    await apiFetch('/api/competition', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(patch),
+                    });
+                  }}
+                  onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
+                  onUpdateEventorSettings={async (patch) => {
+                    await apiFetch('/api/eventor/settings', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(patch),
+                    });
+                  }}
+                  onSyncEventorClub={async () => {
+                    const res = await apiFetch('/api/eventor/sync-club', { method: 'POST' });
+                    const data = (await res.json()) as {
+                      error?: string;
+                      orgName?: string;
+                      syncedRunners?: number;
+                      totalRunnerDb?: number;
+                    };
+                    if (!res.ok) {
+                      return {
+                        ok: false,
+                        message: data.error ?? 'Kunde inte synka mot Eventor API.',
+                      };
+                    }
+                    return {
+                      ok: true,
+                      message: `Synkade ${data.syncedRunners ?? 0} klubbmedlemmar med SI-brickor från ${data.orgName ?? 'Eventor'} (totalt ${data.totalRunnerDb ?? 0} i Löpardatabasen).`,
+                    };
+                  }}
+                  onImportEventorEvent={async (eventId) => {
+                    const res = await apiFetch('/api/eventor/import-event', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ eventId }),
+                    });
+                    const data = (await res.json()) as {
+                      error?: string;
+                      eventName?: string;
+                      addedClasses?: number;
+                      addedEntries?: number;
+                    };
+                    if (!res.ok) {
+                      return {
+                        ok: false,
+                        message: data.error ?? 'Kunde inte hämta tävling från Eventor.',
+                      };
+                    }
+                    return {
+                      ok: true,
+                      message: `Hämtade "${data.eventName ?? eventId}" från Eventor: +${data.addedClasses ?? 0} klasser och +${data.addedEntries ?? 0} anmälda deltagare.`,
+                    };
+                  }}
+                  onImportIofBatch={async (batch) => {
+                    const res = await apiFetch('/api/import/batch', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(batch),
+                    });
+                    return (await res.json()) as {
+                      addedCourses: number;
+                      addedClasses: number;
+                      addedEntries: number;
+                      syncedRunnerDb?: number;
+                    };
+                  }}
+                />
+              )}
+
               {activeTab === 'readout' && (
                 <ReadoutDashboard
                   courses={courses}
@@ -2229,13 +2364,12 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'draw_emergency' && (
-                <DrawAndEmergencyView
+              {activeTab === 'draw' && (
+                <DrawView
                   competition={competition}
                   courses={courses}
                   classes={classes}
                   competitors={competitors}
-                  emergency={emergency}
                   onDrawClass={async (params) => {
                     const res = await apiFetch('/api/draw/class', {
                       method: 'POST',
@@ -2248,32 +2382,6 @@ export default function App() {
                       mode: string;
                       vacantStartTimes: string[];
                     };
-                  }}
-                  onUpdateEmergency={async (patch) => {
-                    const res = await apiFetch('/api/emergency', {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(patch),
-                    });
-                    return (await res.json()) as { recalculatedCount: number };
-                  }}
-                  onRecalculateAll={async () => {
-                    const res = await apiFetch('/api/emergency/recalculate-all', {
-                      method: 'POST',
-                    });
-                    return (await res.json()) as { recalculatedCount: number };
-                  }}
-                  onAssignManualFinish={async (params) => {
-                    const res = await apiFetch('/api/emergency/manual-finish', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(params),
-                    });
-                    if (!res.ok) {
-                      const err = (await res.json().catch(() => ({}))) as { error?: string };
-                      return err.error ?? 'Kunde inte spara manuell måltid.';
-                    }
-                    return null;
                   }}
                 />
               )}
@@ -2337,67 +2445,38 @@ export default function App() {
                 <HardwareStationsView
                   isAdmin={isAdminSession}
                   competition={competition}
-                  eventor={eventor}
+                  courses={courses}
+                  classes={classes}
+                  competitors={competitors}
+                  emergency={emergency}
                   roc={roc}
-                  runnerDbCount={runnerDb.length}
                   stations={stations}
                   serialStatus={serialStatus}
-                  onUpdateCompetition={async (patch) => {
-                    await apiFetch('/api/competition', {
+                  onUpdateEmergency={async (patch) => {
+                    const res = await apiFetch('/api/emergency', {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(patch),
                     });
+                    return (await res.json()) as { recalculatedCount: number };
                   }}
-                  onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
-                  onUpdateEventorSettings={async (patch) => {
-                    await apiFetch('/api/eventor/settings', {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(patch),
+                  onRecalculateAll={async () => {
+                    const res = await apiFetch('/api/emergency/recalculate-all', {
+                      method: 'POST',
                     });
+                    return (await res.json()) as { recalculatedCount: number };
                   }}
-                  onSyncEventorClub={async () => {
-                    const res = await apiFetch('/api/eventor/sync-club', { method: 'POST' });
-                    const data = (await res.json()) as {
-                      error?: string;
-                      orgName?: string;
-                      syncedRunners?: number;
-                      totalRunnerDb?: number;
-                    };
-                    if (!res.ok) {
-                      return {
-                        ok: false,
-                        message: data.error ?? 'Kunde inte synka mot Eventor API.',
-                      };
-                    }
-                    return {
-                      ok: true,
-                      message: `Synkade ${data.syncedRunners ?? 0} klubbmedlemmar med SI-brickor från ${data.orgName ?? 'Eventor'} (totalt ${data.totalRunnerDb ?? 0} i Löpardatabasen).`,
-                    };
-                  }}
-                  onImportEventorEvent={async (eventId) => {
-                    const res = await apiFetch('/api/eventor/import-event', {
+                  onAssignManualFinish={async (params) => {
+                    const res = await apiFetch('/api/emergency/manual-finish', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ eventId }),
+                      body: JSON.stringify(params),
                     });
-                    const data = (await res.json()) as {
-                      error?: string;
-                      eventName?: string;
-                      addedClasses?: number;
-                      addedEntries?: number;
-                    };
                     if (!res.ok) {
-                      return {
-                        ok: false,
-                        message: data.error ?? 'Kunde inte hämta tävling från Eventor.',
-                      };
+                      const err = (await res.json().catch(() => ({}))) as { error?: string };
+                      return err.error ?? 'Kunde inte spara manuell måltid.';
                     }
-                    return {
-                      ok: true,
-                      message: `Hämtade "${data.eventName ?? eventId}" från Eventor: +${data.addedClasses ?? 0} klasser och +${data.addedEntries ?? 0} anmälda deltagare.`,
-                    };
+                    return null;
                   }}
                   onUpdateRocSettings={async (patch) => {
                     await apiFetch('/api/roc/settings', {
@@ -2464,22 +2543,7 @@ export default function App() {
                   onDeleteStation={async (id) => {
                     await apiFetch(`/api/stations/${id}`, { method: 'DELETE' });
                   }}
-                  onImportIofBatch={async (batch) => {
-                    const res = await apiFetch('/api/import/batch', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(batch),
-                    });
-                    return (await res.json()) as {
-                      addedCourses: number;
-                      addedClasses: number;
-                      addedEntries: number;
-                      syncedRunnerDb?: number;
-                    };
-                  }}
-                  onResetDemoSeed={async () => {
-                    await apiFetch('/api/system/reset-seed', { method: 'POST' });
-                  }}
+                  onOpenProtocolInspector={() => setActiveTab('protocol')}
                 />
               )}
 
