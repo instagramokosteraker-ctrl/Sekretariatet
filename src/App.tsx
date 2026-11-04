@@ -90,6 +90,7 @@ import {
 import {
   getStockholmTodayIso,
   loadFullSeasonFromFirestore,
+  ensureAdminRoleInFirestore,
   subscribeFirebaseAuth,
   syncFullSeasonToFirestore,
   createCompetitionInFirestore,
@@ -298,7 +299,16 @@ export default function App() {
         try {
           const token = await u.getIdToken();
           const emailLower = (u.email ?? '').toLowerCase();
-          const isSuper = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(emailLower);
+          let claimedRole: 'SUPER_ADMIN' | 'RACE_ADMIN' | null = null;
+          try {
+            const roleClaim = await ensureAdminRoleInFirestore(u);
+            if (roleClaim.claimed) claimedRole = roleClaim.role;
+          } catch (error) {
+            console.error('Kunde inte aktivera Google-administratörens Firestore-roll:', error);
+          }
+          const isSuper =
+            claimedRole === 'SUPER_ADMIN' ||
+            BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(emailLower);
           const session: StoredAuthSession = {
             token,
             user: {
@@ -306,7 +316,7 @@ export default function App() {
               uid: u.uid,
               displayName: u.displayName || u.email || 'Administratör',
               email: u.email,
-              adminTier: isSuper ? 'SUPER_ADMIN' : 'RACE_ADMIN',
+              adminTier: claimedRole ?? (isSuper ? 'SUPER_ADMIN' : 'RACE_ADMIN'),
               officialRole: 'ALL',
               lockedEventId: null,
               lockedEventName: null,
@@ -1230,6 +1240,65 @@ export default function App() {
     );
     if (activeEventId === eventId) {
       setCompetition((current) => ({ ...current, ...patch }));
+    }
+  };
+
+  const saveDirectEntryToFirestore = async (
+    payload: Parameters<typeof saveDirectCompetitionEntryToFirestore>[0]['payload']
+  ) => {
+    try {
+      return await saveDirectCompetitionEntryToFirestore({
+        competitionId: activeEventId,
+        payload,
+        competitors,
+        classes,
+        courses,
+        emergency,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== 'Tävlingen hittades inte i Firestore.' ||
+        !activeEventId ||
+        competition.id !== activeEventId
+      ) {
+        throw error;
+      }
+
+      await createCompetitionInFirestore({
+        competitionId: activeEventId,
+        shortCode: competition.shortCode,
+        name: competition.name,
+        organizer: competition.organizer,
+        date: competition.date,
+        status: competition.status,
+        zeroTimeStr: competition.zeroTimeStr,
+        zeroTimeSec: competition.zeroTimeSec,
+        arenaInfo: competition.arenaInfo,
+        seriesName: competition.seriesName,
+        allowSelfRegistration: competition.allowSelfRegistration,
+        enableFeesAndSwish: competition.enableFeesAndSwish,
+        courses,
+        classes,
+      });
+      if (competitors.length > 0) {
+        await saveCompetitionImportToFirestore({
+          competitionId: activeEventId,
+          courses,
+          classes,
+          competitors,
+          runnerDbEntries: [],
+          competitorCount: competitors.length,
+        });
+      }
+      return saveDirectCompetitionEntryToFirestore({
+        competitionId: activeEventId,
+        payload,
+        competitors,
+        classes,
+        courses,
+        emergency,
+      });
     }
   };
 
@@ -2909,14 +2978,7 @@ export default function App() {
                         'Kunde inte spara deltagare.'
                       );
                       if (!useFirestore) return null;
-                      const saved = await saveDirectCompetitionEntryToFirestore({
-                        competitionId: activeEventId,
-                        payload,
-                        competitors,
-                        classes,
-                        courses,
-                        emergency,
-                      });
+                      const saved = await saveDirectEntryToFirestore(payload);
                       setCompetitors((current) => [saved.competitor, ...current]);
                       const savedIsFinished =
                         saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
@@ -3082,14 +3144,7 @@ export default function App() {
                     }
 
                     try {
-                      const saved = await saveDirectCompetitionEntryToFirestore({
-                        competitionId: activeEventId,
-                        payload,
-                        competitors,
-                        classes,
-                        courses,
-                        emergency,
-                      });
+                      const saved = await saveDirectEntryToFirestore(payload);
                       setCompetitors((current) => [saved.competitor, ...current]);
                       const savedIsFinished =
                         saved.competitor.status === 'OK' || saved.competitor.status === 'MP';

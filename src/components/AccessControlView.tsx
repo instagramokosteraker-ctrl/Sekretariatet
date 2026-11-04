@@ -41,6 +41,7 @@ import type {
 import { formatSiNumber } from '../services/sportidentProtocol';
 import { apiFetch } from '../services/authClient';
 import {
+  BOOTSTRAP_SUPER_ADMIN_EMAILS,
   DEFAULT_CLUB_SETTINGS,
   TOKEN_SERVICE_ACTIVATION_URL,
   auth,
@@ -374,6 +375,12 @@ export function AccessControlView({
 
         if (firebaseReadyUser) {
           try {
+            const firebaseUser = await ensureValidFirestoreUser();
+            const roleClaim = firebaseUser
+              ? await ensureAdminRoleInFirestore(firebaseUser)
+              : { claimed: false, role: null };
+            const currentClaimedRole = roleClaim.claimed ? roleClaim.role : null;
+            const currentEmail = firebaseUser?.email?.trim().toLowerCase();
             const invites = await listMyAdminInvitesFromFirestore();
             setAdmins((currentAdmins) => {
               const byEmail = new Map(
@@ -381,15 +388,38 @@ export function AccessControlView({
               );
               for (const invite of invites) {
                 const email = invite.email.toLowerCase();
-                if (!byEmail.has(email)) {
-                  byEmail.set(email, {
-                    email: invite.email,
-                    displayName: invite.displayName,
-                    role: invite.role,
-                    isPendingInvite: true,
-                    addedAt: new Date().toISOString(),
-                  });
-                }
+                const existing = byEmail.get(email);
+                const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(email);
+                const isCurrentClaimedUser = email === currentEmail && currentClaimedRole !== null;
+                byEmail.set(email, {
+                  ...existing,
+                  email: invite.email,
+                  displayName: invite.displayName,
+                  role: isBootstrapAdmin
+                    ? 'SUPER_ADMIN'
+                    : email === currentEmail
+                      ? currentClaimedRole ?? invite.role
+                      : invite.role,
+                  isBootstrapOwner: Boolean(existing?.isBootstrapOwner || isBootstrapAdmin),
+                  isPendingInvite:
+                    !isBootstrapAdmin && !isCurrentClaimedUser && invite.active,
+                  addedAt: existing?.addedAt || new Date().toISOString(),
+                });
+              }
+              if (currentEmail && currentClaimedRole) {
+                const existing = byEmail.get(currentEmail);
+                byEmail.set(currentEmail, {
+                  ...existing,
+                  email: firebaseUser?.email || currentEmail,
+                  displayName:
+                    firebaseUser?.displayName || existing?.displayName || currentEmail,
+                  role: currentClaimedRole,
+                  isBootstrapOwner:
+                    existing?.isBootstrapOwner ||
+                    BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(currentEmail),
+                  isPendingInvite: false,
+                  addedAt: existing?.addedAt || new Date().toISOString(),
+                });
               }
               return Array.from(byEmail.values());
             });
@@ -1187,34 +1217,61 @@ export function AccessControlView({
         return;
       }
 
-      const res = await apiFetch(`/api/auth/admins/${encodeURIComponent(adm.email)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: nextRole }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        admins?: ClubAdminAccount[];
-        error?: string;
-      };
-      if (!res.ok || !data.admins) {
+      let res: Response | null = null;
+      try {
+        res = await apiFetch(`/api/auth/admins/${encodeURIComponent(adm.email)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: nextRole }),
+        });
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+      }
+      if (res && res.status !== 404 && res.status !== 405) {
+        const data = (await res.json().catch(() => ({}))) as {
+          admins?: ClubAdminAccount[];
+          error?: string;
+        };
+        if (!res.ok || !data.admins) {
+          setAdminNotice({
+            ok: false,
+            msg: data.error || 'Kunde inte ändra behörighetsnivå.',
+          });
+          return;
+        }
+        setAdmins(data.admins);
+      } else {
+        if (!firebaseReadyUser || !isSuperAdmin) {
+          throw new Error('Kunde inte nå administratörstjänsten för att ändra behörigheten.');
+        }
+        await upsertAdminInviteInFirestore({
+          email: adm.email,
+          displayName: adm.displayName,
+          role: nextRole,
+          isSuperAdmin,
+        });
+        setAdmins((current) =>
+          current.map((admin) =>
+            admin.email.toLowerCase() === adm.email.toLowerCase()
+              ? { ...admin, role: nextRole }
+              : admin
+          )
+        );
         setAdminNotice({
-          ok: false,
-          msg: data.error || 'Kunde inte ändra behörighetsnivå.',
+          ok: true,
+          msg: `Uppdaterade ${adm.email} till ${
+            nextRole === 'SUPER_ADMIN' ? 'Huvudadministratör' : 'Tävlingsledare'
+          } i Firestore.`,
         });
         return;
       }
-      setAdmins(data.admins);
       if (firebaseReadyUser) {
-        try {
-          await upsertAdminInviteInFirestore({
-            email: adm.email,
-            displayName: adm.displayName,
-            role: nextRole,
-            isSuperAdmin,
-          });
-        } catch {
-          // ignore
-        }
+        await upsertAdminInviteInFirestore({
+          email: adm.email,
+          displayName: adm.displayName,
+          role: nextRole,
+          isSuperAdmin,
+        });
       }
       setAdminNotice({
         ok: true,
@@ -1256,29 +1313,40 @@ export function AccessControlView({
         return;
       }
 
-      const res = await apiFetch(`/api/auth/admins/${encodeURIComponent(email)}`, {
-        method: 'DELETE',
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        admins?: ClubAdminAccount[];
-        error?: string;
-      };
-      if (!res.ok || !data.admins) {
-        setAdminNotice({
-          ok: false,
-          msg: data.error || 'Kunde inte ta bort kontot.',
+      let res: Response | null = null;
+      try {
+        res = await apiFetch(`/api/auth/admins/${encodeURIComponent(email)}`, {
+          method: 'DELETE',
         });
-        return;
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
       }
-      setAdmins(data.admins);
+      if (res && res.status !== 404 && res.status !== 405) {
+        const data = (await res.json().catch(() => ({}))) as {
+          admins?: ClubAdminAccount[];
+          error?: string;
+        };
+        if (!res.ok || !data.admins) {
+          setAdminNotice({
+            ok: false,
+            msg: data.error || 'Kunde inte ta bort kontot.',
+          });
+          return;
+        }
+        setAdmins(data.admins);
+      } else {
+        if (!firebaseReadyUser || !isSuperAdmin) {
+          throw new Error('Kunde inte nå administratörstjänsten för att ta bort behörigheten.');
+        }
+        await removeAdminInviteFromFirestore(email);
+        setAdmins((current) =>
+          current.filter((admin) => admin.email.toLowerCase() !== email.toLowerCase())
+        );
+      }
       setConfirmRemoveEmail(null);
 
-      if (firebaseReadyUser) {
-        try {
-          await removeAdminInviteFromFirestore(email);
-        } catch {
-          // ignore
-        }
+      if (firebaseReadyUser && isSuperAdmin && res) {
+        await removeAdminInviteFromFirestore(email);
       }
       setAdminNotice({
         ok: true,
@@ -2604,7 +2672,7 @@ export function AccessControlView({
                           setClubForm((p) => ({ ...p, customBgColor: e.target.value }))
                         }
                         placeholder="#f8fafc"
-                        className="min-w-0 flex-1 px-2 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                        className="club-color-input min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
                       />
                     </div>
                   </div>
@@ -2635,7 +2703,7 @@ export function AccessControlView({
                           setClubForm((p) => ({ ...p, customTextColor: e.target.value }))
                         }
                         placeholder="#0f172a"
-                        className="min-w-0 flex-1 px-2 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                        className="club-color-input min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
                       />
                     </div>
                   </div>
@@ -2666,7 +2734,7 @@ export function AccessControlView({
                           setClubForm((p) => ({ ...p, customAccentColor: e.target.value }))
                         }
                         placeholder="#dc2626"
-                        className="min-w-0 flex-1 px-2 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                        className="club-color-input min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
                       />
                     </div>
                   </div>

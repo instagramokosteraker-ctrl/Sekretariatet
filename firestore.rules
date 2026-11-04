@@ -101,7 +101,7 @@ service cloud.firestore {
 
     function isValidAdminInvite(data) {
       return data.keys().hasAll(['inviteId', 'email', 'displayName', 'role', 'active', 'createdByUid', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['inviteId', 'email', 'displayName', 'role', 'active', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['inviteId', 'email', 'displayName', 'role', 'active', 'createdByUid', 'createdAt', 'updatedAt', 'claimedUid']) &&
         data.inviteId is string && data.inviteId.size() >= 1 && data.inviteId.size() <= 128 && data.inviteId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.email is string && data.email.size() >= 5 && data.email.size() <= 120 &&
         data.email.matches('^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$') &&
@@ -110,6 +110,7 @@ service cloud.firestore {
         (data.role == 'SUPER_ADMIN' || data.role == 'RACE_ADMIN') &&
         data.active is bool &&
         data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 && data.createdByUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        (!('claimedUid' in data) || isValidId(data.claimedUid)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -596,13 +597,29 @@ service cloud.firestore {
           (
             existing().createdByUid == request.auth.uid &&
             incoming().role == existing().role &&
+            (!('claimedUid' in existing()) || incoming().claimedUid == existing().claimedUid) &&
             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'active', 'updatedAt']) &&
             isAdmin()
           ) ||
           // Action 2: Super Admin override
           (
             isSuperAdmin() &&
+            (!('claimedUid' in existing()) || incoming().claimedUid == existing().claimedUid) &&
             incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'active', 'updatedAt'])
+          ) ||
+          (
+            isAdmin() &&
+            existing().email == request.auth.token.email &&
+            existing().active == true &&
+            incoming().active == false &&
+            incoming().inviteId == existing().inviteId &&
+            incoming().email == existing().email &&
+            incoming().displayName == existing().displayName &&
+            incoming().role == existing().role &&
+            incoming().createdByUid == existing().createdByUid &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().claimedUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'claimedUid', 'updatedAt'])
           )
         )
       );

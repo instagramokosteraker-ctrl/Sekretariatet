@@ -125,6 +125,12 @@
     background-color: var(--club-accent-hover);
   }
 
+  html[data-club-custom="true"] input.club-color-input,
+  input.club-color-input {
+    background-color: #ffffff;
+    color: #0f172a;
+  }
+
   .club-accent-btn {
     background-color: var(--club-accent);
     color: var(--club-accent-fg);

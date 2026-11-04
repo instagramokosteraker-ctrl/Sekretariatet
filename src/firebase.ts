@@ -25,6 +25,7 @@ import {
   where,
   writeBatch,
   type DocumentReference,
+  type DocumentSnapshot,
 } from 'firebase/firestore';
 import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './utils/readoutValidation';
 import firebaseConfig from '../firebase-applet-config.json';
@@ -538,33 +539,62 @@ export async function ensureAdminRoleInFirestore(
 
   const adminPath = `admins/${uid}`;
   let existingRole: ClubAdminTier | null = null;
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(normalizedEmail);
 
-  try {
-    const snap = await getDoc(doc(db, 'admins', uid));
-    if (snap.exists()) {
-      const data = snap.data() as { role?: ClubAdminTier; displayName?: string };
-      existingRole = data.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
-      if (data.displayName !== displayName) {
-        try {
-          await updateDoc(doc(db, 'admins', uid), {
-            displayName,
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleWriteOrOfflineError(err, OperationType.UPDATE, adminPath);
-        }
-      }
-      return { claimed: true, role: existingRole };
+  const consumeInvite = async () => {
+    const inviteId = emailToInviteId(normalizedEmail);
+    const inviteRef = doc(db, 'adminInvites', inviteId);
+    let inviteSnap: DocumentSnapshot | null = null;
+    try {
+      inviteSnap = await getDoc(inviteRef);
+    } catch (err) {
+      if (isTransientOfflineFirestoreError(err)) return;
+      handleFirestoreError(err, OperationType.GET, `adminInvites/${inviteId}`);
     }
+    if (!inviteSnap?.exists()) return;
+    const invite = inviteSnap.data();
+    if (invite.email !== normalizedEmail || invite.active !== true) return;
+    try {
+      await updateDoc(inviteRef, {
+        active: false,
+        claimedUid: uid,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.UPDATE, `adminInvites/${inviteId}`);
+    }
+  };
+
+  let existingAdminSnap: DocumentSnapshot | null = null;
+  try {
+    existingAdminSnap = await getDoc(doc(db, 'admins', uid));
   } catch (err) {
     if (isTransientOfflineFirestoreError(err)) {
       return { claimed: false, role: null };
     }
     handleFirestoreError(err, OperationType.GET, adminPath);
   }
+  if (existingAdminSnap?.exists()) {
+    const data = existingAdminSnap.data() as { role?: ClubAdminTier; displayName?: string };
+    existingRole =
+      isBootstrapAdmin || data.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
+    if (data.displayName !== displayName || data.role !== existingRole) {
+      try {
+        await updateDoc(doc(db, 'admins', uid), {
+          displayName,
+          role: existingRole,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleWriteOrOfflineError(err, OperationType.UPDATE, adminPath);
+      }
+    }
+    await consumeInvite();
+    return { claimed: true, role: existingRole };
+  }
 
   // Bootstrapped primary owner
-  if (BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(normalizedEmail)) {
+  if (isBootstrapAdmin) {
     try {
       const defaultName =
         normalizedEmail === 'instagram.okosteraker@gmail.com'
@@ -578,43 +608,56 @@ export async function ensureAdminRoleInFirestore(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      return { claimed: true, role: 'SUPER_ADMIN' };
     } catch (err) {
       handleWriteOrOfflineError(err, OperationType.CREATE, adminPath);
     }
+    await consumeInvite();
+    return { claimed: true, role: 'SUPER_ADMIN' };
   }
 
   // Otherwise check if an active invite exists for this verified email
   const inviteId = emailToInviteId(normalizedEmail);
+  let invSnap: DocumentSnapshot | null = null;
   try {
-    const invSnap = await getDoc(doc(db, 'adminInvites', inviteId));
-    if (!invSnap.exists()) {
+    invSnap = await getDoc(doc(db, 'adminInvites', inviteId));
+  } catch (err) {
+    const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    const code = String((err as { code?: string })?.code || '').toLowerCase();
+    if (
+      code.includes('permission-denied') ||
+      message.includes('permission-denied') ||
+      message.includes('missing or insufficient permissions')
+    ) {
+      // Non-invited users cannot read invitations because they contain personal data.
       return { claimed: false, role: null };
     }
-    const invData = invSnap.data() as { active?: boolean; role?: ClubAdminTier };
-    if (!invData.active) {
+    if (isTransientOfflineFirestoreError(err)) {
       return { claimed: false, role: null };
     }
-    const grantedRole: ClubAdminTier =
-      invData.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
-
-    try {
-      await setDoc(doc(db, 'admins', uid), {
-        uid,
-        displayName,
-        role: grantedRole,
-        inviteId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      return { claimed: true, role: grantedRole };
-    } catch (createErr) {
-      handleWriteOrOfflineError(createErr, OperationType.CREATE, adminPath);
-    }
-  } catch {
-    // Non-invited users receive PERMISSION_DENIED on /adminInvites/{inviteId} per PII isolation rules
+    handleFirestoreError(err, OperationType.GET, `adminInvites/${inviteId}`);
+  }
+  if (!invSnap?.exists()) {
     return { claimed: false, role: null };
   }
+  const invData = invSnap.data() as { active?: boolean; role?: ClubAdminTier };
+  if (!invData.active) return { claimed: false, role: null };
+  const grantedRole: ClubAdminTier =
+    invData.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
+
+  try {
+    await setDoc(doc(db, 'admins', uid), {
+      uid,
+      displayName,
+      role: grantedRole,
+      inviteId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (createErr) {
+    handleWriteOrOfflineError(createErr, OperationType.CREATE, adminPath);
+  }
+  await consumeInvite();
+  return { claimed: true, role: grantedRole };
 }
 
 export interface FirestoreAdminInviteItem {
@@ -623,6 +666,7 @@ export interface FirestoreAdminInviteItem {
   displayName: string;
   role: ClubAdminTier;
   active: boolean;
+  claimedUid?: string;
 }
 
 export async function listMyAdminInvitesFromFirestore(): Promise<FirestoreAdminInviteItem[]> {
@@ -639,6 +683,7 @@ export async function listMyAdminInvitesFromFirestore(): Promise<FirestoreAdminI
         displayName: string;
         role: ClubAdminTier;
         active: boolean;
+        claimedUid?: string;
       };
       return {
         inviteId: data.inviteId,
@@ -646,6 +691,7 @@ export async function listMyAdminInvitesFromFirestore(): Promise<FirestoreAdminI
         displayName: data.displayName,
         role: data.role,
         active: data.active,
+        claimedUid: data.claimedUid,
       };
     });
   } catch (err) {
@@ -674,15 +720,17 @@ export async function upsertAdminInviteInFirestore(params: {
   const role: ClubAdminTier = params.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'RACE_ADMIN';
   const path = `adminInvites/${inviteId}`;
 
-  let existsAlready = false;
+  let existingInvite: FirestoreAdminInviteItem | null = null;
   try {
     const existing = await getDoc(doc(db, 'adminInvites', inviteId));
-    existsAlready = existing.exists();
+    if (existing.exists()) {
+      existingInvite = existing.data() as FirestoreAdminInviteItem;
+    }
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.GET, path);
   }
 
-  if (existsAlready) {
+  if (existingInvite) {
     try {
       if (params.isSuperAdmin) {
         await updateDoc(doc(db, 'adminInvites', inviteId), {
@@ -691,6 +739,16 @@ export async function upsertAdminInviteInFirestore(params: {
           active: true,
           updatedAt: serverTimestamp(),
         });
+        if (existingInvite.claimedUid) {
+          const claimedAdminRef = doc(db, 'admins', existingInvite.claimedUid);
+          const claimedAdminSnap = await getDoc(claimedAdminRef);
+          if (claimedAdminSnap.exists()) {
+            await updateDoc(claimedAdminRef, {
+              role,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
       } else {
         await updateDoc(doc(db, 'adminInvites', inviteId), {
           displayName: cleanName,
@@ -728,16 +786,25 @@ export async function removeAdminInviteFromFirestore(email: string): Promise<voi
   const inviteId = emailToInviteId(normEmail);
   const path = `adminInvites/${inviteId}`;
 
-  let existsAlready = false;
+  let inviteData: Record<string, unknown> | null = null;
   try {
     const snap = await getDoc(doc(db, 'adminInvites', inviteId));
-    existsAlready = snap.exists();
+    inviteData = snap.exists() ? snap.data() : null;
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.GET, path);
   }
-  if (!existsAlready) return;
+  if (!inviteData) return;
 
   try {
+    const claimedUid =
+      typeof inviteData.claimedUid === 'string' ? inviteData.claimedUid : null;
+    if (claimedUid) {
+      const adminRef = doc(db, 'admins', claimedUid);
+      const adminSnap = await getDoc(adminRef);
+      if (adminSnap.exists()) {
+        await deleteDoc(adminRef);
+      }
+    }
     await deleteDoc(doc(db, 'adminInvites', inviteId));
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.DELETE, path);
@@ -2154,6 +2221,12 @@ export async function saveCompetitionImportToFirestore(params: {
 
   await updateDoc(competitionRef, {
     competitorCount: clampInt(params.competitorCount, 0, 50000, 0),
+    finishedCount: Math.min(
+      clampInt(params.competitorCount, 0, 50000, 0),
+      params.competitors.filter((competitor) =>
+        ['OK', 'MP', 'PRELIMINARY_FIN'].includes(competitor.status)
+      ).length
+    ),
     updatedAt: serverTimestamp(),
   });
 }

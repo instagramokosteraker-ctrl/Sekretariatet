@@ -45,6 +45,16 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: now,
         updatedAt: now,
       });
+      await adminDb.doc('adminInvites/inv_anna').set({
+        inviteId: 'inv_anna',
+        email: 'anna@klubb.se',
+        displayName: 'Anna Tävlingsledare',
+        role: 'RACE_ADMIN',
+        active: true,
+        createdByUid: 'super_1',
+        createdAt: now,
+        updatedAt: now,
+      });
       await adminDb.doc('competitions/evt_live').set({
         competitionId: 'evt_live',
         shortCode: 'oko26a',
@@ -143,6 +153,21 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
 
     // 5. PII Invite Scraping -> DENIED
     await assertFails(attackerCtx.firestore().doc('adminInvites/inv_other').get());
+
+    // An invited admin can consume only their own active invite after claiming admin status.
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('adminInvites/inv_anna').update({
+        active: false,
+        claimedUid: 'race_admin_1',
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      attackerCtx.firestore().doc('adminInvites/inv_other').update({
+        active: false,
+        updatedAt: serverTimestamp(),
+      })
+    );
 
     // 6. ID Poisoning -> DENIED
     await assertFails(
