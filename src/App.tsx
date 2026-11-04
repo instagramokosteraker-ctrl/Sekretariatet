@@ -25,6 +25,7 @@ import {
   SlidersHorizontal,
   Sun,
   Timer,
+  Trophy,
   Upload,
   UserPlus,
   Volume2,
@@ -131,6 +132,7 @@ type MeosTab =
   | 'results'
   | 'draw'
   | 'hardware'
+  | 'season'
   | 'access'
   | 'protocol';
 
@@ -173,6 +175,7 @@ const NAV_ITEMS: {
   { id: 'results', label: 'Speaker & Resultat', icon: Mic },
   { id: 'draw', label: 'Lottning', icon: Shuffle },
   { id: 'hardware', label: 'SportIdent, ROC & USB', icon: Radio },
+  { id: 'season', label: 'Tävlingar & Säsong', icon: Trophy },
   { id: 'access', label: 'Klubbadmin och behörighet', icon: KeyRound },
 ];
 
@@ -195,6 +198,7 @@ const ROLE_ALLOWED_TABS: Record<OfficialRoleMode, MeosTab[]> = {
     'results',
     'draw',
     'hardware',
+    'season',
     'access',
     'protocol',
   ],
@@ -1686,7 +1690,7 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setEventPickerOpen(false);
-                          setActiveTab('access');
+                          setActiveTab('season');
                         }}
                         className="inline-flex items-center justify-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors whitespace-nowrap shrink-0"
                         title="Hantera & radera tävlingar"
@@ -1920,7 +1924,7 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setMobileNavOpen(false);
-                          setActiveTab('access');
+                          setActiveTab('season');
                         }}
                         className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg whitespace-nowrap shrink-0"
                       >
@@ -2350,6 +2354,7 @@ export default function App() {
           ) : isEmptySeason &&
             competitionsList.length === 0 &&
             activeTab !== 'access' &&
+            activeTab !== 'season' &&
             activeTab !== 'protocol' ? (
             <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 max-w-2xl">
               <h1 className="text-lg font-display font-bold text-slate-900 dark:text-slate-100">
@@ -2376,7 +2381,7 @@ export default function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveTab('access')}
+                      onClick={() => setActiveTab('season')}
                       className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
                     >
                       <KeyRound className="w-3.5 h-3.5" />
@@ -3172,8 +3177,10 @@ export default function App() {
                 />
               )}
 
-              {activeTab === 'access' && isAdminSession && (
+              {(activeTab === 'access' || activeTab === 'season') && isAdminSession && (
                 <AccessControlView
+                  key={activeTab === 'season' ? 'season' : 'access'}
+                  view={activeTab === 'season' ? 'events' : 'admin'}
                   activeEventId={activeEventId}
                   competitionName={isEmptySeason ? 'Ingen aktiv tävling' : competition.name}
                   enableFeesAndSwish={!isEmptySeason && Boolean(competition.enableFeesAndSwish)}

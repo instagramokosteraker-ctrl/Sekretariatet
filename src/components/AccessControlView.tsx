@@ -70,6 +70,7 @@ import {
 } from '../utils/clubTheme';
 
 interface AccessControlViewProps {
+  view?: 'events' | 'admin';
   activeEventId: string;
   competitionName: string;
   enableFeesAndSwish?: boolean;
@@ -141,6 +142,7 @@ function buildSwishQrPayload(swishNumber: string, amountSek: number, message: st
 }
 
 export function AccessControlView({
+  view = 'admin',
   activeEventId,
   competitionName,
   enableFeesAndSwish = false,
@@ -154,7 +156,9 @@ export function AccessControlView({
   onOpenCreateCompetition,
   onOpenPublicEvent,
 }: AccessControlViewProps) {
-  const [subTab, setSubTab] = useState<AdminWorkspaceTab>('events');
+  const [subTab, setSubTab] = useState<AdminWorkspaceTab>(
+    view === 'events' ? 'events' : 'admins'
+  );
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -1459,6 +1463,10 @@ export function AccessControlView({
     [activeSeriesBundle, selectedSeriesClass]
   );
 
+  useEffect(() => {
+    setSubTab(view === 'events' ? 'events' : 'admins');
+  }, [view]);
+
   if (loading) {
     return (
       <div className="space-y-6 animate-pulse">
@@ -1489,61 +1497,52 @@ export function AccessControlView({
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
         <div>
           <h1 className="text-lg font-display font-bold text-slate-900 dark:text-slate-100">
-            Klubbadmin, Tävlingar & Behörighet
+            {view === 'events' ? 'Tävlingar & Säsong' : 'Klubbadmin & Behörighet'}
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            {anyEventHasFees
-              ? 'Hantera tävlingar, administratörer, PIN-koder, Swish QR, hyrbrickor och klubbserier.'
-              : 'Hantera tävlingar, administratörer, PIN-koder, hyrbrickor och klubbserier.'}
+            {view === 'events'
+              ? 'Hantera säsongens tävlingar, träningar, molnsynk och säkerhetskopior.'
+              : 'Hantera administratörer, PIN-koder, klubbprofil, hyrbrickor och klubbserier.'}
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
-          <button
-            type="button"
-            onClick={() => setSubTab('events')}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-              subTab === 'events'
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Tävlingar ({competitionsList.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setSubTab('admins')}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-              subTab === 'admins'
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Admin & PIN ({admins.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setSubTab('club')}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-              subTab === 'club'
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            {anyEventHasFees ? 'Klubb, Utseende & Swish' : 'Klubbprofil & Utseende'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSubTab('rentals_series')}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-              subTab === 'rentals_series'
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Hyrbrickor ({unreturnedRentalsCount}) & Serie
-          </button>
-        </div>
+        {view === 'admin' && (
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/70 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setSubTab('admins')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'admins'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              Admin & PIN ({admins.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSubTab('club')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'club'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              {anyEventHasFees ? 'Klubb, Utseende & Swish' : 'Klubbprofil & Utseende'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSubTab('rentals_series')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'rentals_series'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              Hyrbrickor ({unreturnedRentalsCount}) & Serie
+            </button>
+          </div>
+        )}
       </div>
 
       {/* =====================================================================
