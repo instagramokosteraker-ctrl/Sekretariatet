@@ -1254,10 +1254,13 @@ export async function syncFullSeasonToFirestore(
 }
 
 /**
- * Loads the complete club season snapshot from Firestore for Cloud Run cold-start hydration.
+ * Loads the complete season or a single competition from Firestore.
  * Returns null if `clubSettings/default` has not been created yet so fresh apps sync upward first.
  */
-export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot | null> {
+export async function loadFullSeasonFromFirestore(options?: {
+  competitionId?: string;
+  includeRunnerDb?: boolean;
+}): Promise<CloudSeasonSnapshot | null> {
   const clubPath = 'clubSettings/default';
 
   interface CloudClubDocData {
@@ -1311,7 +1314,11 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     customAccentColor: sanitizeCloudHexColor(clubData?.customAccentColor),
   };
 
-  let targetIds = Array.isArray(clubData?.competitionIds) ? clubData!.competitionIds! : [];
+  let targetIds = options?.competitionId
+    ? [sanitizeFirestoreId(options.competitionId, 'evt')]
+    : Array.isArray(clubData?.competitionIds)
+      ? clubData.competitionIds
+      : [];
   
   // If targetIds is empty, attempt to list competitions from /competitions directly
   if (targetIds.length === 0) {
@@ -1332,7 +1339,7 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
       demoCleared: Boolean(clubData?.demoCleared),
       clubSettings,
       events: [],
-      runnerDb: await loadRunnerDbFromFirestore(),
+      runnerDb: options?.includeRunnerDb === false ? [] : await loadRunnerDbFromFirestore(),
     };
   }
 
@@ -1568,7 +1575,7 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     demoCleared: Boolean(clubData?.demoCleared),
     clubSettings,
     events,
-    runnerDb: await loadRunnerDbFromFirestore(),
+    runnerDb: options?.includeRunnerDb === false ? [] : await loadRunnerDbFromFirestore(),
   };
 }
 

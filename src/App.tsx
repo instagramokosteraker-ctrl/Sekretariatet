@@ -1096,7 +1096,10 @@ export default function App() {
     }
 
     try {
-      const cloudSnap = await loadFullSeasonFromFirestore();
+      const cloudSnap = await loadFullSeasonFromFirestore({
+        competitionId: eventId,
+        includeRunnerDb: false,
+      });
       if (!cloudSnap) {
         throw new Error('Tävlingarna kunde inte hämtas från Firestore.');
       }
@@ -1110,26 +1113,7 @@ export default function App() {
       setCourses(targetEvt.courses);
       setClasses(targetEvt.classes);
       setCompetitors(targetEvt.competitors);
-      setRunnerDb(cloudSnap.runnerDb ?? []);
       setIsEmptySeason(false);
-      setCompetitionsList(
-        cloudSnap.events.map((e) => ({
-          id: e.competition.id,
-          shortCode: e.competition.shortCode,
-          status: e.competition.status,
-          name: e.competition.name,
-          organizer: e.competition.organizer,
-          date: e.competition.date,
-          zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
-          arenaInfo: e.competition.arenaInfo || '',
-          seriesName: e.competition.seriesName,
-          allowSelfRegistration: e.competition.allowSelfRegistration !== false,
-          enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
-          competitorCount: e.competitors.length,
-          finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
-          classCount: e.classes.length,
-        }))
-      );
     } catch (err) {
       console.error('Kunde inte aktivera vald tävling:', err);
       setCompetitionSwitchError(
