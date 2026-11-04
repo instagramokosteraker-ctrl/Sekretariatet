@@ -1463,6 +1463,10 @@ export default function App() {
 
   const isPinOfficial = authSession.user.sessionKind === 'PIN_OFFICIAL';
   const isAdminSession = authSession.user.sessionKind === 'ADMIN';
+  const sidebarCompetition =
+    competitionsList.find((item) => item.id === activeEventId) ??
+    (isEmptySeason ? competitionsList[0] : undefined);
+  const sidebarIsEmptySeason = isEmptySeason && !sidebarCompetition;
   const effectiveRoleMode: OfficialRoleMode = isPinOfficial
     ? (authSession.user.officialRole as OfficialRoleMode)
     : roleMode;
@@ -1547,14 +1551,16 @@ export default function App() {
               >
                 <div className="flex items-center justify-between gap-1.5">
                   <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                    {isEmptySeason ? 'Skapa eller hämta tävling' : competition.name}
+                    {sidebarIsEmptySeason
+                      ? 'Skapa eller hämta tävling'
+                      : sidebarCompetition?.name || competition.name}
                   </span>
                   <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 </div>
                 <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                  {isEmptySeason
+                  {sidebarIsEmptySeason
                     ? 'Tom säsong'
-                    : `${formatLifecycleLabel(competition.status)} · ${competition.date} kl. ${competition.zeroTimeStr.slice(0, 5)}`}
+                    : `${formatLifecycleLabel(sidebarCompetition?.status ?? competition.status)} · ${sidebarCompetition?.date ?? competition.date} kl. ${(sidebarCompetition?.zeroTimeStr ?? competition.zeroTimeStr).slice(0, 5)}`}
                 </div>
               </button>
 
@@ -1664,7 +1670,7 @@ export default function App() {
                   id="desktop-role-select"
                   value={roleMode}
                   onChange={(e) => handleChangeRoleMode(e.target.value as OfficialRoleMode)}
-                  className="flex-1 min-w-0 px-2 py-1 text-xs font-medium bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
+                  className="w-0 max-w-full flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap px-2 py-1 text-xs font-medium bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
                 >
                   {(Object.keys(ROLE_MODE_LABELS) as OfficialRoleMode[]).map((rKey) => (
                     <option key={rKey} value={rKey}>
@@ -1833,7 +1839,11 @@ export default function App() {
                 <>
                   {competitionsList.length > 0 ? (
                     <select
-                      value={activeEventId}
+                      value={
+                        competitionsList.some((item) => item.id === activeEventId)
+                          ? activeEventId
+                          : competitionsList[0].id
+                      }
                       onChange={(e) => {
                         void handleActivateCompetition(e.target.value);
                         setMobileNavOpen(false);
@@ -1889,7 +1899,7 @@ export default function App() {
                       id="mobile-role-select"
                       value={roleMode}
                       onChange={(e) => handleChangeRoleMode(e.target.value as OfficialRoleMode)}
-                      className="flex-1 min-w-0 px-2 py-1 text-xs font-medium bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                      className="w-0 max-w-full flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap px-2 py-1 text-xs font-medium bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
                     >
                       {(Object.keys(ROLE_MODE_LABELS) as OfficialRoleMode[]).map((rKey) => (
                         <option key={rKey} value={rKey}>

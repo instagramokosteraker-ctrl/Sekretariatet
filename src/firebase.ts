@@ -752,29 +752,55 @@ async function commitQueuedBatchOps(ops: QueuedBatchOp[]): Promise<void> {
  */
 export async function deleteCompetitionFromFirestore(rawCompetitionId: string): Promise<void> {
   const current = await ensureValidFirestoreUser();
-  if (!current || !current.emailVerified) return;
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Radering kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
 
   const competitionId = sanitizeFirestoreId(rawCompetitionId, 'evt');
   const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
   const compPath = `competitions/${competitionId}`;
 
-  let compExists = false;
+  let competitionData: { ownerUid?: string; status?: string } | null = null;
   try {
     const snap = await getDoc(doc(db, 'competitions', competitionId));
-    compExists = snap.exists();
+    competitionData = snap.exists()
+      ? (snap.data() as { ownerUid?: string; status?: string })
+      : null;
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.GET, compPath);
   }
-  if (!compExists) return;
+  if (!competitionData) return;
+
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (current.email || '').toLowerCase()
+  );
+  const adminSnap = isBootstrapAdmin
+    ? null
+    : await getDoc(doc(db, 'admins', ownerUid));
+  const role = adminSnap?.exists() ? adminSnap.data().role : null;
+  const isSuperAdmin = isBootstrapAdmin || role === 'SUPER_ADMIN';
+  if (!isSuperAdmin && role !== 'RACE_ADMIN') {
+    throw new Error('Ditt Google-konto saknar administratörsbehörighet för att radera tävlingar.');
+  }
+  if (competitionData.ownerUid !== current.uid && !isSuperAdmin) {
+    throw new Error('Du kan bara radera tävlingar du själv äger. Be en huvudadministratör om hjälp.');
+  }
+  if (competitionData.status === 'COMPLETED' && !isSuperAdmin) {
+    throw new Error('Endast en huvudadministratör kan radera avslutade tävlingar.');
+  }
 
   const deleteOps: QueuedBatchOp[] = [];
   for (const subName of ['courses', 'classes', 'competitors'] as const) {
     const subPath = `competitions/${competitionId}/${subName}`;
     try {
-      const q = query(
-        collection(db, 'competitions', competitionId, subName),
-        where('ownerUid', '==', ownerUid)
-      );
+      const subCollection = collection(db, 'competitions', competitionId, subName);
+      const q = isSuperAdmin
+        ? query(subCollection)
+        : query(subCollection, where('ownerUid', '==', ownerUid));
       const subSnap = await getDocs(q);
       for (const d of subSnap.docs) {
         deleteOps.push({

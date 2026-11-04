@@ -561,33 +561,71 @@ export function AccessControlView({
     setEventBusyId(ev.id);
     setEventsNotice(null);
     try {
-      const res = await apiFetch(`/api/competitions/${encodeURIComponent(ev.id)}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setEventsNotice({ ok: false, msg: err.error || 'Kunde inte radera tävlingen.' });
-        return;
+      let removedFromServer = false;
+      let serverError = '';
+      try {
+        const res = await apiFetch(`/api/competitions/${encodeURIComponent(ev.id)}`, {
+          method: 'DELETE',
+        });
+        if (res.ok) {
+          const body = await res.text();
+          if (body.trim() && res.headers.get('content-type')?.includes('application/json')) {
+            try {
+              onApplyStateSnapshot(JSON.parse(body) as MeosAppState);
+            } catch {
+              serverError = 'Tävlingsservern returnerade ett ogiltigt svar efter radering.';
+            }
+          }
+          removedFromServer = !body.trim() || Boolean(
+            res.headers.get('content-type')?.includes('application/json') && !serverError
+          );
+        } else {
+          const body = await res.text();
+          if (res.status !== 404 && !res.headers.get('content-type')?.includes('text/html')) {
+            try {
+              const data = JSON.parse(body) as { error?: string };
+              serverError = data.error || body.trim().slice(0, 240);
+            } catch {
+              serverError = body.trim().slice(0, 240);
+            }
+          }
+        }
+      } catch (error) {
+        serverError = error instanceof Error ? error.message : String(error);
       }
-      const snap = (await res.json()) as MeosAppState;
-      onApplyStateSnapshot(snap);
-      setConfirmDeleteEventId(null);
 
       let removedFromCloud = false;
+      let cloudError = '';
       if (firebaseReadyUser) {
         try {
           await deleteCompetitionFromFirestore(ev.id);
-          await pushSeasonSnapshotToFirestore();
           removedFromCloud = true;
-        } catch {
-          removedFromCloud = false;
+          await loadCloudCompetitions();
+        } catch (error) {
+          cloudError = error instanceof Error ? error.message : String(error);
         }
       }
+
+      if (!removedFromServer && !removedFromCloud) {
+        throw new Error(
+          [cloudError, serverError].filter(Boolean).join(' ') || 'Kunde inte radera tävlingen.'
+        );
+      }
+
+      setConfirmDeleteEventId(null);
       setEventsNotice({
         ok: true,
-        msg: removedFromCloud
-          ? `Raderade "${ev.name}" från både tävlingsservern och Firestore.`
-          : `Raderade "${ev.name}".`,
+        msg:
+          removedFromServer && removedFromCloud
+            ? `Raderade "${ev.name}" från tävlingsservern och Firestore.`
+            : removedFromCloud
+            ? `Raderade "${ev.name}" från Firestore.${serverError ? ` Tävlingsservern svarade: ${serverError}` : ''}`
+            : `Raderade "${ev.name}" från tävlingsservern, men inte från Firestore.${cloudError ? ` ${cloudError}` : ''}`,
+      });
+    } catch (error) {
+      setEventsNotice({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte radera tävlingen.',
       });
     } finally {
       setEventBusyId(null);
