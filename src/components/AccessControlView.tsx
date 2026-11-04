@@ -2672,7 +2672,7 @@ export function AccessControlView({
                           setClubForm((p) => ({ ...p, customBgColor: e.target.value }))
                         }
                         placeholder="#f8fafc"
-                        className="club-color-input min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
+                        className="min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
                       />
                     </div>
                   </div>
@@ -2703,7 +2703,7 @@ export function AccessControlView({
                           setClubForm((p) => ({ ...p, customTextColor: e.target.value }))
                         }
                         placeholder="#0f172a"
-                        className="club-color-input min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
+                        className="min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
                       />
                     </div>
                   </div>
@@ -2734,7 +2734,7 @@ export function AccessControlView({
                           setClubForm((p) => ({ ...p, customAccentColor: e.target.value }))
                         }
                         placeholder="#dc2626"
-                        className="club-color-input min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
+                        className="min-w-0 flex-1 px-2 py-1.5 text-xs font-mono border border-slate-300 dark:border-slate-700 rounded-lg"
                       />
                     </div>
                   </div>

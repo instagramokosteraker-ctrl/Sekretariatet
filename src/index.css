@@ -125,8 +125,8 @@
     background-color: var(--club-accent-hover);
   }
 
-  html[data-club-custom="true"] input.club-color-input,
-  input.club-color-input {
+  input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),
+  textarea {
     background-color: #ffffff;
     color: #0f172a;
   }
