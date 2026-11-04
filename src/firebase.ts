@@ -16,6 +16,7 @@ import {
   getDocFromServer,
   getDocs,
   getFirestore,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -33,6 +34,7 @@ import type {
   ClubAdminTier,
   ClubSettings,
   CompClass,
+  CompetitionSummary,
   Competitor,
   Course,
   EventLifecycleStatus,
@@ -1572,6 +1574,107 @@ export async function listMyCloudCompetitionsFromFirestore(): Promise<
     }
     handleFirestoreError(err, OperationType.LIST, path);
   }
+}
+
+export function subscribePublicCompetitionSummaries(
+  onUpdate: (competitions: CompetitionSummary[]) => void,
+  onError: (error: Error) => void
+): () => void {
+  const competitionUnsubscribers = new Map<string, () => void>();
+  const competitionsById = new Map<string, CompetitionSummary>();
+
+  const publish = () => {
+    onUpdate(
+      Array.from(competitionsById.values()).sort((a, b) =>
+        b.date.localeCompare(a.date)
+      )
+    );
+  };
+
+  const unsubscribeClub = onSnapshot(
+    doc(db, 'clubSettings', 'default'),
+    (clubSnapshot) => {
+      const clubData = clubSnapshot.exists()
+        ? (clubSnapshot.data() as { competitionIds?: unknown })
+        : null;
+      const competitionIds = Array.isArray(clubData?.competitionIds)
+        ? Array.from(
+            new Set(
+              clubData.competitionIds.filter(
+                (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
+              )
+            )
+          )
+        : [];
+      const desiredIds = new Set(competitionIds);
+
+      for (const [competitionId, unsubscribe] of competitionUnsubscribers) {
+        if (!desiredIds.has(competitionId)) {
+          unsubscribe();
+          competitionUnsubscribers.delete(competitionId);
+          competitionsById.delete(competitionId);
+        }
+      }
+
+      for (const competitionId of competitionIds) {
+        if (competitionUnsubscribers.has(competitionId)) continue;
+        const unsubscribe = onSnapshot(
+          doc(db, 'competitions', competitionId),
+          (competitionSnapshot) => {
+            if (!competitionSnapshot.exists()) {
+              competitionsById.delete(competitionId);
+              publish();
+              return;
+            }
+
+            const data = competitionSnapshot.data() as Partial<CompetitionSummary>;
+            const status =
+              data.status === 'LIVE' ||
+              data.status === 'UPCOMING' ||
+              data.status === 'COMPLETED'
+                ? data.status
+                : 'UPCOMING';
+            competitionsById.set(competitionId, {
+              id: competitionId,
+              competitionId,
+              shortCode: data.shortCode ?? '',
+              status,
+              name: data.name ?? '',
+              organizer: data.organizer ?? '',
+              date: data.date ?? '',
+              zeroTimeStr: data.zeroTimeStr ?? '18:00:00',
+              arenaInfo: data.arenaInfo ?? '',
+              seriesName: data.seriesName,
+              allowSelfRegistration: data.allowSelfRegistration ?? true,
+              enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
+              competitorCount: data.competitorCount ?? 0,
+              finishedCount: data.finishedCount ?? 0,
+              classCount: data.classCount ?? 0,
+            });
+            publish();
+          },
+          (error) => {
+            onError(error);
+          }
+        );
+        competitionUnsubscribers.set(competitionId, unsubscribe);
+      }
+
+      publish();
+    },
+    (error) => {
+      onError(error);
+    }
+  );
+
+  return () => {
+    unsubscribeClub();
+    for (const unsubscribe of competitionUnsubscribers.values()) {
+      unsubscribe();
+    }
+    competitionUnsubscribers.clear();
+    competitionsById.clear();
+  };
 }
 
 export const DEFAULT_CLUB_SETTINGS: ClubSettings = {

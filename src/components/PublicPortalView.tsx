@@ -35,6 +35,7 @@ import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { PWAInstallButton } from './PWAInstallButton';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
+import { subscribePublicCompetitionSummaries } from '../firebase';
 
 interface PublicPortalViewProps {
   shortCode: string | null; // null means Season Overview (/publik)
@@ -60,7 +61,10 @@ export function PublicPortalView({
   onSelectEventShortCode,
   onSwitchToSecretariat,
 }: PublicPortalViewProps) {
-  const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
+  const [apiCompetitionsList, setApiCompetitionsList] = useState<CompetitionSummary[]>([]);
+  const [firestoreCompetitionsList, setFirestoreCompetitionsList] = useState<
+    CompetitionSummary[]
+  >([]);
   const [seasonClubSettings, setSeasonClubSettings] = useState<ClubSettings | null>(null);
   const [seasonSeriesStandings, setSeasonSeriesStandings] = useState<SeriesStandingsBundle[]>([]);
   const [selectedSeriesName, setSelectedSeriesName] = useState<string>('');
@@ -98,20 +102,40 @@ export function PublicPortalView({
   const [selfNotice, setSelfNotice] = useState<{ ok: boolean; msg: string } | null>(null);
   const [swishQrSvg, setSwishQrSvg] = useState<string>('');
 
+  const competitionsList = useMemo(() => {
+    const firestoreById = new Map(
+      firestoreCompetitionsList.map((competition) => [competition.id, competition])
+    );
+    const apiIds = new Set(apiCompetitionsList.map((competition) => competition.id));
+    const merged = apiCompetitionsList.map((competition) => {
+      const firestoreCompetition = firestoreById.get(competition.id);
+      if (!firestoreCompetition) return competition;
+      return {
+        ...competition,
+        ...firestoreCompetition,
+        classCount: firestoreCompetition.classCount || competition.classCount,
+      };
+    });
+    for (const competition of firestoreCompetitionsList) {
+      if (!apiIds.has(competition.id)) merged.push(competition);
+    }
+    return merged;
+  }, [apiCompetitionsList, firestoreCompetitionsList]);
+
   const loadData = useCallback(async () => {
     try {
       if (!shortCode) {
         const res = await fetch('/api/public/season');
         if (res.ok) {
           const overview = (await res.json()) as PublicSeasonOverviewPayload;
-          setCompetitionsList(overview.competitions);
+          setApiCompetitionsList(overview.competitions);
           setSeasonClubSettings(overview.clubSettings);
           setSeasonSeriesStandings(overview.seriesStandings ?? []);
           setError(null);
         } else {
           const fallback = await fetch('/api/public/competitions');
           if (fallback.ok) {
-            setCompetitionsList((await fallback.json()) as CompetitionSummary[]);
+            setApiCompetitionsList((await fallback.json()) as CompetitionSummary[]);
             setError(null);
           }
         }
@@ -123,7 +147,7 @@ export function PublicPortalView({
         } else {
           const payload = (await res.json()) as PublicRacePayload;
           setRaceData(payload);
-          setCompetitionsList(payload.competitionsList);
+          setApiCompetitionsList(payload.competitionsList);
           if (payload.clubSettings) setSeasonClubSettings(payload.clubSettings);
           if (payload.seriesStandings) setSeasonSeriesStandings(payload.seriesStandings);
           setError(null);
@@ -140,6 +164,19 @@ export function PublicPortalView({
     setLoading(true);
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (shortCode) {
+      setFirestoreCompetitionsList([]);
+      return;
+    }
+    return subscribePublicCompetitionSummaries(
+      setFirestoreCompetitionsList,
+      (error) => {
+        console.error('Kunde inte prenumerera på publika tävlingar från Firestore:', error);
+      }
+    );
+  }, [shortCode]);
 
   useEffect(() => {
     if (seasonSeriesStandings.length === 0) {
