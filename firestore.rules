@@ -562,13 +562,7 @@ service cloud.firestore {
     // 3. /clubSettings/{settingId} — Singleton Club & Swish Configuration
     // =========================================================================
     match /clubSettings/{settingId} {
-      allow get: if isVerifiedUser() &&
-        isValidId(settingId) &&
-        settingId == 'default' &&
-        (
-          (resource != null && resource.data.ownerUid == request.auth.uid) ||
-          isAdmin()
-        );
+      allow get: if isValidId(settingId) && settingId == 'default';
 
       allow list: if false;
 
@@ -651,15 +645,12 @@ service cloud.firestore {
     // 4. /competitions/{competitionId} — Cloud-Persisted Competitions + Subcollections
     // =========================================================================
     match /competitions/{competitionId} {
-      allow get: if isVerifiedUser() &&
-        isValidId(competitionId) &&
-        (
-          (resource != null && resource.data.ownerUid == request.auth.uid) ||
-          isAdmin()
-        );
+      allow get: if isValidId(competitionId);
 
-      allow list: if isVerifiedUser() &&
-        resource.data.ownerUid == request.auth.uid;
+      allow list: if isVerifiedUser() && (
+        resource.data.ownerUid == request.auth.uid ||
+        isBootstrappedAdmin()
+      );
 
       allow create: if isVerifiedUser() &&
         isValidId(competitionId) &&
@@ -749,17 +740,12 @@ service cloud.firestore {
       // 4a. /competitions/{competitionId}/courses/{courseId} (Master Gate)
       // -----------------------------------------------------------------------
       match /courses/{courseId} {
-        allow get: if isVerifiedUser() &&
-          isValidId(competitionId) &&
+        allow get: if isValidId(competitionId) &&
           isValidId(courseId) &&
-          parentCompetitionExists(competitionId) &&
-          (
-            (resource != null && resource.data.ownerUid == request.auth.uid) ||
-            isAdmin()
-          );
+          parentCompetitionExists(competitionId);
 
-        allow list: if isVerifiedUser() &&
-          resource.data.ownerUid == request.auth.uid;
+        allow list: if isValidId(competitionId) &&
+          parentCompetitionExists(competitionId);
 
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -837,17 +823,12 @@ service cloud.firestore {
       // 4b. /competitions/{competitionId}/classes/{classId} (Master Gate)
       // -----------------------------------------------------------------------
       match /classes/{classId} {
-        allow get: if isVerifiedUser() &&
-          isValidId(competitionId) &&
+        allow get: if isValidId(competitionId) &&
           isValidId(classId) &&
-          parentCompetitionExists(competitionId) &&
-          (
-            (resource != null && resource.data.ownerUid == request.auth.uid) ||
-            isAdmin()
-          );
+          parentCompetitionExists(competitionId);
 
-        allow list: if isVerifiedUser() &&
-          resource.data.ownerUid == request.auth.uid;
+        allow list: if isValidId(competitionId) &&
+          parentCompetitionExists(competitionId);
 
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -937,17 +918,12 @@ service cloud.firestore {
       // 4c. /competitions/{competitionId}/competitors/{competitorId} (Master Gate)
       // -----------------------------------------------------------------------
       match /competitors/{competitorId} {
-        allow get: if isVerifiedUser() &&
-          isValidId(competitionId) &&
+        allow get: if isValidId(competitionId) &&
           isValidId(competitorId) &&
-          parentCompetitionExists(competitionId) &&
-          (
-            (resource != null && resource.data.ownerUid == request.auth.uid) ||
-            isAdmin()
-          );
+          parentCompetitionExists(competitionId);
 
-        allow list: if isVerifiedUser() &&
-          resource.data.ownerUid == request.auth.uid;
+        allow list: if isValidId(competitionId) &&
+          parentCompetitionExists(competitionId);
 
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&

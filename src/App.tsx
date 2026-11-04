@@ -451,10 +451,10 @@ export default function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [connectedMonitors, setConnectedMonitors] = useState(1);
 
-  const [activeEventId, setActiveEventId] = useState<string>('evt-live');
-  const activeEventIdRef = useRef<string>('evt-live');
+  const [activeEventId, setActiveEventId] = useState<string>('');
+  const activeEventIdRef = useRef<string>('');
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
-  const [isEmptySeason, setIsEmptySeason] = useState<boolean>(false);
+  const [isEmptySeason, setIsEmptySeason] = useState<boolean>(true);
   const [isFreshColdStart, setIsFreshColdStart] = useState<boolean>(false);
   const [demoCleared, setDemoCleared] = useState<boolean>(false);
   const [clubSettings, setClubSettings] = useState<ClubSettings>({
@@ -478,15 +478,15 @@ export default function App() {
   const [seriesStandings, setSeriesStandings] = useState<SeriesStandingsBundle[]>([]);
 
   const [competition, setCompetition] = useState<CompetitionMeta>({
-    id: 'evt-live',
-    shortCode: 'oko26a',
-    status: 'LIVE',
-    name: 'Höstsprinten & Natt-KM 2026',
+    id: '',
+    shortCode: '',
+    status: 'UPCOMING',
+    name: 'Ingen aktiv tävling',
     organizer: 'OK Österåker',
     date: getStockholmTodayIso(),
-    zeroTimeStr: '10:00:00',
-    zeroTimeSec: 36000,
-    allowSelfRegistration: true,
+    zeroTimeStr: '18:00:00',
+    zeroTimeSec: 18 * 3600,
+    allowSelfRegistration: false,
   });
   const [courses, setCourses] = useState<Course[]>([]);
   const [classes, setClasses] = useState<CompClass[]>([]);
@@ -725,9 +725,96 @@ export default function App() {
         if (res.ok && active) {
           const snap = (await res.json()) as MeosAppState;
           applySnapshot(snap);
+          return;
         }
       } catch {
-        // WS handles retry
+        // Express backend not running (e.g. static host on Vercel)
+      }
+
+      // Direct client-side Firestore hydration fallback
+      try {
+        const cloudSnap = await loadFullSeasonFromFirestore();
+        if (!active) return;
+        if (cloudSnap && cloudSnap.events.length > 0) {
+          const activeEvt =
+            cloudSnap.events.find((e) => e.competition.id === cloudSnap.activeEventId) ||
+            cloudSnap.events[0];
+          applySnapshot({
+            activeEventId: activeEvt.competition.id,
+            competitionsList: cloudSnap.events.map((e) => ({
+              id: e.competition.id,
+              shortCode: e.competition.shortCode,
+              status: e.competition.status,
+              name: e.competition.name,
+              organizer: e.competition.organizer,
+              date: e.competition.date,
+              zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
+              arenaInfo: e.competition.arenaInfo || '',
+              seriesName: e.competition.seriesName,
+              allowSelfRegistration: e.competition.allowSelfRegistration !== false,
+              enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
+              competitorCount: e.competitors.length,
+              finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
+              classCount: e.classes.length,
+            })),
+            isEmptySeason: false,
+            isFreshColdStart: false,
+            demoCleared: cloudSnap.demoCleared,
+            clubSettings: cloudSnap.clubSettings,
+            seriesStandings: [],
+            competition: activeEvt.competition,
+            courses: activeEvt.courses,
+            classes: activeEvt.classes,
+            stations: [],
+            competitors: activeEvt.competitors,
+            runnerDb: [],
+            eventor: {
+              apiKeyConfigured: false,
+              baseUrl: '',
+              connectedOrgId: null,
+              connectedOrgName: null,
+              connectedEventId: null,
+              lastSyncedAt: null,
+              autoCreateFromRunnerDbOnReadout: true,
+            },
+            emergency: { brokenControls: activeEvt.brokenControls, controlTimeOffsets: {} },
+            roc: {
+              enabled: false,
+              unitId: '1042',
+              baseUrl: '',
+              pollIntervalSec: 5,
+              lastPunchId: 0,
+              lastPolledAt: null,
+              totalReceived: 0,
+              lastError: null,
+            },
+            events: [],
+            connectedMonitors: 1,
+          });
+        } else {
+          setActiveEventId('');
+          setCompetitionsList([]);
+          setIsEmptySeason(true);
+          setCompetition({
+            id: '',
+            shortCode: '',
+            status: 'UPCOMING',
+            name: 'Ingen aktiv tävling',
+            organizer: cloudSnap?.clubSettings?.clubName || 'OK Österåker',
+            date: getStockholmTodayIso(),
+            zeroTimeStr: '18:00:00',
+            zeroTimeSec: 18 * 3600,
+            allowSelfRegistration: false,
+          });
+          setCourses([]);
+          setClasses([]);
+          setCompetitors([]);
+          if (cloudSnap?.clubSettings) {
+            setClubSettings(cloudSnap.clubSettings);
+          }
+        }
+      } catch (err) {
+        console.warn('Kunde inte läsa in tävlingar från Firestore på klienten:', err);
       } finally {
         if (active) setLoading(false);
       }
@@ -908,16 +995,64 @@ export default function App() {
     loading,
   ]);
 
+  function parseTimeToSec(str?: string): number {
+    if (!str) return 18 * 3600;
+    const parts = str.split(':').map((p) => parseInt(p, 10));
+    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      return parts[0] * 3600 + parts[1] * 60 + (parts[2] || 0);
+    }
+    return 18 * 3600;
+  }
+
   const handleActivateCompetition = async (eventId: string) => {
     setEventPickerOpen(false);
     setSelectedRunnerId(null);
     setPendingUnknownReadout(null);
-    const res = await apiFetch(`/api/competitions/${encodeURIComponent(eventId)}/activate`, {
-      method: 'POST',
-    });
-    if (res.ok) {
-      const snap = (await res.json()) as MeosAppState;
-      applySnapshot(snap);
+    try {
+      const res = await apiFetch(`/api/competitions/${encodeURIComponent(eventId)}/activate`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const snap = (await res.json()) as MeosAppState;
+        applySnapshot(snap);
+        return;
+      }
+    } catch {
+      // Backend not running (Vercel)
+    }
+
+    try {
+      const cloudSnap = await loadFullSeasonFromFirestore();
+      if (cloudSnap) {
+        const targetEvt = cloudSnap.events.find((e) => e.competition.id === eventId);
+        if (targetEvt) {
+          setActiveEventId(eventId);
+          setCompetition(targetEvt.competition);
+          setCourses(targetEvt.courses);
+          setClasses(targetEvt.classes);
+          setCompetitors(targetEvt.competitors);
+          setCompetitionsList(
+            cloudSnap.events.map((e) => ({
+              id: e.competition.id,
+              shortCode: e.competition.shortCode,
+              status: e.competition.status,
+              name: e.competition.name,
+              organizer: e.competition.organizer,
+              date: e.competition.date,
+              zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
+              arenaInfo: e.competition.arenaInfo || '',
+              seriesName: e.competition.seriesName,
+              allowSelfRegistration: e.competition.allowSelfRegistration !== false,
+              enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
+              competitorCount: e.competitors.length,
+              finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
+              classCount: e.classes.length,
+            }))
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('Kunde inte aktivera tävling från Firestore:', err);
     }
   };
 
@@ -937,54 +1072,126 @@ export default function App() {
           })
         : null;
 
-      const res = await apiFetch('/api/competitions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      let snap: MeosAppState | null = null;
+      try {
+        const res = await apiFetch('/api/competitions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: newEvtName.trim(),
+            date: newEvtDate,
+            zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
+            arenaInfo: newEvtArena.trim(),
+            seriesName: newEvtSeriesName.trim(),
+            allowSelfRegistration: newEvtSelfReg,
+            enableFeesAndSwish: newEvtFeesAndSwish,
+            copyCoursesFromActive:
+              !effectiveCourseImport && !isEmptySeason && newEvtCopyCourses,
+            ...(effectiveCourseImport
+              ? {
+                  importedCourses: effectiveCourseImport.courses,
+                  importedClasses: effectiveCourseImport.classes,
+                }
+              : {}),
+          }),
+        });
+        if (res.ok) {
+          snap = (await res.json()) as MeosAppState;
+          applySnapshot(snap);
+        }
+      } catch {
+        // Express backend not available (e.g. running on Vercel)
+      }
+
+      const compId = snap?.competition?.id || snap?.activeEventId || `evt-${Date.now()}`;
+      const sc = snap?.competition?.shortCode || `oko${Math.floor(1000 + Math.random() * 9000)}`;
+      const importedCourses: Course[] = effectiveCourseImport
+        ? effectiveCourseImport.courses.map((c, idx) => ({
+            id: `crs-${idx + 1}`,
+            name: c.name,
+            lengthMeters: c.lengthMeters,
+            climbMeters: c.climbMeters,
+            controls: c.controls,
+          }))
+        : [];
+      const importedClasses: CompClass[] = effectiveCourseImport
+        ? effectiveCourseImport.classes.map((cls, idx) => {
+            const matched = importedCourses.find((c) => c.name === cls.courseName);
+            return {
+              id: `cls-${idx + 1}`,
+              name: cls.name,
+              courseId: matched ? matched.id : null,
+              classFormat: cls.classFormat || 'STANDARD',
+              allowDirectEntry: true,
+              freeStart: cls.freeStart ?? true,
+              autoMatchCourse: cls.autoMatchCourse ?? true,
+              feeSek: 100,
+            };
+          })
+        : [];
+
+      // ATOMIC FIRESTORE STORAGE: Guarantees all 23 schema fields without undefined
+      if (auth.currentUser) {
+        await createCompetitionInFirestore({
+          competitionId: compId,
+          shortCode: sc,
           name: newEvtName.trim(),
+          organizer: clubSettings.clubName || 'OK Österåker',
           date: newEvtDate,
+          status: 'UPCOMING',
           zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
+          zeroTimeSec: parseTimeToSec(newEvtZeroTime),
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
           allowSelfRegistration: newEvtSelfReg,
           enableFeesAndSwish: newEvtFeesAndSwish,
-          copyCoursesFromActive:
-            !effectiveCourseImport && !isEmptySeason && newEvtCopyCourses,
-          ...(effectiveCourseImport
-            ? {
-                importedCourses: effectiveCourseImport.courses,
-                importedClasses: effectiveCourseImport.classes,
-              }
-            : {}),
-        }),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(err.error ?? 'Kunde inte skapa tävling via servern.');
-      }
-      const snap = (await res.json()) as MeosAppState;
-      applySnapshot(snap);
-
-      // ATOMIC FIRESTORE STORAGE: Guarantees all 23 schema fields without undefined
-      if (auth.currentUser) {
-        const compId = snap.competition.id || snap.activeEventId || `evt-${Date.now()}`;
-        const sc = snap.competition.shortCode || 'oko26';
-        await createCompetitionInFirestore({
-          competitionId: compId,
-          shortCode: sc,
-          name: snap.competition.name,
-          organizer: snap.competition.organizer || clubSettings.clubName || 'OK Österåker',
-          date: snap.competition.date,
-          status: snap.competition.status || 'UPCOMING',
-          zeroTimeStr: snap.competition.zeroTimeStr || '18:00:00',
-          zeroTimeSec: snap.competition.zeroTimeSec,
-          arenaInfo: snap.competition.arenaInfo || '',
-          seriesName: snap.competition.seriesName || '',
-          allowSelfRegistration: snap.competition.allowSelfRegistration,
-          enableFeesAndSwish: snap.competition.enableFeesAndSwish,
-          courses: snap.courses,
-          classes: snap.classes,
+          courses: snap ? snap.courses : importedCourses,
+          classes: snap ? snap.classes : importedClasses,
         });
+      } else if (!snap) {
+        throw new Error('Du måste vara inloggad med Google för att skapa tävling i Firestore.');
+      }
+
+      if (!snap) {
+        const newComp: CompetitionMeta = {
+          id: compId,
+          shortCode: sc,
+          name: newEvtName.trim(),
+          organizer: clubSettings.clubName || 'OK Österåker',
+          date: newEvtDate,
+          status: 'UPCOMING',
+          zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
+          zeroTimeSec: parseTimeToSec(newEvtZeroTime),
+          arenaInfo: newEvtArena.trim(),
+          seriesName: newEvtSeriesName.trim(),
+          allowSelfRegistration: newEvtSelfReg,
+          enableFeesAndSwish: newEvtFeesAndSwish,
+        };
+        setCompetition(newComp);
+        setActiveEventId(compId);
+        setCourses(importedCourses);
+        setClasses(importedClasses);
+        setCompetitors([]);
+        setIsEmptySeason(false);
+        setCompetitionsList((prev) => [
+          {
+            id: compId,
+            shortCode: sc,
+            status: 'UPCOMING',
+            name: newEvtName.trim(),
+            organizer: clubSettings.clubName || 'OK Österåker',
+            date: newEvtDate,
+            zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
+            arenaInfo: newEvtArena.trim(),
+            seriesName: newEvtSeriesName.trim(),
+            allowSelfRegistration: newEvtSelfReg,
+            enableFeesAndSwish: newEvtFeesAndSwish,
+            competitorCount: 0,
+            finishedCount: 0,
+            classCount: importedClasses.length,
+          },
+          ...prev,
+        ]);
       }
 
       setSelectedRunnerId(null);
@@ -999,7 +1206,7 @@ export default function App() {
       setCreateEventModalOpen(false);
       setEventPickerOpen(false);
 
-      // Trigger full season sync to keep Firestore collections aligned
+      // Trigger full season sync if server is alive
       void (async () => {
         try {
           const expRes = await apiFetch('/api/system/cloud-export');

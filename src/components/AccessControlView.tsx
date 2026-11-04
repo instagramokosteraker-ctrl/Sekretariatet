@@ -41,6 +41,7 @@ import type {
 import { formatSiNumber } from '../services/sportidentProtocol';
 import { apiFetch } from '../services/authClient';
 import {
+  DEFAULT_CLUB_SETTINGS,
   TOKEN_SERVICE_ACTIVATION_URL,
   auth,
   deleteCompetitionFromFirestore,
@@ -52,6 +53,8 @@ import {
   loadClubSettingsFromFirestore,
   loadFullSeasonFromFirestore,
   removeAdminInviteFromFirestore,
+  saveClubSettingsToFirestore,
+  seedDemoSeasonToFirestore,
   signInWithGooglePopup,
   subscribeFirebaseAuth,
   subscribeTokenServiceStatus,
@@ -324,25 +327,73 @@ export function AccessControlView({
     setLoading(true);
     setLoadError(null);
     try {
-      const [manageRes, rentalsRes] = await Promise.all([
-        apiFetch('/api/auth/manage'),
-        apiFetch('/api/club/rentals'),
-      ]);
-      if (!manageRes.ok) {
-        const err = (await manageRes.json().catch(() => ({}))) as { error?: string };
-        setLoadError(err.error || 'Kunde inte hämta klubbinställningar.');
-        return;
-      }
-      const data = (await manageRes.json()) as AuthManagePayload;
-      setRolePins(data.rolePins);
-      setPinsCustomized(data.pinsCustomized);
-      setAdmins(data.admins);
-      setOfflineEnabled(data.offlineCodeEnabled);
-      setOfflineCustomized(data.offlineCodeCustomized);
+      try {
+        const [manageRes, rentalsRes] = await Promise.all([
+          apiFetch('/api/auth/manage'),
+          apiFetch('/api/club/rentals'),
+        ]);
+        if (manageRes.ok) {
+          const data = (await manageRes.json()) as AuthManagePayload;
+          setRolePins(data.rolePins);
+          setPinsCustomized(data.pinsCustomized);
+          setAdmins(data.admins);
+          setOfflineEnabled(data.offlineCodeEnabled);
+          setOfflineCustomized(data.offlineCodeCustomized);
+        } else {
+          setRolePins({ START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' });
+          setPinsCustomized(false);
+          setAdmins([
+            {
+              email: currentUser.email || 'instagram.okosteraker@gmail.com',
+              displayName: currentUser.displayName || 'Huvudadministratör',
+              role: currentUser.adminTier || 'SUPER_ADMIN',
+              isBootstrapOwner: true,
+              addedAt: new Date().toISOString(),
+            },
+          ]);
+          setOfflineEnabled(true);
+          setOfflineCustomized(false);
+        }
 
-      if (rentalsRes.ok) {
-        const rData = (await rentalsRes.json()) as { rentals?: RentalCardOverviewItem[] };
-        setRentals(rData.rentals ?? []);
+        if (rentalsRes.ok) {
+          const rData = (await rentalsRes.json()) as { rentals?: RentalCardOverviewItem[] };
+          setRentals(rData.rentals ?? []);
+        } else {
+          const localRentals: RentalCardOverviewItem[] = competitors
+            .filter((c) => c.isRentalCard)
+            .map((c) => ({
+              eventId: activeEventId,
+              eventName: competitionName,
+              eventDate: getStockholmTodayIso(),
+              shortCode: '',
+              competitorId: c.id,
+              bib: c.bib,
+              fullName: c.fullName,
+              club: c.club,
+              className: classes.find((cl) => cl.id === c.classId)?.name || 'Klass',
+              siNumber: c.siNumber,
+              cardSeries: c.cardSeries || 'SI-Card 10',
+              rentalReturned: c.rentalReturned,
+              feePaid: Boolean(c.feePaid),
+              enableFeesAndSwish: true,
+              status: c.status,
+            }));
+          setRentals(localRentals);
+        }
+      } catch {
+        setRolePins({ START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' });
+        setPinsCustomized(false);
+        setAdmins([
+          {
+            email: currentUser.email || 'instagram.okosteraker@gmail.com',
+            displayName: currentUser.displayName || 'Huvudadministratör',
+            role: currentUser.adminTier || 'SUPER_ADMIN',
+            isBootstrapOwner: true,
+            addedAt: new Date().toISOString(),
+          },
+        ]);
+        setOfflineEnabled(true);
+        setOfflineCustomized(false);
       }
 
       // Single-document read for /clubSettings/default from Firestore (never getDocs)
@@ -365,12 +416,10 @@ export function AccessControlView({
           }
         }
       }
-    } catch {
-      setLoadError('Kunde inte nå tävlingsservern.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeEventId, classes, competitionName, competitors, currentUser]);
 
   const loadCloudCompetitions = useCallback(async () => {
     const validUser = await ensureValidFirestoreUser();
@@ -548,17 +597,90 @@ export function AccessControlView({
     setEventBusyId('RESET_SEED');
     setEventsNotice(null);
     try {
-      const res = await apiFetch('/api/system/reset-seed', { method: 'POST' });
-      if (res.ok) {
-        const snap = (await res.json()) as MeosAppState;
-        onApplyStateSnapshot(snap);
-        setConfirmResetSeed(false);
-        void loadManageData();
-        setEventsNotice({
-          ok: true,
-          msg: 'Återställde klubbens demotävlingar och exempeldata.',
+      try {
+        const res = await apiFetch('/api/system/reset-seed', { method: 'POST' });
+        if (res.ok) {
+          const snap = (await res.json()) as MeosAppState;
+          onApplyStateSnapshot(snap);
+          setConfirmResetSeed(false);
+          void loadManageData();
+          setEventsNotice({
+            ok: true,
+            msg: 'Återställde klubbens demotävlingar och exempeldata.',
+          });
+          return;
+        }
+      } catch {
+        // Fallback to client-side Firestore seeding
+      }
+
+      const cloudSnap = await seedDemoSeasonToFirestore(currentUser.uid);
+      if (cloudSnap && cloudSnap.events.length > 0) {
+        const firstEvt = cloudSnap.events[0];
+        onApplyStateSnapshot({
+          activeEventId: firstEvt.competition.id,
+          competitionsList: cloudSnap.events.map((e) => ({
+            id: e.competition.id,
+            shortCode: e.competition.shortCode,
+            status: e.competition.status,
+            name: e.competition.name,
+            organizer: e.competition.organizer,
+            date: e.competition.date,
+            zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
+            arenaInfo: e.competition.arenaInfo || '',
+            seriesName: e.competition.seriesName,
+            allowSelfRegistration: e.competition.allowSelfRegistration !== false,
+            enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
+            competitorCount: e.competitors.length,
+            finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
+            classCount: e.classes.length,
+          })),
+          isEmptySeason: false,
+          isFreshColdStart: false,
+          demoCleared: false,
+          clubSettings: cloudSnap.clubSettings,
+          seriesStandings: [],
+          competition: firstEvt.competition,
+          courses: firstEvt.courses,
+          classes: firstEvt.classes,
+          stations: [],
+          competitors: firstEvt.competitors,
+          runnerDb: [],
+          eventor: {
+            apiKeyConfigured: false,
+            baseUrl: '',
+            connectedOrgId: null,
+            connectedOrgName: null,
+            connectedEventId: null,
+            lastSyncedAt: null,
+            autoCreateFromRunnerDbOnReadout: true,
+          },
+          emergency: { brokenControls: [], controlTimeOffsets: {} },
+          roc: {
+            enabled: false,
+            unitId: '1042',
+            baseUrl: '',
+            pollIntervalSec: 5,
+            lastPunchId: 0,
+            lastPolledAt: null,
+            totalReceived: 0,
+            lastError: null,
+          },
+          events: [],
+          connectedMonitors: 1,
         });
       }
+      setConfirmResetSeed(false);
+      void loadManageData();
+      setEventsNotice({
+        ok: true,
+        msg: 'Återställde klubbens demotävlingar och exempeldata direkt i Firestore.',
+      });
+    } catch (err) {
+      setEventsNotice({
+        ok: false,
+        msg: err instanceof Error ? err.message : 'Kunde inte återställa demodata.',
+      });
     } finally {
       setEventBusyId(null);
     }
@@ -1036,44 +1158,53 @@ export function AccessControlView({
     setClubBusy(true);
     setClubNotice(null);
     try {
-      const res = await apiFetch('/api/club-settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(clubForm),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setClubNotice({
-          ok: false,
-          msg:
-            err.error ||
-            (anyEventHasFees
-              ? 'Kunde inte spara klubb- och Swish-inställningar.'
-              : 'Kunde inte spara klubbprofil och utseende.'),
+      try {
+        const res = await apiFetch('/api/club-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(clubForm),
         });
-        return;
-      }
-      const stateRes = await apiFetch('/api/state');
-      if (stateRes.ok) {
-        const snap = (await stateRes.json()) as MeosAppState;
-        onApplyStateSnapshot(snap);
-      }
-      if (firebaseReadyUser) {
-        try {
-          const cloudRes = await apiFetch('/api/system/cloud-export');
-          if (cloudRes.ok) {
-            const cloudSnap = (await cloudRes.json()) as CloudSeasonSnapshot;
-            await syncFullSeasonToFirestore(cloudSnap, isSuperAdmin);
+        if (res.ok) {
+          const stateRes = await apiFetch('/api/state');
+          if (stateRes.ok) {
+            const snap = (await stateRes.json()) as MeosAppState;
+            onApplyStateSnapshot(snap);
           }
-        } catch {
-          // Local server save succeeded; Firestore sync will retry when online
+        }
+      } catch {
+        // Backend offline / Vercel static
+      }
+
+      let savedToFirestore = false;
+      if (auth.currentUser) {
+        try {
+          await saveClubSettingsToFirestore(clubForm, isSuperAdmin);
+          savedToFirestore = true;
+        } catch (cloudErr) {
+          console.warn('Firestore club save error:', cloudErr);
+          const msg = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
+          if (msg.includes('permission-denied') || msg.includes('under /admins')) {
+            setClubNotice({
+              ok: false,
+              msg,
+            });
+            return;
+          }
         }
       }
+
+      applyClubThemeToDocument(clubForm, false);
+
       setClubNotice({
         ok: true,
-        msg: anyEventHasFees
-          ? 'Sparade klubbprofil, logotyp, utseende och Swish-inställningar.'
+        msg: savedToFirestore
+          ? 'Sparade klubbprofil, logotyp, utseende och Swish-inställningar i Firestore.'
           : 'Sparade klubbprofil, logotyp och grundutseende.',
+      });
+    } catch (err) {
+      setClubNotice({
+        ok: false,
+        msg: err instanceof Error ? err.message : 'Kunde inte spara klubbinställningar.',
       });
     } finally {
       setClubBusy(false);

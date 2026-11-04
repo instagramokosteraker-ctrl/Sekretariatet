@@ -1225,10 +1225,6 @@ export async function syncFullSeasonToFirestore(
  * Returns null if `clubSettings/default` has not been created yet so fresh apps sync upward first.
  */
 export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot | null> {
-  const current = await ensureValidFirestoreUser();
-  if (!current || !current.emailVerified) return null;
-
-  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
   const clubPath = 'clubSettings/default';
 
   interface CloudClubDocData {
@@ -1253,10 +1249,9 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
 
   try {
     const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
-    if (!clubSnap.exists()) {
-      return null;
+    if (clubSnap.exists()) {
+      clubData = clubSnap.data() as CloudClubDocData;
     }
-    clubData = clubSnap.data() as CloudClubDocData;
   } catch (err) {
     if (isTransientOfflineFirestoreError(err)) {
       if (isTokenServiceError(err)) {
@@ -1268,28 +1263,40 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     handleFirestoreError(err, OperationType.GET, clubPath);
   }
 
-  if (!clubData) return null;
-
   const clubSettings: ClubSettings = {
-    clubName: clubData.clubName || 'OK Österåker',
-    eventorOrgId: clubData.eventorOrgId || '',
-    swishNumber: clubData.swishNumber || '',
-    swishRecipientName: clubData.swishRecipientName || clubData.clubName || 'OK Österåker',
-    defaultDirectEntryFeeSek: Number(clubData.defaultDirectEntryFeeSek ?? 100),
-    rentalCardFeeSek: Number(clubData.rentalCardFeeSek ?? 30),
-    missingRentalFeeSek: Number(clubData.missingRentalFeeSek ?? 650),
-    portalTitle: (clubData.portalTitle || '').trim().slice(0, 80),
-    logoDataUrl: sanitizeCloudLogoDataUrl(clubData.logoDataUrl),
-    customBgColor: sanitizeCloudHexColor(clubData.customBgColor),
-    customTextColor: sanitizeCloudHexColor(clubData.customTextColor),
-    customAccentColor: sanitizeCloudHexColor(clubData.customAccentColor),
+    clubName: (clubData?.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
+    eventorOrgId: clubData?.eventorOrgId || '',
+    swishNumber: clubData?.swishNumber || '123 481 92 04',
+    swishRecipientName: clubData?.swishRecipientName || clubData?.clubName || 'OK Österåker Tävlingskassa',
+    defaultDirectEntryFeeSek: Number(clubData?.defaultDirectEntryFeeSek ?? 100),
+    rentalCardFeeSek: Number(clubData?.rentalCardFeeSek ?? 30),
+    missingRentalFeeSek: Number(clubData?.missingRentalFeeSek ?? 650),
+    portalTitle: (clubData?.portalTitle || '').trim().slice(0, 80),
+    logoDataUrl: sanitizeCloudLogoDataUrl(clubData?.logoDataUrl),
+    customBgColor: sanitizeCloudHexColor(clubData?.customBgColor),
+    customTextColor: sanitizeCloudHexColor(clubData?.customTextColor),
+    customAccentColor: sanitizeCloudHexColor(clubData?.customAccentColor),
   };
 
-  const targetIds = Array.isArray(clubData.competitionIds) ? clubData.competitionIds : [];
+  let targetIds = Array.isArray(clubData?.competitionIds) ? clubData!.competitionIds! : [];
+  
+  // If targetIds is empty, attempt to list competitions from /competitions directly
+  if (targetIds.length === 0) {
+    try {
+      const current = auth.currentUser;
+      const compCol = collection(db, 'competitions');
+      const q = current ? query(compCol, where('ownerUid', '==', current.uid)) : compCol;
+      const compListSnap = await getDocs(q);
+      targetIds = compListSnap.docs.map((d) => d.id);
+    } catch {
+      // If collection listing is restricted, fallback to empty
+    }
+  }
+
   if (targetIds.length === 0) {
     return {
       activeEventId: '',
-      demoCleared: Boolean(clubData.demoCleared),
+      demoCleared: Boolean(clubData?.demoCleared),
       clubSettings,
       events: [],
     };
@@ -1313,173 +1320,159 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     }
     if (!compDocData) continue;
 
-    const compOwnerUid = String(compDocData.ownerUid || '');
-    const canListSubcollections = compOwnerUid === ownerUid;
-
     const courses: Course[] = [];
     const classes: CompClass[] = [];
     const competitors: Competitor[] = [];
 
-    if (canListSubcollections) {
-      try {
-        const crsSnap = await getDocs(
-          query(
-            collection(db, 'competitions', competitionId, 'courses'),
-            where('ownerUid', '==', ownerUid)
-          )
-        );
-        for (const d of crsSnap.docs) {
-          const cd = d.data() as {
-            courseId: string;
-            name: string;
-            lengthMeters: number;
-            climbMeters: number;
-            controls: number[];
-          };
-          courses.push({
-            id: cd.courseId || d.id,
-            name: cd.name || 'Bana',
-            lengthMeters: Number(cd.lengthMeters || 0),
-            climbMeters: Number(cd.climbMeters || 0),
-            controls: Array.isArray(cd.controls) ? cd.controls.map(Number) : [],
-          });
-        }
-      } catch (err) {
-        if (isTransientOfflineFirestoreError(err)) {
-          return null;
-        }
-        handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/courses`);
+    try {
+      const crsSnap = await getDocs(
+        collection(db, 'competitions', competitionId, 'courses')
+      );
+      for (const d of crsSnap.docs) {
+        const cd = d.data() as {
+          courseId: string;
+          name: string;
+          lengthMeters: number;
+          climbMeters: number;
+          controls: number[];
+        };
+        courses.push({
+          id: cd.courseId || d.id,
+          name: cd.name || 'Bana',
+          lengthMeters: Number(cd.lengthMeters || 0),
+          climbMeters: Number(cd.climbMeters || 0),
+          controls: Array.isArray(cd.controls) ? cd.controls.map(Number) : [],
+        });
       }
-
-      try {
-        const clsSnap = await getDocs(
-          query(
-            collection(db, 'competitions', competitionId, 'classes'),
-            where('ownerUid', '==', ownerUid)
-          )
-        );
-        for (const d of clsSnap.docs) {
-          const cld = d.data() as {
-            classId: string;
-            name: string;
-            courseId: string;
-            classFormat: ClassCompetitionFormat;
-            forkCourseIds: string[];
-            rogainingMaxTimeSec: number;
-            rogainingPenaltyPerMin: number;
-            allowDirectEntry: boolean;
-            freeStart: boolean;
-            autoMatchCourse: boolean;
-            feeSek: number;
-          };
-          classes.push({
-            id: cld.classId || d.id,
-            name: cld.name || 'Klass',
-            courseId: cld.courseId ? cld.courseId : null,
-            classFormat: cld.classFormat || 'STANDARD',
-            forkCourseIds: Array.isArray(cld.forkCourseIds) ? cld.forkCourseIds : [],
-            rogainingMaxTimeSec: decodeNullableSec(cld.rogainingMaxTimeSec),
-            rogainingPenaltyPerMin:
-              Number(cld.rogainingPenaltyPerMin) >= 0 ? Number(cld.rogainingPenaltyPerMin) : null,
-            allowDirectEntry: Boolean(cld.allowDirectEntry),
-            freeStart: Boolean(cld.freeStart),
-            autoMatchCourse: Boolean(cld.autoMatchCourse),
-            feeSek: Number(cld.feeSek ?? 100),
-          });
-        }
-      } catch (err) {
-        if (isTransientOfflineFirestoreError(err)) {
-          return null;
-        }
-        handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/classes`);
+    } catch (err) {
+      if (isTransientOfflineFirestoreError(err)) {
+        return null;
       }
+      handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/courses`);
+    }
 
-      try {
-        const cmpSnap = await getDocs(
-          query(
-            collection(db, 'competitions', competitionId, 'competitors'),
-            where('ownerUid', '==', ownerUid)
-          )
-        );
-        for (const d of cmpSnap.docs) {
-          const cmd = d.data() as {
-            competitorId: string;
-            bib: number;
-            fullName: string;
-            club: string;
-            classId: string;
-            siNumber: number;
-            cardSeries: SICardSeries;
-            isRentalCard: boolean;
-            rentalReturned: boolean;
-            isSelfRegistered: boolean;
-            feePaid: boolean;
-            status: RunnerStatus;
-            allocatedStartSec: number;
-            checkTimeSec: number;
-            startTimeSec: number;
-            finishTimeSec: number;
-            manualFinishTimeSec: number;
-            runningTimeSec: number;
-            readoutAtIso: string;
-            punchCodes: number[];
-            punchTimes: number[];
-          };
-          const codes = Array.isArray(cmd.punchCodes) ? cmd.punchCodes.map(Number) : [];
-          const times = Array.isArray(cmd.punchTimes) ? cmd.punchTimes.map(Number) : [];
-          const len = Math.min(codes.length, times.length);
-          const punches = [];
-          for (let idx = 0; idx < len; idx++) {
-            punches.push({ code: codes[idx], timeSec: times[idx] });
-          }
-          const checkSec = decodeNullableSec(cmd.checkTimeSec);
-          const startSec = decodeNullableSec(cmd.startTimeSec);
-          const finishSec = decodeNullableSec(cmd.finishTimeSec);
-          const hasReadout = Boolean(cmd.readoutAtIso) || punches.length > 0;
-
-          competitors.push({
-            id: cmd.competitorId || d.id,
-            bib: Number(cmd.bib || 1),
-            fullName: cmd.fullName || 'Deltagare',
-            club: cmd.club || 'Klubblös',
-            classId: cmd.classId || classes[0]?.id || 'cls_open',
-            siNumber: Number(cmd.siNumber || 1000),
-            cardSeries: cmd.cardSeries || 'SI-Card 10',
-            isRentalCard: Boolean(cmd.isRentalCard),
-            rentalReturned: Boolean(cmd.rentalReturned),
-            isSelfRegistered: Boolean(cmd.isSelfRegistered),
-            feePaid: Boolean(cmd.feePaid),
-            status: cmd.status || 'REGISTERED',
-            allocatedStartSec: decodeNullableSec(cmd.allocatedStartSec),
-            checkTimeSec: checkSec,
-            startTimeSec: startSec,
-            finishTimeSec: finishSec,
-            manualFinishTimeSec: decodeNullableSec(cmd.manualFinishTimeSec),
-            runningTimeSec: decodeNullableSec(cmd.runningTimeSec),
-            lastSeenControl: punches.length > 0 ? 1 : null,
-            lastSeenTimeSec: finishSec ?? startSec ?? checkSec,
-            readoutAt: cmd.readoutAtIso ? cmd.readoutAtIso : null,
-            radioSplits: [],
-            cardPunches: punches,
-            rawReadout: hasReadout
-              ? {
-                  checkTimeSec: checkSec,
-                  startTimeSec: startSec,
-                  finishTimeSec: finishSec,
-                  punches,
-                  receivedAt: cmd.readoutAtIso || new Date().toISOString(),
-                }
-              : null,
-            validation: null,
-          });
-        }
-        competitors.sort((a, b) => a.bib - b.bib);
-      } catch (err) {
-        if (isTransientOfflineFirestoreError(err)) {
-          return null;
-        }
-        handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/competitors`);
+    try {
+      const clsSnap = await getDocs(
+        collection(db, 'competitions', competitionId, 'classes')
+      );
+      for (const d of clsSnap.docs) {
+        const cld = d.data() as {
+          classId: string;
+          name: string;
+          courseId: string;
+          classFormat: ClassCompetitionFormat;
+          forkCourseIds: string[];
+          rogainingMaxTimeSec: number;
+          rogainingPenaltyPerMin: number;
+          allowDirectEntry: boolean;
+          freeStart: boolean;
+          autoMatchCourse: boolean;
+          feeSek: number;
+        };
+        classes.push({
+          id: cld.classId || d.id,
+          name: cld.name || 'Klass',
+          courseId: cld.courseId ? cld.courseId : null,
+          classFormat: cld.classFormat || 'STANDARD',
+          forkCourseIds: Array.isArray(cld.forkCourseIds) ? cld.forkCourseIds : [],
+          rogainingMaxTimeSec: decodeNullableSec(cld.rogainingMaxTimeSec),
+          rogainingPenaltyPerMin:
+            Number(cld.rogainingPenaltyPerMin) >= 0 ? Number(cld.rogainingPenaltyPerMin) : null,
+          allowDirectEntry: Boolean(cld.allowDirectEntry),
+          freeStart: Boolean(cld.freeStart),
+          autoMatchCourse: Boolean(cld.autoMatchCourse),
+          feeSek: Number(cld.feeSek ?? 100),
+        });
       }
+    } catch (err) {
+      if (isTransientOfflineFirestoreError(err)) {
+        return null;
+      }
+      handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/classes`);
+    }
+
+    try {
+      const cmpSnap = await getDocs(
+        collection(db, 'competitions', competitionId, 'competitors')
+      );
+      for (const d of cmpSnap.docs) {
+        const cmd = d.data() as {
+          competitorId: string;
+          bib: number;
+          fullName: string;
+          club: string;
+          classId: string;
+          siNumber: number;
+          cardSeries: SICardSeries;
+          isRentalCard: boolean;
+          rentalReturned: boolean;
+          isSelfRegistered: boolean;
+          feePaid: boolean;
+          status: RunnerStatus;
+          allocatedStartSec: number;
+          checkTimeSec: number;
+          startTimeSec: number;
+          finishTimeSec: number;
+          manualFinishTimeSec: number;
+          runningTimeSec: number;
+          readoutAtIso: string;
+          punchCodes: number[];
+          punchTimes: number[];
+        };
+        const codes = Array.isArray(cmd.punchCodes) ? cmd.punchCodes.map(Number) : [];
+        const times = Array.isArray(cmd.punchTimes) ? cmd.punchTimes.map(Number) : [];
+        const len = Math.min(codes.length, times.length);
+        const punches = [];
+        for (let idx = 0; idx < len; idx++) {
+          punches.push({ code: codes[idx], timeSec: times[idx] });
+        }
+        const checkSec = decodeNullableSec(cmd.checkTimeSec);
+        const startSec = decodeNullableSec(cmd.startTimeSec);
+        const finishSec = decodeNullableSec(cmd.finishTimeSec);
+        const hasReadout = Boolean(cmd.readoutAtIso) || punches.length > 0;
+
+        competitors.push({
+          id: cmd.competitorId || d.id,
+          bib: Number(cmd.bib || 1),
+          fullName: cmd.fullName || 'Deltagare',
+          club: cmd.club || 'Klubblös',
+          classId: cmd.classId || classes[0]?.id || 'cls_open',
+          siNumber: Number(cmd.siNumber || 1000),
+          cardSeries: cmd.cardSeries || 'SI-Card 10',
+          isRentalCard: Boolean(cmd.isRentalCard),
+          rentalReturned: Boolean(cmd.rentalReturned),
+          isSelfRegistered: Boolean(cmd.isSelfRegistered),
+          feePaid: Boolean(cmd.feePaid),
+          status: cmd.status || 'REGISTERED',
+          allocatedStartSec: decodeNullableSec(cmd.allocatedStartSec),
+          checkTimeSec: checkSec,
+          startTimeSec: startSec,
+          finishTimeSec: finishSec,
+          manualFinishTimeSec: decodeNullableSec(cmd.manualFinishTimeSec),
+          runningTimeSec: decodeNullableSec(cmd.runningTimeSec),
+          lastSeenControl: punches.length > 0 ? 1 : null,
+          lastSeenTimeSec: finishSec ?? startSec ?? checkSec,
+          readoutAt: cmd.readoutAtIso ? cmd.readoutAtIso : null,
+          radioSplits: [],
+          cardPunches: punches,
+          rawReadout: hasReadout
+            ? {
+                checkTimeSec: checkSec,
+                startTimeSec: startSec,
+                finishTimeSec: finishSec,
+                punches,
+                receivedAt: cmd.readoutAtIso || new Date().toISOString(),
+              }
+            : null,
+          validation: null,
+        });
+      }
+      competitors.sort((a, b) => a.bib - b.bib);
+    } catch (err) {
+      if (isTransientOfflineFirestoreError(err)) {
+        return null;
+      }
+      handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/competitors`);
     }
 
     const statusRaw = String(compDocData.status || 'LIVE');
@@ -1520,8 +1513,8 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
   }
 
   return {
-    activeEventId: clubData.activeEventId || events[0]?.competition.id || '',
-    demoCleared: Boolean(clubData.demoCleared),
+    activeEventId: clubData?.activeEventId || events[0]?.competition.id || '',
+    demoCleared: Boolean(clubData?.demoCleared),
     clubSettings,
     events,
   };
@@ -1863,4 +1856,182 @@ export async function createCompetitionInFirestore(
   }
 
   return competitionId;
+}
+
+/**
+ * Saves club profile, branding, and Swish settings directly to Firestore (/clubSettings/default)
+ * ensuring all keys conform strictly to isValidClubSettings rules.
+ */
+export async function saveClubSettingsToFirestore(
+  settings: Partial<ClubSettings>,
+  isSuperAdmin = false
+): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) {
+    throw new Error('Du måste vara inloggad med Google för att spara klubbinställningar.');
+  }
+
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const clubRef = doc(db, 'clubSettings', 'default');
+  const clubSnap = await getDoc(clubRef);
+
+  const clubName =
+    (settings.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) ||
+    DEFAULT_CLUB_SETTINGS.clubName;
+  const eventorOrgId = (settings.eventorOrgId || '').trim().slice(0, 32);
+  const swishNumber = (settings.swishNumber || '').trim().slice(0, 20);
+  const swishRecipientName = (settings.swishRecipientName || clubName).trim().slice(0, 100);
+  const defaultDirectEntryFeeSek = clampInt(settings.defaultDirectEntryFeeSek, 0, 10000, 100);
+  const rentalCardFeeSek = clampInt(settings.rentalCardFeeSek, 0, 5000, 30);
+  const missingRentalFeeSek = clampInt(settings.missingRentalFeeSek, 0, 20000, 650);
+  const portalTitle = (settings.portalTitle || '').trim().slice(0, 80);
+  const logoDataUrl = sanitizeCloudLogoDataUrl(settings.logoDataUrl);
+  const customBgColor = sanitizeCloudHexColor(settings.customBgColor);
+  const customTextColor = sanitizeCloudHexColor(settings.customTextColor);
+  const customAccentColor = sanitizeCloudHexColor(settings.customAccentColor);
+
+  if (clubSnap.exists()) {
+    await updateDoc(clubRef, {
+      clubName,
+      eventorOrgId,
+      swishNumber,
+      swishRecipientName,
+      defaultDirectEntryFeeSek,
+      rentalCardFeeSek,
+      missingRentalFeeSek,
+      portalTitle,
+      logoDataUrl,
+      customBgColor,
+      customTextColor,
+      customAccentColor,
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await setDoc(clubRef, {
+      settingId: 'default',
+      clubName,
+      eventorOrgId,
+      swishNumber,
+      swishRecipientName,
+      defaultDirectEntryFeeSek,
+      rentalCardFeeSek,
+      missingRentalFeeSek,
+      portalTitle,
+      logoDataUrl,
+      customBgColor,
+      customTextColor,
+      customAccentColor,
+      activeEventId: '',
+      demoCleared: false,
+      competitionIds: [] as string[],
+      ownerUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+}
+
+/**
+ * Seeds demo competitions directly in Firestore when the season is empty or upon user reset.
+ */
+export async function seedDemoSeasonToFirestore(ownerUidParam?: string): Promise<CloudSeasonSnapshot> {
+  const current = await ensureValidFirestoreUser();
+  const ownerUid = sanitizeFirestoreId(ownerUidParam || current?.uid || 'usr_admin', 'usr');
+
+  const comp1Id = 'evt-live';
+  await createCompetitionInFirestore({
+    competitionId: comp1Id,
+    shortCode: 'oko26a',
+    name: 'Höstsprinten & Natt-KM 2026',
+    organizer: 'OK Österåker',
+    date: getStockholmTodayIso(),
+    status: 'LIVE',
+    zeroTimeStr: '10:00:00',
+    zeroTimeSec: 36000,
+    arenaInfo: 'Hackstastugan, Åkersberga. Parkering vid Hackstaskolan.',
+    seriesName: 'Reflexcupen 26/27',
+    allowSelfRegistration: true,
+    enableFeesAndSwish: true,
+    courses: [
+      {
+        id: 'crs-1',
+        name: 'Bana 1 — Långa (5,4 km)',
+        lengthMeters: 5400,
+        climbMeters: 145,
+        controls: [31, 38, 42, 55, 61, 100],
+      },
+      {
+        id: 'crs-2',
+        name: 'Bana 2 — Mellan (3,8 km)',
+        lengthMeters: 3800,
+        climbMeters: 95,
+        controls: [32, 42, 55, 100],
+      },
+      {
+        id: 'crs-3',
+        name: 'Bana 3 — Korta (2,3 km)',
+        lengthMeters: 2300,
+        climbMeters: 50,
+        controls: [33, 44, 100],
+      },
+    ],
+    classes: [
+      {
+        id: 'cls-1',
+        name: 'Öppen Lång',
+        courseId: 'crs-1',
+        classFormat: 'STANDARD',
+        allowDirectEntry: true,
+        freeStart: true,
+        autoMatchCourse: false,
+        feeSek: 100,
+      },
+      {
+        id: 'cls-2',
+        name: 'Öppen Mellan',
+        courseId: 'crs-2',
+        classFormat: 'STANDARD',
+        allowDirectEntry: true,
+        freeStart: true,
+        autoMatchCourse: false,
+        feeSek: 100,
+      },
+      {
+        id: 'cls-3',
+        name: 'Öppen Kort',
+        courseId: 'crs-3',
+        classFormat: 'STANDARD',
+        allowDirectEntry: true,
+        freeStart: true,
+        autoMatchCourse: false,
+        feeSek: 100,
+      },
+    ],
+    pinStart: '1100',
+    pinReadout: '2200',
+    pinForest: '3300',
+    pinSpeaker: '4400',
+  });
+
+  const clubRef = doc(db, 'clubSettings', 'default');
+  const clubSnap = await getDoc(clubRef);
+  if (clubSnap.exists()) {
+    await updateDoc(clubRef, {
+      activeEventId: comp1Id,
+      competitionIds: [comp1Id],
+      demoCleared: false,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const loaded = await loadFullSeasonFromFirestore();
+  if (!loaded) {
+    return {
+      activeEventId: comp1Id,
+      demoCleared: false,
+      clubSettings: DEFAULT_CLUB_SETTINGS,
+      events: [],
+    };
+  }
+  return loaded;
 }
