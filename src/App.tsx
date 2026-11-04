@@ -417,46 +417,6 @@ export default function App() {
     );
   }, [firebaseUserUid]);
 
-  useEffect(() => {
-    if (
-      !firebaseUserUid ||
-      competitionsList.length === 0 ||
-      (!isEmptySeason && competitionsList.some((item) => item.id === activeEventId)) ||
-      hydratingCompetitionListRef.current
-    ) {
-      return;
-    }
-
-    hydratingCompetitionListRef.current = true;
-    void loadFullSeasonFromFirestore()
-      .then((cloudSnap) => {
-        if (!cloudSnap) return;
-        const selectedEvent =
-          cloudSnap.events.find((event) => event.competition.id === activeEventId) ??
-          cloudSnap.events.find(
-            (event) => event.competition.id === cloudSnap.activeEventId
-          ) ??
-          cloudSnap.events[0];
-        if (!selectedEvent) return;
-
-        setActiveEventId(selectedEvent.competition.id);
-        setCompetition(selectedEvent.competition);
-        setCourses(selectedEvent.courses);
-        setClasses(selectedEvent.classes);
-        setCompetitors(selectedEvent.competitors);
-        setRunnerDb(cloudSnap.runnerDb ?? []);
-        setClubSettings(cloudSnap.clubSettings);
-        setDemoCleared(cloudSnap.demoCleared);
-        setIsEmptySeason(false);
-      })
-      .catch((error: unknown) => {
-        console.error('Kunde inte läsa aktiv tävling från Firestore:', error);
-      })
-      .finally(() => {
-        hydratingCompetitionListRef.current = false;
-      });
-  }, [activeEventId, competitionsList, firebaseUserUid, isEmptySeason]);
-
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('passersi_theme') === 'dark';
@@ -559,6 +519,46 @@ export default function App() {
   const [stations, setStations] = useState<SIStation[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [runnerDb, setRunnerDb] = useState<RunnerDbEntry[]>([]);
+  useEffect(() => {
+    if (
+      !firebaseUserUid ||
+      competitionsList.length === 0 ||
+      (!isEmptySeason && competitionsList.some((item) => item.id === activeEventId)) ||
+      hydratingCompetitionListRef.current
+    ) {
+      return;
+    }
+
+    hydratingCompetitionListRef.current = true;
+    void loadFullSeasonFromFirestore()
+      .then((cloudSnap) => {
+        if (!cloudSnap) return;
+        const selectedEvent =
+          cloudSnap.events.find((event) => event.competition.id === activeEventId) ??
+          cloudSnap.events.find(
+            (event) => event.competition.id === cloudSnap.activeEventId
+          ) ??
+          cloudSnap.events[0];
+        if (!selectedEvent) return;
+
+        setActiveEventId(selectedEvent.competition.id);
+        setCompetition(selectedEvent.competition);
+        setCourses(selectedEvent.courses);
+        setClasses(selectedEvent.classes);
+        setCompetitors(selectedEvent.competitors);
+        setRunnerDb(cloudSnap.runnerDb ?? []);
+        setClubSettings(cloudSnap.clubSettings);
+        setDemoCleared(cloudSnap.demoCleared);
+        setIsEmptySeason(false);
+      })
+      .catch((error: unknown) => {
+        console.error('Kunde inte läsa aktiv tävling från Firestore:', error);
+      })
+      .finally(() => {
+        hydratingCompetitionListRef.current = false;
+      });
+  }, [activeEventId, competitionsList, firebaseUserUid, isEmptySeason]);
+
   const [eventor, setEventor] = useState<EventorIntegrationStatus>({
     apiKeyConfigured: false,
     baseUrl: 'https://eventor.orientering.se/api',
