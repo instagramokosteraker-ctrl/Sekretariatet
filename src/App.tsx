@@ -92,6 +92,7 @@ import {
   loadFullSeasonFromFirestore,
   subscribeFirebaseAuth,
   syncFullSeasonToFirestore,
+  createCompetitionInFirestore,
   auth,
   googleProvider,
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
@@ -257,6 +258,7 @@ export default function App() {
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (u) => {
       if (u) {
+        setFirebaseUserPresent(true);
         try {
           const token = await u.getIdToken();
           const emailLower = (u.email ?? '').toLowerCase();
@@ -283,6 +285,7 @@ export default function App() {
           // If token fetch fails, preserve existing session
         }
       } else {
+        setFirebaseUserPresent(false);
         const existing = getStoredAuthSession();
         if (!existing || existing.user.authMethod === 'GOOGLE') {
           setStoredAuthSession(null);
@@ -795,7 +798,7 @@ export default function App() {
     void (async () => {
       try {
         const cloudSnap = await loadFullSeasonFromFirestore();
-        if (cloudSnap) {
+        if (cloudSnap && Array.isArray(cloudSnap.events) && cloudSnap.events.length > 0) {
           const res = await apiFetch('/api/system/cloud-hydrate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -805,6 +808,16 @@ export default function App() {
             const hydrated = (await res.json()) as MeosAppState;
             applySnapshot(hydrated);
             return;
+          }
+        } else {
+          // If Firestore is empty, export local season and populate Firestore immediately
+          const expRes = await apiFetch('/api/system/cloud-export');
+          if (expRes.ok) {
+            const currentSnap = (await expRes.json()) as CloudSeasonSnapshot;
+            await syncFullSeasonToFirestore(
+              currentSnap,
+              authSession.user.adminTier === 'SUPER_ADMIN'
+            );
           }
         }
         setIsFreshColdStart(false);
@@ -947,11 +960,33 @@ export default function App() {
       });
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setCreateEvtError(err.error ?? 'Kunde inte skapa tävling.');
-        return;
+        throw new Error(err.error ?? 'Kunde inte skapa tävling via servern.');
       }
       const snap = (await res.json()) as MeosAppState;
       applySnapshot(snap);
+
+      // ATOMIC FIRESTORE STORAGE: Guarantees all 23 schema fields without undefined
+      if (auth.currentUser) {
+        const compId = snap.competition.id || snap.activeEventId || `evt-${Date.now()}`;
+        const sc = snap.competition.shortCode || 'oko26';
+        await createCompetitionInFirestore({
+          competitionId: compId,
+          shortCode: sc,
+          name: snap.competition.name,
+          organizer: snap.competition.organizer || clubSettings.clubName || 'OK Österåker',
+          date: snap.competition.date,
+          status: snap.competition.status || 'UPCOMING',
+          zeroTimeStr: snap.competition.zeroTimeStr || '18:00:00',
+          zeroTimeSec: snap.competition.zeroTimeSec,
+          arenaInfo: snap.competition.arenaInfo || '',
+          seriesName: snap.competition.seriesName || '',
+          allowSelfRegistration: snap.competition.allowSelfRegistration,
+          enableFeesAndSwish: snap.competition.enableFeesAndSwish,
+          courses: snap.courses,
+          classes: snap.classes,
+        });
+      }
+
       setSelectedRunnerId(null);
       setPendingUnknownReadout(null);
       setNewEvtName('');
@@ -963,6 +998,26 @@ export default function App() {
       setNewEvtFreeStart(true);
       setCreateEventModalOpen(false);
       setEventPickerOpen(false);
+
+      // Trigger full season sync to keep Firestore collections aligned
+      void (async () => {
+        try {
+          const expRes = await apiFetch('/api/system/cloud-export');
+          if (expRes.ok) {
+            const currentSnap = (await expRes.json()) as CloudSeasonSnapshot;
+            await syncFullSeasonToFirestore(
+              currentSnap,
+              authSession?.user.adminTier === 'SUPER_ADMIN'
+            );
+          }
+        } catch {
+          // ignore
+        }
+      })();
+    } catch (err: unknown) {
+      console.error('Kunde inte skapa tävling:', err);
+      const technicalMsg = err instanceof Error ? err.message : String(err || 'Ett tekniskt fel inträffade.');
+      setCreateEvtError(technicalMsg);
     } finally {
       setCreateEvtBusy(false);
     }

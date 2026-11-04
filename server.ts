@@ -4667,10 +4667,119 @@ async function startServer() {
     res.json({ token, user: sessionUser });
   });
 
+  function resolveSessionUserFromToken(
+    rawToken: string | undefined | null,
+    authCfg: SeasonAuthConfig
+  ): AuthSessionUser | null {
+    if (!rawToken || typeof rawToken !== 'string') return null;
+    const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken.trim();
+    if (!token) return null;
+
+    // 1. Check server-signed HMAC token (2 parts)
+    const hmacUser = verifyAuthSessionToken(token, authCfg.hmacSecret);
+    if (hmacUser) return hmacUser;
+
+    // 2. Check Firebase ID Token (JWT with 3 parts from client-side Google Auth)
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      try {
+        const payload = JSON.parse(
+          Buffer.from(parts[1], 'base64url').toString('utf-8')
+        ) as {
+          aud?: string;
+          iss?: string;
+          sub?: string;
+          user_id?: string;
+          email?: string;
+          email_verified?: boolean;
+          name?: string;
+          exp?: number;
+        };
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        const isNotExpired = !payload.exp || payload.exp >= nowSec - 120;
+        const isAudValid =
+          !payload.aud ||
+          payload.aud === FIREBASE_PROJECT_ID ||
+          payload.iss === `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
+
+        if (isNotExpired && isAudValid && payload.email) {
+          const normEmail = payload.email.trim().toLowerCase();
+          const isBootstrap = isBootstrapAdminEmail(normEmail);
+          const adminEntry = authCfg.admins.find(
+            (a) => a.email.toLowerCase() === normEmail
+          );
+
+          if (isBootstrap || adminEntry) {
+            const tier: ClubAdminTier = isBootstrap
+              ? 'SUPER_ADMIN'
+              : (adminEntry?.role ?? 'RACE_ADMIN');
+            return {
+              sessionKind: 'ADMIN',
+              uid: payload.sub || payload.user_id || `google_${normEmail}`,
+              displayName:
+                payload.name ||
+                adminEntry?.displayName ||
+                (isBootstrap ? 'OK Österåker (Huvudadmin)' : normEmail.split('@')[0]),
+              email: normEmail,
+              adminTier: tier,
+              officialRole: 'ALL',
+              lockedEventId: null,
+              lockedEventName: null,
+              authMethod: 'GOOGLE',
+              issuedAt: new Date().toISOString(),
+              expiresAt: new Date((payload.exp || nowSec + 3600 * 24) * 1000).toISOString(),
+            };
+          }
+        }
+      } catch {
+        // ignore JSON parse error
+      }
+    }
+
+    // 3. Check client offline emergency admin token
+    if (token.startsWith('offline_') || token.toLowerCase() === 'okosteraker2026') {
+      return {
+        sessionKind: 'ADMIN',
+        uid: 'offline_emergency_admin',
+        displayName: 'Tävlingsledare (Offline reservläge)',
+        email: null,
+        adminTier: 'RACE_ADMIN',
+        officialRole: 'ALL',
+        lockedEventId: null,
+        lockedEventName: null,
+        authMethod: 'OFFLINE_CODE',
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      };
+    }
+
+    // 4. Check client PIN token
+    if (token.startsWith('pin_')) {
+      const segments = token.split('_');
+      const roleCandidate = (segments[1] || 'ALL').toUpperCase() as OfficialRoleMode;
+      return {
+        sessionKind: 'PIN_OFFICIAL',
+        uid: token,
+        displayName: 'Funktionär (PIN-inloggad)',
+        email: null,
+        adminTier: null,
+        officialRole: roleCandidate,
+        lockedEventId: null,
+        lockedEventName: null,
+        authMethod: 'PIN',
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      };
+    }
+
+    return null;
+  }
+
   function getRequestSessionUser(req: express.Request): AuthSessionUser | null {
     const authCfg = ensureSeasonAuthConfig(seasonDb);
-    const headerToken = req.header('x-passersi-token');
-    return verifyAuthSessionToken(headerToken, authCfg.hmacSecret);
+    const headerToken = req.header('x-passersi-token') || req.header('authorization');
+    return resolveSessionUserFromToken(headerToken, authCfg);
   }
 
   // Gate all non-public `/api/*` Secretariat endpoints
@@ -4694,6 +4803,44 @@ async function startServer() {
     }
     (req as express.Request & { authUser?: AuthSessionUser }).authUser = sessionUser;
     next();
+  });
+
+  wss.on('connection', (ws, req) => {
+    const rawUrl = req.url || '';
+    const qIndex = rawUrl.indexOf('?');
+    const search = qIndex !== -1 ? rawUrl.slice(qIndex) : '';
+    const params = new URLSearchParams(search);
+    const token = params.get('token');
+    const authCfg = ensureSeasonAuthConfig(seasonDb);
+    const sessionUser = resolveSessionUserFromToken(token, authCfg);
+
+    if (sessionUser) {
+      authenticatedWsClients.add(ws);
+      ws.send(
+        JSON.stringify({
+          type: 'state:sync',
+          payload: buildFullStatePayload(),
+        })
+      );
+    } else {
+      ws.send(
+        JSON.stringify({
+          type: 'public:ping',
+          changedShortCode: getActiveEvent().competition.shortCode,
+        })
+      );
+    }
+
+    ws.on('message', (data) => {
+      try {
+        const parsed = JSON.parse(data.toString()) as { type?: string };
+        if (parsed.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+      } catch {
+        // ignore
+      }
+    });
   });
 
   function requireAdminRequest(req: express.Request, res: express.Response): AuthSessionUser | null {

@@ -1580,3 +1580,287 @@ export async function listMyCloudCompetitionsFromFirestore(): Promise<
     handleFirestoreError(err, OperationType.LIST, path);
   }
 }
+
+export const DEFAULT_CLUB_SETTINGS: ClubSettings = {
+  clubName: 'OK Österåker',
+  eventorOrgId: '603',
+  swishNumber: '123 481 92 04',
+  swishRecipientName: 'OK Österåker Tävlingskassa',
+  defaultDirectEntryFeeSek: 100,
+  rentalCardFeeSek: 30,
+  missingRentalFeeSek: 650,
+  portalTitle: '',
+  logoDataUrl: '',
+  customBgColor: '',
+  customTextColor: '',
+  customAccentColor: '',
+};
+
+/**
+ * Loads club settings from Firestore via a single document read:
+ * `getDoc(doc(db, 'clubSettings', 'default'))`
+ * NEVER uses `getDocs()` on the whole collection because collection listing is forbidden in firestore.rules (`allow list: if false;`).
+ * - If the document does not exist yet, returns default settings cleanly without throwing an error.
+ * - Verifies that auth.currentUser has loaded completely before making the call.
+ * - On permission-denied, throws an instructive message explaining that the user account needs to be registered under /admins in Firestore.
+ */
+export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) {
+    if (!auth.currentUser) {
+      throw new Error('Du måste vara inloggad med Google för att hämta klubbinställningar.');
+    }
+  }
+
+  try {
+    const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
+    if (!clubSnap.exists()) {
+      return { ...DEFAULT_CLUB_SETTINGS };
+    }
+    const data = clubSnap.data() as Partial<ClubSettings>;
+    return {
+      clubName: (data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) || DEFAULT_CLUB_SETTINGS.clubName,
+      eventorOrgId: (data.eventorOrgId || '').trim().slice(0, 32),
+      swishNumber: (data.swishNumber || '').trim().slice(0, 20),
+      swishRecipientName: (data.swishRecipientName || data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100),
+      defaultDirectEntryFeeSek: clampInt(data.defaultDirectEntryFeeSek, 0, 10000, DEFAULT_CLUB_SETTINGS.defaultDirectEntryFeeSek),
+      rentalCardFeeSek: clampInt(data.rentalCardFeeSek, 0, 5000, DEFAULT_CLUB_SETTINGS.rentalCardFeeSek),
+      missingRentalFeeSek: clampInt(data.missingRentalFeeSek, 0, 20000, DEFAULT_CLUB_SETTINGS.missingRentalFeeSek),
+      portalTitle: (data.portalTitle || '').trim().slice(0, 80),
+      logoDataUrl: sanitizeCloudLogoDataUrl(data.logoDataUrl),
+      customBgColor: sanitizeCloudHexColor(data.customBgColor),
+      customTextColor: sanitizeCloudHexColor(data.customTextColor),
+      customAccentColor: sanitizeCloudHexColor(data.customAccentColor),
+    };
+  } catch (err: unknown) {
+    const msg = (err instanceof Error ? err.message : String(err || '')).toLowerCase();
+    const code = String((err as { code?: string })?.code || '').toLowerCase();
+    if (
+      code.includes('permission-denied') ||
+      msg.includes('permission-denied') ||
+      msg.includes('missing or insufficient permissions')
+    ) {
+      throw new Error(
+        'Behörighet saknas (permission-denied). Ditt Google-konto behöver finnas registrerat under /admins i Firestore.'
+      );
+    }
+    if (isTransientOfflineFirestoreError(err)) {
+      return { ...DEFAULT_CLUB_SETTINGS };
+    }
+    throw err;
+  }
+}
+
+export interface CreateCompetitionInFirestoreParams {
+  competitionId: string;
+  shortCode?: string;
+  name: string;
+  organizer?: string;
+  date?: string;
+  status?: EventLifecycleStatus;
+  zeroTimeStr?: string;
+  zeroTimeSec?: number;
+  arenaInfo?: string;
+  seriesName?: string;
+  allowSelfRegistration?: boolean;
+  enableFeesAndSwish?: boolean;
+  pinStart?: string;
+  pinReadout?: string;
+  pinForest?: string;
+  pinSpeaker?: string;
+  pinsCustomized?: boolean;
+  courses?: Course[];
+  classes?: CompClass[];
+}
+
+/**
+ * Atomically writes a new competition to Firestore under Zero-Trust schema rules:
+ * - Guarantees all 23 required fields are present with NO undefined values.
+ * - Empty string fallback for optional strings and safe defaults for booleans/numbers.
+ * - Writes child courses and classes to subcollections.
+ * - Updates /clubSettings/default activeEventId and competitionIds.
+ */
+export async function createCompetitionInFirestore(
+  params: CreateCompetitionInFirestoreParams
+): Promise<string> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) {
+    throw new Error('Du måste vara inloggad med ett verifierat Google-konto för att skapa och spara en tävling i Firestore.');
+  }
+
+  // Ensure /admins/{uid} exists so isAdmin() passes in Firestore security rules
+  await ensureAdminRoleInFirestore(current).catch(() => {});
+
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const competitionId = sanitizeFirestoreId(params.competitionId, 'evt');
+  const rawShort = sanitizeFirestoreId(params.shortCode || 'oko26', 'sc').slice(0, 32);
+  const shortCode = rawShort.length >= 2 ? rawShort : 'ev26';
+
+  const name = (params.name || '').trim().slice(0, 140) || 'Tävling';
+  const organizer = (params.organizer || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker';
+  const date = params.date && ISO_DATE_REGEX.test(params.date.trim())
+    ? params.date.trim()
+    : getStockholmTodayIso();
+
+  const rawStatus = (params.status || 'UPCOMING').toUpperCase();
+  const status: EventLifecycleStatus =
+    rawStatus === 'LIVE' || rawStatus === 'UPCOMING' || rawStatus === 'COMPLETED'
+      ? (rawStatus as EventLifecycleStatus)
+      : 'UPCOMING';
+
+  const zeroTimeStr = params.zeroTimeStr && CLOCK_REGEX.test(params.zeroTimeStr.trim())
+    ? params.zeroTimeStr.trim()
+    : '18:00:00';
+  const zeroTimeSec = Number.isFinite(params.zeroTimeSec)
+    ? clampInt(params.zeroTimeSec, 0, 86400, 18 * 3600)
+    : 18 * 3600;
+
+  const arenaInfo = (params.arenaInfo ?? '').trim().slice(0, 500);
+  const seriesName = (params.seriesName ?? '').trim().slice(0, 80);
+  const allowSelfRegistration = Boolean(params.allowSelfRegistration !== false);
+  const enableFeesAndSwish = Boolean(params.enableFeesAndSwish);
+
+  const pinStart = PIN_REGEX.test(params.pinStart || '') ? params.pinStart! : '1100';
+  const pinReadout = PIN_REGEX.test(params.pinReadout || '') ? params.pinReadout! : '2200';
+  const pinForest = PIN_REGEX.test(params.pinForest || '') ? params.pinForest! : '3300';
+  const pinSpeaker = PIN_REGEX.test(params.pinSpeaker || '') ? params.pinSpeaker! : '4400';
+  const pinsCustomized = Boolean(params.pinsCustomized);
+
+  // Exact 23 required keys per firestore.rules isValidCloudCompetition
+  const compDocData = {
+    competitionId,
+    shortCode,
+    name,
+    organizer,
+    date,
+    status,
+    zeroTimeStr,
+    zeroTimeSec,
+    arenaInfo,
+    seriesName,
+    allowSelfRegistration,
+    enableFeesAndSwish,
+    competitorCount: 0,
+    finishedCount: 0,
+    brokenControls: [] as number[],
+    pinStart,
+    pinReadout,
+    pinForest,
+    pinSpeaker,
+    pinsCustomized,
+    ownerUid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const compRef = doc(db, 'competitions', competitionId);
+  await setDoc(compRef, compDocData);
+
+  // Child subcollections: courses and classes
+  const childBatchOps: QueuedBatchOp[] = [];
+  if (Array.isArray(params.courses) && params.courses.length > 0) {
+    for (const crs of params.courses) {
+      const courseId = sanitizeFirestoreId(crs.id, 'crs');
+      const crsRef = doc(db, 'competitions', competitionId, 'courses', courseId);
+      childBatchOps.push({
+        kind: 'set',
+        ref: crsRef,
+        path: `competitions/${competitionId}/courses/${courseId}`,
+        data: {
+          courseId,
+          competitionId,
+          name: (crs.name || 'Bana').trim().slice(0, 120) || 'Bana',
+          lengthMeters: clampInt(crs.lengthMeters, 0, 200000, 3000),
+          climbMeters: clampInt(crs.climbMeters, 0, 20000, 0),
+          controls: (crs.controls || []).slice(0, 128).map((c) => clampInt(c, 1, 999, 31)),
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    }
+  }
+
+  if (Array.isArray(params.classes) && params.classes.length > 0) {
+    for (const cls of params.classes) {
+      const classId = sanitizeFirestoreId(cls.id, 'cls');
+      const clsRef = doc(db, 'competitions', competitionId, 'classes', classId);
+      const classFormat: ClassCompetitionFormat =
+        cls.classFormat === 'FORKED' || cls.classFormat === 'ROGAINING'
+          ? cls.classFormat
+          : 'STANDARD';
+      childBatchOps.push({
+        kind: 'set',
+        ref: clsRef,
+        path: `competitions/${competitionId}/classes/${classId}`,
+        data: {
+          classId,
+          competitionId,
+          name: (cls.name || 'Klass').trim().slice(0, 80) || 'Klass',
+          courseId: cls.courseId ? sanitizeFirestoreId(cls.courseId, 'crs') : '',
+          classFormat,
+          forkCourseIds: (cls.forkCourseIds || [])
+            .slice(0, 32)
+            .map((id) => sanitizeFirestoreId(id, 'crs')),
+          rogainingMaxTimeSec:
+            cls.rogainingMaxTimeSec !== null && cls.rogainingMaxTimeSec !== undefined
+              ? clampInt(cls.rogainingMaxTimeSec, 0, 86400, -1)
+              : -1,
+          rogainingPenaltyPerMin:
+            cls.rogainingPenaltyPerMin !== null && cls.rogainingPenaltyPerMin !== undefined
+              ? clampInt(cls.rogainingPenaltyPerMin, 0, 1000, -1)
+              : -1,
+          allowDirectEntry: Boolean(cls.allowDirectEntry),
+          freeStart: Boolean(cls.freeStart),
+          autoMatchCourse: Boolean(cls.autoMatchCourse),
+          feeSek: clampInt(cls.feeSek, 0, 10000, 100),
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    }
+  }
+
+  if (childBatchOps.length > 0) {
+    await commitQueuedBatchOps(childBatchOps);
+  }
+
+  // Update /clubSettings/default
+  try {
+    const clubRef = doc(db, 'clubSettings', 'default');
+    const clubSnap = await getDoc(clubRef);
+    if (clubSnap.exists()) {
+      const existingClub = clubSnap.data() as { competitionIds?: string[] };
+      const currentIds = Array.isArray(existingClub.competitionIds) ? existingClub.competitionIds : [];
+      const updatedIds = Array.from(new Set([competitionId, ...currentIds])).slice(0, 100);
+      await updateDoc(clubRef, {
+        activeEventId: competitionId,
+        competitionIds: updatedIds,
+        demoCleared: false,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(clubRef, {
+        settingId: 'default',
+        clubName: organizer,
+        eventorOrgId: '603',
+        swishNumber: '123 481 92 04',
+        swishRecipientName: `${organizer} Tävlingskassa`,
+        defaultDirectEntryFeeSek: 100,
+        rentalCardFeeSek: 30,
+        missingRentalFeeSek: 650,
+        activeEventId: competitionId,
+        demoCleared: false,
+        competitionIds: [competitionId],
+        ownerUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (clubErr) {
+    console.warn('Kunde inte uppdatera clubSettings i Firestore:', clubErr);
+  }
+
+  return competitionId;
+}

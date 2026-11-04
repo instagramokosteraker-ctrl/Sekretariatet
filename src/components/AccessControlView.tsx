@@ -42,12 +42,14 @@ import { formatSiNumber } from '../services/sportidentProtocol';
 import { apiFetch } from '../services/authClient';
 import {
   TOKEN_SERVICE_ACTIVATION_URL,
+  auth,
   deleteCompetitionFromFirestore,
   ensureAdminRoleInFirestore,
   ensureValidFirestoreUser,
   getStockholmTodayIso,
   isTokenServiceApiDisabled,
   listMyCloudCompetitionsFromFirestore,
+  loadClubSettingsFromFirestore,
   loadFullSeasonFromFirestore,
   removeAdminInviteFromFirestore,
   signInWithGooglePopup,
@@ -341,6 +343,27 @@ export function AccessControlView({
       if (rentalsRes.ok) {
         const rData = (await rentalsRes.json()) as { rentals?: RentalCardOverviewItem[] };
         setRentals(rData.rentals ?? []);
+      }
+
+      // Single-document read for /clubSettings/default from Firestore (never getDocs)
+      if (auth.currentUser) {
+        try {
+          const cloudSettings = await loadClubSettingsFromFirestore();
+          if (cloudSettings) {
+            setClubForm((prev) => ({
+              ...prev,
+              ...cloudSettings,
+            }));
+          }
+        } catch (cloudErr) {
+          const msg = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
+          if (msg.includes('permission-denied') || msg.includes('under /admins')) {
+            setClubNotice({
+              ok: false,
+              msg,
+            });
+          }
+        }
       }
     } catch {
       setLoadError('Kunde inte nå tävlingsservern.');
