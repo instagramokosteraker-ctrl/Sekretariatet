@@ -388,6 +388,7 @@ export default function App() {
   const [firebaseUserPresent, setFirebaseUserPresent] = useState<boolean>(false);
   const [firebaseUserUid, setFirebaseUserUid] = useState<string | null>(null);
   const firestoreCompetitionsRef = useRef<CompetitionSummary[] | null>(null);
+  const hydratingCompetitionListRef = useRef(false);
   useEffect(() => {
     const unsub = subscribeFirebaseAuth((u) => {
       const verifiedUid = u?.emailVerified ? u.uid : null;
@@ -411,6 +412,46 @@ export default function App() {
       }
     );
   }, [firebaseUserUid]);
+
+  useEffect(() => {
+    if (
+      !firebaseUserUid ||
+      competitionsList.length === 0 ||
+      (!isEmptySeason && competitionsList.some((item) => item.id === activeEventId)) ||
+      hydratingCompetitionListRef.current
+    ) {
+      return;
+    }
+
+    hydratingCompetitionListRef.current = true;
+    void loadFullSeasonFromFirestore()
+      .then((cloudSnap) => {
+        if (!cloudSnap) return;
+        const selectedEvent =
+          cloudSnap.events.find((event) => event.competition.id === activeEventId) ??
+          cloudSnap.events.find(
+            (event) => event.competition.id === cloudSnap.activeEventId
+          ) ??
+          cloudSnap.events[0];
+        if (!selectedEvent) return;
+
+        setActiveEventId(selectedEvent.competition.id);
+        setCompetition(selectedEvent.competition);
+        setCourses(selectedEvent.courses);
+        setClasses(selectedEvent.classes);
+        setCompetitors(selectedEvent.competitors);
+        setRunnerDb(cloudSnap.runnerDb ?? []);
+        setClubSettings(cloudSnap.clubSettings);
+        setDemoCleared(cloudSnap.demoCleared);
+        setIsEmptySeason(false);
+      })
+      .catch((error: unknown) => {
+        console.error('Kunde inte läsa aktiv tävling från Firestore:', error);
+      })
+      .finally(() => {
+        hydratingCompetitionListRef.current = false;
+      });
+  }, [activeEventId, competitionsList, firebaseUserUid, isEmptySeason]);
 
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -2306,7 +2347,10 @@ export default function App() {
               <div className="h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl" />
               <div className="h-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl" />
             </div>
-          ) : isEmptySeason && activeTab !== 'access' && activeTab !== 'protocol' ? (
+          ) : isEmptySeason &&
+            competitionsList.length === 0 &&
+            activeTab !== 'access' &&
+            activeTab !== 'protocol' ? (
             <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 max-w-2xl">
               <h1 className="text-lg font-display font-bold text-slate-900 dark:text-slate-100">
                 Inga aktiva tävlingar i {clubSettings.clubName}
