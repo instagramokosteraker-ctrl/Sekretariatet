@@ -387,6 +387,7 @@ export default function App() {
 
   const [firebaseUserPresent, setFirebaseUserPresent] = useState<boolean>(false);
   const [firebaseUserUid, setFirebaseUserUid] = useState<string | null>(null);
+  const firestoreCompetitionsRef = useRef<CompetitionSummary[] | null>(null);
   useEffect(() => {
     const unsub = subscribeFirebaseAuth((u) => {
       const verifiedUid = u?.emailVerified ? u.uid : null;
@@ -397,6 +398,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    firestoreCompetitionsRef.current = null;
     if (!firebaseUserUid) return;
 
     const competitionsQuery = query(
@@ -429,6 +431,7 @@ export default function App() {
             };
           })
           .sort((a, b) => b.date.localeCompare(a.date));
+        firestoreCompetitionsRef.current = competitions;
         setCompetitionsList(competitions);
       },
       (error) => {
@@ -731,7 +734,9 @@ export default function App() {
 
   const applySnapshot = useCallback((snap: MeosAppState) => {
     if (snap.activeEventId !== undefined) setActiveEventId(snap.activeEventId);
-    if (snap.competitionsList) setCompetitionsList(snap.competitionsList);
+    if (snap.competitionsList) {
+      setCompetitionsList(firestoreCompetitionsRef.current ?? snap.competitionsList);
+    }
     setIsEmptySeason(Boolean(snap.isEmptySeason));
     if (snap.isFreshColdStart !== undefined) {
       setIsFreshColdStart(Boolean(snap.isFreshColdStart));
