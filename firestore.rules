@@ -436,6 +436,56 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidCloudRunnerDbEntry(data) {
+      return data.keys().hasAll([
+          'runnerId',
+          'siNumber',
+          'cardSeries',
+          'fullName',
+          'club',
+          'birthYear',
+          'defaultClassName',
+          'eventorPersonId',
+          'eventorOrgId',
+          'source',
+          'updatedAtIso',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'runnerId',
+          'siNumber',
+          'cardSeries',
+          'fullName',
+          'club',
+          'birthYear',
+          'defaultClassName',
+          'eventorPersonId',
+          'eventorOrgId',
+          'source',
+          'updatedAtIso',
+          'ownerUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.runnerId) &&
+        data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
+        data.cardSeries is string && data.cardSeries.size() >= 1 && data.cardSeries.size() <= 24 &&
+        data.fullName is string && data.fullName.size() <= 120 &&
+        data.club is string && data.club.size() <= 100 &&
+        (data.birthYear == null || (data.birthYear is int && data.birthYear >= 1900 && data.birthYear <= 2100)) &&
+        data.defaultClassName is string && data.defaultClassName.size() <= 80 &&
+        data.eventorPersonId is string && data.eventorPersonId.size() <= 128 &&
+        data.eventorOrgId is string && data.eventorOrgId.size() <= 32 &&
+        data.source is string &&
+        (data.source == 'EVENTOR_API' || data.source == 'EVENTOR_XML' || data.source == 'MEOS_CSV' || data.source == 'LEARNED_ENTRY') &&
+        data.updatedAtIso is string && data.updatedAtIso.size() <= 40 &&
+        isValidId(data.ownerUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // 1. /admins/{userId} — Non-PII RBAC Profiles
     // =========================================================================
@@ -642,7 +692,47 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 4. /competitions/{competitionId} — Cloud-Persisted Competitions + Subcollections
+    // 4. /runnerDb/{siNumber} — Admin-only club runner database
+    // =========================================================================
+    match /runnerDb/{siNumber} {
+      allow get: if isVerifiedUser() && isAdmin() && isValidId(siNumber);
+      allow list: if isVerifiedUser() && isAdmin();
+
+      allow create: if isVerifiedUser() &&
+        isValidId(siNumber) &&
+        isValidCloudRunnerDbEntry(incoming()) &&
+        incoming().runnerId == siNumber &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+
+      allow update: if isVerifiedUser() &&
+        isValidId(siNumber) &&
+        resource != null &&
+        isValidCloudRunnerDbEntry(incoming()) &&
+        incoming().runnerId == existing().runnerId &&
+        incoming().siNumber == existing().siNumber &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'cardSeries',
+          'fullName',
+          'club',
+          'birthYear',
+          'defaultClassName',
+          'eventorPersonId',
+          'eventorOrgId',
+          'source',
+          'updatedAtIso',
+          'updatedAt'
+        ]) &&
+        isAdmin();
+    }
+
+    // =========================================================================
+    // 5. /competitions/{competitionId} — Cloud-Persisted Competitions + Subcollections
     // =========================================================================
     match /competitions/{competitionId} {
       allow get: if isValidId(competitionId);

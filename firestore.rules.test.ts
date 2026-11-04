@@ -282,6 +282,33 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     // Positive sanity check: Valid owner read succeeds
     await assertSucceeds(raceAdminCtx.firestore().doc('competitions/evt_live').get());
 
+    const runnerDbEntry = {
+      runnerId: '8500111',
+      siNumber: 8500111,
+      cardSeries: 'SI-Card 10',
+      fullName: 'Test Löpare',
+      club: 'OK Österåker',
+      birthYear: 2000,
+      defaultClassName: 'D21',
+      eventorPersonId: '',
+      eventorOrgId: '',
+      source: 'EVENTOR_XML',
+      updatedAtIso: new Date().toISOString(),
+      ownerUid: 'race_admin_1',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('runnerDb/8500111').set(runnerDbEntry)
+    );
+    await assertFails(attackerCtx.firestore().collection('runnerDb').get());
+    await assertFails(
+      raceAdminCtx.firestore().doc('runnerDb/8500111').update({
+        source: 'UNTRUSTED',
+        updatedAt: serverTimestamp(),
+      })
+    );
+
     // Readout receipts are write-once and restricted to the verified competition admin
     const receipt = {
       receiptId: 'ro_test_1',

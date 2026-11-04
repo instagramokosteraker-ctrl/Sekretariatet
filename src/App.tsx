@@ -93,13 +93,13 @@ import {
   subscribeFirebaseAuth,
   syncFullSeasonToFirestore,
   createCompetitionInFirestore,
+  saveCompetitionImportToFirestore,
   auth,
-  db,
   googleProvider,
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
+  subscribePublicCompetitionSummaries,
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
 import { ForestSafetyView } from './components/ForestSafetyView';
 import { SpeakerResultsView } from './components/SpeakerResultsView';
@@ -401,36 +401,8 @@ export default function App() {
     firestoreCompetitionsRef.current = null;
     if (!firebaseUserUid) return;
 
-    const competitionsQuery = query(
-      collection(db, 'competitions'),
-      where('ownerUid', '==', firebaseUserUid)
-    );
-
-    return onSnapshot(
-      competitionsQuery,
-      (snapshot) => {
-        const competitions = snapshot.docs
-          .map((docSnap) => {
-            const data = docSnap.data() as Partial<CompetitionSummary>;
-            return {
-              id: docSnap.id,
-              competitionId: docSnap.id,
-              shortCode: data.shortCode ?? '',
-              status: data.status ?? 'UPCOMING',
-              name: data.name ?? '',
-              organizer: data.organizer ?? '',
-              date: data.date ?? '',
-              zeroTimeStr: data.zeroTimeStr ?? '18:00:00',
-              arenaInfo: data.arenaInfo ?? '',
-              seriesName: data.seriesName,
-              allowSelfRegistration: data.allowSelfRegistration ?? true,
-              enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
-              competitorCount: data.competitorCount ?? 0,
-              finishedCount: data.finishedCount ?? 0,
-              classCount: data.classCount ?? 0,
-            };
-          })
-          .sort((a, b) => b.date.localeCompare(a.date));
+    return subscribePublicCompetitionSummaries(
+      (competitions) => {
         firestoreCompetitionsRef.current = competitions;
         setCompetitionsList(competitions);
       },
@@ -824,7 +796,7 @@ export default function App() {
             classes: activeEvt.classes,
             stations: [],
             competitors: activeEvt.competitors,
-            runnerDb: [],
+            runnerDb: cloudSnap.runnerDb ?? [],
             eventor: {
               apiKeyConfigured: false,
               baseUrl: '',
@@ -1088,6 +1060,7 @@ export default function App() {
           setCourses(targetEvt.courses);
           setClasses(targetEvt.classes);
           setCompetitors(targetEvt.competitors);
+          setRunnerDb(cloudSnap.runnerDb ?? []);
           setCompetitionsList(
             cloudSnap.events.map((e) => ({
               id: e.competition.id,
@@ -2430,11 +2403,290 @@ export default function App() {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(batch),
                     });
-                    return (await res.json()) as {
-                      addedCourses: number;
-                      addedClasses: number;
-                      addedEntries: number;
+                    const contentType = res.headers.get('content-type') || '';
+                    const responseBody = await res.text();
+                    let responseData: {
+                      error?: string;
+                      addedCourses?: number;
+                      addedClasses?: number;
+                      addedEntries?: number;
                       syncedRunnerDb?: number;
+                    } | null = null;
+                    try {
+                      const parsedResponse: unknown = JSON.parse(responseBody);
+                      if (
+                        parsedResponse !== null &&
+                        typeof parsedResponse === 'object' &&
+                        !Array.isArray(parsedResponse)
+                      ) {
+                        responseData = parsedResponse as typeof responseData;
+                      }
+                    } catch {
+                      responseData = null;
+                    }
+                    if (
+                      contentType.includes('application/json') &&
+                      res.status !== 404 &&
+                      !responseData
+                    ) {
+                      throw new Error('Importservern returnerade ett ogiltigt JSON-svar.');
+                    }
+                    if (res.ok && responseData) {
+                      if (
+                        typeof responseData.addedCourses !== 'number' ||
+                        !Number.isInteger(responseData.addedCourses) ||
+                        responseData.addedCourses < 0 ||
+                        typeof responseData.addedClasses !== 'number' ||
+                        !Number.isInteger(responseData.addedClasses) ||
+                        responseData.addedClasses < 0 ||
+                        typeof responseData.addedEntries !== 'number' ||
+                        !Number.isInteger(responseData.addedEntries) ||
+                        responseData.addedEntries < 0 ||
+                        (responseData.syncedRunnerDb !== undefined &&
+                          (typeof responseData.syncedRunnerDb !== 'number' ||
+                            !Number.isInteger(responseData.syncedRunnerDb) ||
+                            responseData.syncedRunnerDb < 0))
+                      ) {
+                        throw new Error('Importservern returnerade ofullständig statistik.');
+                      }
+                      return {
+                        addedCourses: responseData.addedCourses,
+                        addedClasses: responseData.addedClasses,
+                        addedEntries: responseData.addedEntries,
+                        syncedRunnerDb: responseData.syncedRunnerDb,
+                      };
+                    }
+                    if (!res.ok && responseData && res.status !== 404) {
+                      throw new Error(responseData.error || 'Kunde inte importera XML-filen.');
+                    }
+                    if (!res.ok && res.status !== 404) {
+                      throw new Error(
+                        responseBody.trim().slice(0, 240) || 'Kunde inte importera XML-filen.'
+                      );
+                    }
+
+                    const makeImportId = (prefix: string, index: number) =>
+                      `${prefix}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
+                    const normalizedName = (value: string) => value.trim().toLocaleLowerCase();
+                    const nextCourses = [...courses];
+                    const importedCourses: Course[] = [];
+                    for (const [index, parsed] of batch.courses.entries()) {
+                      const previous = nextCourses.find(
+                        (course) => normalizedName(course.name) === normalizedName(parsed.name)
+                      );
+                      const course: Course = {
+                        id: previous?.id || makeImportId('crs', index),
+                        name: parsed.name.trim(),
+                        lengthMeters: parsed.lengthMeters,
+                        climbMeters: parsed.climbMeters,
+                        controls: parsed.controls,
+                      };
+                      if (previous) {
+                        nextCourses[nextCourses.indexOf(previous)] = course;
+                      } else {
+                        nextCourses.push(course);
+                      }
+                      importedCourses.push(course);
+                    }
+
+                    const nextClasses = [...classes];
+                    const importedClasses: CompClass[] = [];
+                    for (const [index, parsed] of batch.classes.entries()) {
+                      const previous = nextClasses.find(
+                        (cls) => normalizedName(cls.name) === normalizedName(parsed.name)
+                      );
+                      const forkCourseIds = (parsed.forkCourseNames || [])
+                        .map(
+                          (name) =>
+                            nextCourses.find(
+                              (course) =>
+                                normalizedName(course.name) === normalizedName(name)
+                            )?.id
+                        )
+                        .filter((id): id is string => Boolean(id))
+                        .slice(0, 32);
+                      const linkedCourse = parsed.courseName
+                        ? nextCourses.find(
+                            (course) =>
+                              normalizedName(course.name) ===
+                              normalizedName(parsed.courseName || '')
+                          )
+                        : undefined;
+                      const isForked =
+                        parsed.classFormat === 'FORKED' && forkCourseIds.length > 0;
+                      const cls: CompClass = {
+                        id: previous?.id || makeImportId('cls', index),
+                        name: parsed.name.trim(),
+                        courseId: isForked
+                          ? forkCourseIds[0]
+                          : linkedCourse?.id || previous?.courseId || nextCourses[0]?.id || null,
+                        classFormat: isForked ? 'FORKED' : 'STANDARD',
+                        forkCourseIds: isForked ? forkCourseIds : [],
+                        allowDirectEntry: previous?.allowDirectEntry ?? true,
+                        freeStart: parsed.freeStart ?? previous?.freeStart ?? false,
+                        autoMatchCourse: isForked
+                          ? true
+                          : Boolean(
+                              parsed.autoMatchCourse ??
+                                previous?.autoMatchCourse ??
+                                parsed.freeStart
+                            ),
+                        feeSek: previous?.feeSek ?? clubSettings.defaultDirectEntryFeeSek,
+                      };
+                      if (previous) {
+                        nextClasses[nextClasses.indexOf(previous)] = cls;
+                      } else {
+                        nextClasses.push(cls);
+                      }
+                      importedClasses.push(cls);
+                    }
+
+                    let nextBib =
+                      competitors.reduce((max, competitor) => Math.max(max, competitor.bib), 500) +
+                      1;
+                    const nextCompetitors = [...competitors];
+                    const importedCompetitors: Competitor[] = [];
+                    for (const entry of batch.entries) {
+                      let targetClass = nextClasses.find(
+                        (cls) => normalizedName(cls.name) === normalizedName(entry.className)
+                      );
+                      if (!targetClass) {
+                        targetClass = {
+                          id: makeImportId('cls', nextClasses.length),
+                          name: entry.className.trim(),
+                          courseId: nextCourses[0]?.id || null,
+                          classFormat: 'STANDARD',
+                          forkCourseIds: [],
+                          allowDirectEntry: true,
+                          freeStart: false,
+                          autoMatchCourse: false,
+                          feeSek: clubSettings.defaultDirectEntryFeeSek,
+                        };
+                        nextClasses.push(targetClass);
+                        importedClasses.push(targetClass);
+                      }
+                      const siNumber =
+                        entry.siNumber > 0 ? entry.siNumber : 8900000 + nextBib;
+                      if (nextCompetitors.some((competitor) => competitor.siNumber === siNumber)) {
+                        continue;
+                      }
+                      const bib = nextBib++;
+                      const competitor: Competitor = {
+                        id: makeImportId('cmp', importedCompetitors.length),
+                        bib,
+                        fullName: entry.fullName.trim(),
+                        club: entry.club.trim(),
+                        classId: targetClass.id,
+                        siNumber,
+                        cardSeries: inferCardSeries(siNumber),
+                        isRentalCard: entry.siNumber <= 0,
+                        rentalReturned: false,
+                        isSelfRegistered: false,
+                        feePaid: false,
+                        status: 'REGISTERED',
+                        allocatedStartSec: Math.min(86400, competition.zeroTimeSec + bib * 30),
+                        checkTimeSec: null,
+                        startTimeSec: null,
+                        finishTimeSec: null,
+                        runningTimeSec: null,
+                        lastSeenControl: null,
+                        lastSeenTimeSec: null,
+                        readoutAt: null,
+                        radioSplits: [],
+                        cardPunches: [],
+                        validation: null,
+                      };
+                      nextCompetitors.push(competitor);
+                      importedCompetitors.push(competitor);
+                    }
+
+                    const runnerDbImports = new Map<number, RunnerDbEntry>();
+                    for (const entry of batch.entries) {
+                      if (entry.siNumber > 0) {
+                        runnerDbImports.set(entry.siNumber, {
+                          id: String(entry.siNumber),
+                          siNumber: entry.siNumber,
+                          cardSeries: inferCardSeries(entry.siNumber),
+                          fullName: entry.fullName.trim(),
+                          club: entry.club.trim(),
+                          birthYear: null,
+                          defaultClassName: entry.className || null,
+                          eventorPersonId: null,
+                          eventorOrgId: clubSettings.eventorOrgId || null,
+                          source: 'EVENTOR_XML',
+                          updatedAt: new Date().toISOString(),
+                        });
+                      }
+                    }
+                    for (const entry of batch.runnerDbEntries) {
+                      if (entry.siNumber > 0) {
+                        runnerDbImports.set(entry.siNumber, {
+                          id: String(entry.siNumber),
+                          siNumber: entry.siNumber,
+                          cardSeries: inferCardSeries(entry.siNumber),
+                          fullName: entry.fullName.trim(),
+                          club: entry.club.trim(),
+                          birthYear: entry.birthYear ?? null,
+                          defaultClassName: entry.defaultClassName ?? null,
+                          eventorPersonId: entry.eventorPersonId ?? null,
+                          eventorOrgId: clubSettings.eventorOrgId || null,
+                          source: 'EVENTOR_XML',
+                          updatedAt: new Date().toISOString(),
+                        });
+                      }
+                    }
+                    const importedRunnerDbEntries = Array.from(runnerDbImports.values());
+                    const nextRunnerDb = [...runnerDb];
+                    for (const entry of importedRunnerDbEntries) {
+                      const previousIndex = nextRunnerDb.findIndex(
+                        (candidate) => candidate.siNumber === entry.siNumber
+                      );
+                      if (previousIndex >= 0) {
+                        nextRunnerDb[previousIndex] = {
+                          ...nextRunnerDb[previousIndex],
+                          ...entry,
+                          birthYear:
+                            entry.birthYear ?? nextRunnerDb[previousIndex].birthYear,
+                          defaultClassName:
+                            entry.defaultClassName ??
+                            nextRunnerDb[previousIndex].defaultClassName,
+                          eventorPersonId:
+                            entry.eventorPersonId ??
+                            nextRunnerDb[previousIndex].eventorPersonId,
+                        };
+                      } else {
+                        nextRunnerDb.push(entry);
+                      }
+                    }
+
+                    await saveCompetitionImportToFirestore({
+                      competitionId: activeEventId,
+                      courses: importedCourses,
+                      classes: importedClasses,
+                      competitors: importedCompetitors,
+                      runnerDbEntries: importedRunnerDbEntries,
+                      competitorCount: nextCompetitors.length,
+                    });
+                    setCourses(nextCourses);
+                    setClasses(nextClasses);
+                    setCompetitors(nextCompetitors);
+                    setRunnerDb(nextRunnerDb);
+                    setCompetitionsList((current) =>
+                      current.map((item) =>
+                        item.id === activeEventId
+                          ? { ...item, competitorCount: nextCompetitors.length }
+                          : item
+                      )
+                    );
+                    return {
+                      addedCourses: importedCourses.filter(
+                        (course) => !courses.some((existing) => existing.id === course.id)
+                      ).length,
+                      addedClasses: importedClasses.filter(
+                        (cls) => !classes.some((existing) => existing.id === cls.id)
+                      ).length,
+                      addedEntries: importedCompetitors.length,
+                      syncedRunnerDb: importedRunnerDbEntries.length,
                     };
                   }}
                 />

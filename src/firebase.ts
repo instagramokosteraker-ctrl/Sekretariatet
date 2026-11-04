@@ -42,6 +42,7 @@ import type {
   EventLifecycleStatus,
   FullCardReadoutPayload,
   PublicRacePayload,
+  RunnerDbEntry,
   RunnerStatus,
   SICardSeries,
 } from './types/sportident';
@@ -1305,6 +1306,7 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
       demoCleared: Boolean(clubData?.demoCleared),
       clubSettings,
       events: [],
+      runnerDb: await loadRunnerDbFromFirestore(),
     };
   }
 
@@ -1540,7 +1542,277 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     demoCleared: Boolean(clubData?.demoCleared),
     clubSettings,
     events,
+    runnerDb: await loadRunnerDbFromFirestore(),
   };
+}
+
+async function loadRunnerDbFromFirestore(): Promise<RunnerDbEntry[]> {
+  const current = auth.currentUser;
+  if (!current?.emailVerified) return [];
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (current.email || '').toLowerCase()
+  );
+  const adminSnap = isBootstrapAdmin
+    ? null
+    : await getDoc(doc(db, 'admins', sanitizeFirestoreId(current.uid, 'usr')));
+  const role = adminSnap?.exists() ? adminSnap.data().role : null;
+  if (!isBootstrapAdmin && role !== 'RACE_ADMIN' && role !== 'SUPER_ADMIN') return [];
+
+  const runnerSnap = await getDocs(collection(db, 'runnerDb'));
+  return runnerSnap.docs.flatMap((runnerDoc) => {
+    const data = runnerDoc.data();
+    const siNumber = Number(data.siNumber);
+    if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999) return [];
+    const cardSeries = [
+      'SI-Card 5',
+      'SI-Card 6',
+      'SI-Card 8',
+      'SI-Card 9',
+      'SI-Card 10',
+      'SI-Card 11',
+      'SIAC Air+',
+    ].includes(data.cardSeries)
+      ? (data.cardSeries as SICardSeries)
+      : 'SI-Card 10';
+    const source =
+      data.source === 'EVENTOR_API' ||
+      data.source === 'EVENTOR_XML' ||
+      data.source === 'MEOS_CSV'
+        ? data.source
+        : 'LEARNED_ENTRY';
+    return [
+      {
+        id: runnerDoc.id,
+        siNumber,
+        cardSeries,
+        fullName: String(data.fullName || ''),
+        club: String(data.club || ''),
+        birthYear:
+          typeof data.birthYear === 'number' && Number.isInteger(data.birthYear)
+            ? data.birthYear
+            : null,
+        defaultClassName:
+          typeof data.defaultClassName === 'string' ? data.defaultClassName : null,
+        eventorPersonId: typeof data.eventorPersonId === 'string' ? data.eventorPersonId : null,
+        eventorOrgId: typeof data.eventorOrgId === 'string' ? data.eventorOrgId : null,
+        source,
+        updatedAt:
+          typeof data.updatedAtIso === 'string' ? data.updatedAtIso : new Date(0).toISOString(),
+      },
+    ];
+  });
+}
+
+export async function saveCompetitionImportToFirestore(params: {
+  competitionId: string;
+  courses: Course[];
+  classes: CompClass[];
+  competitors: Competitor[];
+  runnerDbEntries: RunnerDbEntry[];
+  competitorCount: number;
+}): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Importen kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
+  const adminSnap = await getDoc(doc(db, 'admins', sanitizeFirestoreId(current.uid, 'usr')));
+  const role = adminSnap.exists() ? adminSnap.data().role : null;
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (current.email || '').toLowerCase()
+  );
+  if (!isBootstrapAdmin && role !== 'RACE_ADMIN' && role !== 'SUPER_ADMIN') {
+    throw new Error('Ditt Google-konto saknar administratörsbehörighet för Firestore-import.');
+  }
+
+  const competitionId = sanitizeFirestoreId(params.competitionId, 'evt');
+  const competitionRef = doc(db, 'competitions', competitionId);
+  const competitionSnap = await getDoc(competitionRef);
+  if (!competitionSnap.exists()) {
+    throw new Error('Tävlingen hittades inte i Firestore.');
+  }
+  const competitionData = competitionSnap.data();
+  const isSuperAdmin = isBootstrapAdmin || role === 'SUPER_ADMIN';
+  if (competitionData.ownerUid !== current.uid && !isSuperAdmin) {
+    throw new Error('Du saknar behörighet att importera data till den här tävlingen.');
+  }
+  if (competitionData.status === 'COMPLETED' && !isSuperAdmin) {
+    throw new Error('Import kan inte göras till en avslutad tävling.');
+  }
+
+  const operations: Array<{
+    ref: DocumentReference;
+    existing: boolean;
+    mutable: Record<string, unknown>;
+    createData: Record<string, unknown>;
+  }> = [];
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const nowFields = { createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+
+  const addOperation = async (
+    collectionName: 'courses' | 'classes' | 'competitors',
+    id: string,
+    mutable: Record<string, unknown>,
+    createData: Record<string, unknown>
+  ) => {
+    const ref = doc(db, 'competitions', competitionId, collectionName, id);
+    const snap = await getDoc(ref);
+    if (snap.exists() && snap.data().ownerUid !== ownerUid && !isSuperAdmin) {
+      throw new Error('Importerad data tillhör ett annat konto.');
+    }
+    operations.push({ ref, existing: snap.exists(), mutable, createData });
+  };
+
+  for (const course of params.courses) {
+    const id = sanitizeFirestoreId(course.id, 'crs');
+    const mutable = {
+      name: (course.name || 'Bana').trim().slice(0, 120) || 'Bana',
+      lengthMeters: clampInt(course.lengthMeters, 0, 200000, 0),
+      climbMeters: clampInt(course.climbMeters, 0, 20000, 0),
+      controls: (course.controls || []).slice(0, 128).map((code) => clampInt(code, 1, 999, 31)),
+    };
+    await addOperation('courses', id, mutable, {
+      courseId: id,
+      competitionId,
+      ...mutable,
+      ownerUid,
+      ...nowFields,
+    });
+  }
+
+  for (const cls of params.classes) {
+    const id = sanitizeFirestoreId(cls.id, 'cls');
+    const classFormat: ClassCompetitionFormat =
+      cls.classFormat === 'FORKED' || cls.classFormat === 'ROGAINING'
+        ? cls.classFormat
+        : 'STANDARD';
+    const mutable = {
+      name: (cls.name || 'Klass').trim().slice(0, 80) || 'Klass',
+      courseId: cls.courseId ? sanitizeFirestoreId(cls.courseId, 'crs') : '',
+      classFormat,
+      forkCourseIds: (cls.forkCourseIds || [])
+        .slice(0, 32)
+        .map((courseId) => sanitizeFirestoreId(courseId, 'crs')),
+      rogainingMaxTimeSec:
+        cls.rogainingMaxTimeSec !== null && cls.rogainingMaxTimeSec !== undefined
+          ? clampInt(cls.rogainingMaxTimeSec, 0, 86400, -1)
+          : -1,
+      rogainingPenaltyPerMin:
+        cls.rogainingPenaltyPerMin !== null && cls.rogainingPenaltyPerMin !== undefined
+          ? clampInt(cls.rogainingPenaltyPerMin, 0, 1000, -1)
+          : -1,
+      allowDirectEntry: Boolean(cls.allowDirectEntry),
+      freeStart: Boolean(cls.freeStart),
+      autoMatchCourse: Boolean(cls.autoMatchCourse),
+      feeSek: clampInt(cls.feeSek, 0, 10000, 100),
+    };
+    await addOperation('classes', id, mutable, {
+      classId: id,
+      competitionId,
+      ...mutable,
+      ownerUid,
+      ...nowFields,
+    });
+  }
+
+  for (const competitor of params.competitors) {
+    const id = sanitizeFirestoreId(competitor.id, 'cmp');
+    const punches = (competitor.rawReadout?.punches ?? competitor.cardPunches ?? []).slice(0, 192);
+    const mutable = {
+      bib: clampInt(competitor.bib, 1, 99999, 1),
+      fullName: (competitor.fullName || 'Deltagare').trim().slice(0, 120) || 'Deltagare',
+      club: (competitor.club || 'Klubblös').trim().slice(0, 100) || 'Klubblös',
+      classId: sanitizeFirestoreId(competitor.classId || 'cls_open', 'cls'),
+      siNumber: clampInt(competitor.siNumber, 1, 99999999, 1000),
+      cardSeries: competitor.cardSeries || 'SI-Card 10',
+      isRentalCard: Boolean(competitor.isRentalCard),
+      rentalReturned: Boolean(competitor.rentalReturned),
+      isSelfRegistered: Boolean(competitor.isSelfRegistered),
+      feePaid: Boolean(competitor.feePaid),
+      status: competitor.status || 'REGISTERED',
+      allocatedStartSec: encodeNullableSec(competitor.allocatedStartSec),
+      checkTimeSec: encodeNullableSec(competitor.checkTimeSec),
+      startTimeSec: encodeNullableSec(competitor.startTimeSec),
+      finishTimeSec: encodeNullableSec(competitor.finishTimeSec),
+      manualFinishTimeSec: encodeNullableSec(competitor.manualFinishTimeSec),
+      runningTimeSec: encodeNullableSec(competitor.runningTimeSec),
+      readoutAtIso: (competitor.readoutAt || '').slice(0, 40),
+      punchCodes: punches.map((punch) => clampInt(punch.code, 1, 999, 31)),
+      punchTimes: punches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
+    };
+    await addOperation('competitors', id, mutable, {
+      competitorId: id,
+      competitionId,
+      ...mutable,
+      ownerUid,
+      ...nowFields,
+    });
+  }
+
+  for (const runner of params.runnerDbEntries) {
+    if (!Number.isInteger(runner.siNumber) || runner.siNumber < 1 || runner.siNumber > 99999999) {
+      continue;
+    }
+    const id = String(runner.siNumber);
+    const ref = doc(db, 'runnerDb', id);
+    const snap = await getDoc(ref);
+    const mutable = {
+      siNumber: runner.siNumber,
+      cardSeries: runner.cardSeries,
+      fullName: (runner.fullName || '').trim().slice(0, 120),
+      club: (runner.club || '').trim().slice(0, 100),
+      birthYear:
+        runner.birthYear !== null &&
+        runner.birthYear !== undefined &&
+        Number.isInteger(runner.birthYear)
+          ? runner.birthYear
+          : null,
+      defaultClassName: (runner.defaultClassName || '').trim().slice(0, 80),
+      eventorPersonId: (runner.eventorPersonId || '').trim().slice(0, 128),
+      eventorOrgId: (runner.eventorOrgId || '').trim().slice(0, 32),
+      source: runner.source,
+      updatedAtIso: runner.updatedAt,
+    };
+    if (snap.exists()) {
+      operations.push({ ref, existing: true, mutable, createData: {} });
+    } else {
+      operations.push({
+        ref,
+        existing: false,
+        mutable,
+        createData: {
+          runnerId: id,
+          ...mutable,
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    }
+  }
+
+  for (let offset = 0; offset < operations.length; offset += 400) {
+    const batch = writeBatch(db);
+    for (const operation of operations.slice(offset, offset + 400)) {
+      if (operation.existing) {
+        batch.update(operation.ref, {
+          ...operation.mutable,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch.set(operation.ref, operation.createData);
+      }
+    }
+    await batch.commit();
+  }
+
+  await updateDoc(competitionRef, {
+    competitorCount: clampInt(params.competitorCount, 0, 50000, 0),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function submitReadoutToFirestore(
@@ -1908,17 +2180,30 @@ export async function loadPublicRaceFromFirestore(
   };
 }
 
-export async function listMyCloudCompetitionsFromFirestore(): Promise<
+export async function listClubCloudCompetitionsFromFirestore(): Promise<
   CloudCompetitionRecord[]
 > {
   const current = await ensureValidFirestoreUser();
   if (!current) return [];
-  const path = 'competitions';
+  const path = 'clubSettings/default';
   try {
-    const q = query(collection(db, 'competitions'), where('ownerUid', '==', current.uid));
-    const snap = await getDocs(q);
-    return snap.docs.map((d) => {
-      const data = d.data() as {
+    const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
+    const clubData = clubSnap.exists()
+      ? (clubSnap.data() as { competitionIds?: unknown })
+      : null;
+    const competitionIds = Array.isArray(clubData?.competitionIds)
+      ? Array.from(
+          new Set(
+            clubData.competitionIds.filter(
+              (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
+            )
+          )
+        )
+      : [];
+
+    const toRecord = (
+      id: string,
+      data: {
         competitionId: string;
         shortCode: string;
         name: string;
@@ -1931,25 +2216,79 @@ export async function listMyCloudCompetitionsFromFirestore(): Promise<
         finishedCount: number;
         ownerUid: string;
         updatedAt?: Timestamp;
-      };
-      return {
-        competitionId: data.competitionId,
-        shortCode: data.shortCode,
-        name: data.name,
-        organizer: data.organizer,
-        date: data.date,
-        status: data.status,
-        seriesName: data.seriesName || '',
-        enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
-        competitorCount: data.competitorCount,
-        finishedCount: data.finishedCount,
-        ownerUid: data.ownerUid,
-        updatedAtIso:
-          data.updatedAt && typeof data.updatedAt.toDate === 'function'
-            ? data.updatedAt.toDate().toISOString()
-            : null,
-      };
+      }
+    ): CloudCompetitionRecord => ({
+      competitionId: data.competitionId || id,
+      shortCode: data.shortCode,
+      name: data.name,
+      organizer: data.organizer,
+      date: data.date,
+      status: data.status,
+      seriesName: data.seriesName || '',
+      enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
+      competitorCount: data.competitorCount,
+      finishedCount: data.finishedCount,
+      ownerUid: data.ownerUid,
+      updatedAtIso:
+        data.updatedAt && typeof data.updatedAt.toDate === 'function'
+          ? data.updatedAt.toDate().toISOString()
+          : null,
     });
+
+    if (competitionIds.length > 0) {
+      const competitionSnapshots = await Promise.all(
+        competitionIds.map((competitionId) =>
+          getDoc(doc(db, 'competitions', competitionId))
+        )
+      );
+      return competitionSnapshots
+        .filter((snapshot) => snapshot.exists())
+        .map((snapshot) =>
+          toRecord(
+            snapshot.id,
+            snapshot.data() as {
+              competitionId: string;
+              shortCode: string;
+              name: string;
+              organizer: string;
+              date: string;
+              status: EventLifecycleStatus;
+              seriesName?: string;
+              enableFeesAndSwish?: boolean;
+              competitorCount: number;
+              finishedCount: number;
+              ownerUid: string;
+              updatedAt?: Timestamp;
+            }
+          )
+        )
+        .sort((a, b) => b.date.localeCompare(a.date));
+    }
+
+    const ownCompetitions = await getDocs(
+      query(collection(db, 'competitions'), where('ownerUid', '==', current.uid))
+    );
+    return ownCompetitions.docs
+      .map((snapshot) =>
+        toRecord(
+          snapshot.id,
+          snapshot.data() as {
+            competitionId: string;
+            shortCode: string;
+            name: string;
+            organizer: string;
+            date: string;
+            status: EventLifecycleStatus;
+            seriesName?: string;
+            enableFeesAndSwish?: boolean;
+            competitorCount: number;
+            finishedCount: number;
+            ownerUid: string;
+            updatedAt?: Timestamp;
+          }
+        )
+      )
+      .sort((a, b) => b.date.localeCompare(a.date));
   } catch (err) {
     if (isTransientOfflineFirestoreError(err)) {
       if (isTokenServiceError(err)) {

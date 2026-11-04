@@ -527,4 +527,5 @@ export interface CloudSeasonSnapshot {
   demoCleared: boolean;
   clubSettings: ClubSettings;
   events: CloudEventExportItem[];
+  runnerDb?: RunnerDbEntry[];
 }

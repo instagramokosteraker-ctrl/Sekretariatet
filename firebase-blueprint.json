@@ -842,6 +842,91 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "RunnerDbEntry": {
+      "title": "RunnerDbEntry",
+      "description": "Admin-managed club runner record imported from Eventor or learned from an event.",
+      "type": "object",
+      "properties": {
+        "runnerId": {
+          "type": "string",
+          "description": "SI number as the document ID.",
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "siNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99999999
+        },
+        "cardSeries": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "fullName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "club": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "birthYear": {
+          "type": ["integer", "null"],
+          "minimum": 1900,
+          "maximum": 2100
+        },
+        "defaultClassName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "eventorPersonId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "eventorOrgId": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "source": {
+          "type": "string",
+          "enum": ["EVENTOR_API", "EVENTOR_XML", "MEOS_CSV", "LEARNED_ENTRY"]
+        },
+        "updatedAtIso": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "runnerId",
+        "siNumber",
+        "cardSeries",
+        "fullName",
+        "club",
+        "birthYear",
+        "defaultClassName",
+        "eventorPersonId",
+        "eventorOrgId",
+        "source",
+        "updatedAtIso",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -876,6 +961,10 @@
     "/competitions/{competitionId}/readoutReceipts/{receiptId}": {
       "schema": { "$ref": "#/entities/ReadoutReceipt" },
       "description": "Write-once, admin-only SI-card readout receipts for offline queue delivery and idempotency."
+    },
+    "/runnerDb/{siNumber}": {
+      "schema": { "$ref": "#/entities/RunnerDbEntry" },
+      "description": "Admin-only club runner database used by entries and readout workflows."
     }
   }
 }

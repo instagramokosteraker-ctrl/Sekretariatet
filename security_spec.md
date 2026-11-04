@@ -21,6 +21,8 @@
    - Zero `JSON.stringify` payloads. Course `controls` (`<= 128`), class `forkCourseIds` (`<= 32`), competition `brokenControls` (`<= 64`), and competitor/readout receipt `punchCodes`/`punchTimes` (`<= 192`, equal length) are bounded native lists with element-0 type verification.
 8. **Temporal & Immutable Field Integrity**:
    - `createdAt == request.time` on `create`; `createdAt == existing().createdAt` and `updatedAt == request.time` on `update`. Primary IDs and `ownerUid`/`createdByUid` are immutable.
+9. **Runner Database (`/runnerDb/{siNumber}`)**:
+   - Only verified admins can read or write runner records. The document ID is the SI number, the validated payload is allow-listed, and the original owner/creation timestamp cannot be changed.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads (Must Return `PERMISSION_DENIED`)
 

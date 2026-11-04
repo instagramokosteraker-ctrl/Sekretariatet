@@ -50,7 +50,7 @@ import {
   getStockholmTodayIso,
   isTokenServiceApiDisabled,
   listMyAdminInvitesFromFirestore,
-  listMyCloudCompetitionsFromFirestore,
+  listClubCloudCompetitionsFromFirestore,
   loadClubSettingsFromFirestore,
   loadFullSeasonFromFirestore,
   removeAdminInviteFromFirestore,
@@ -462,7 +462,7 @@ export function AccessControlView({
       return;
     }
     try {
-      const items = await listMyCloudCompetitionsFromFirestore();
+      const items = await listClubCloudCompetitionsFromFirestore();
       setCloudRecords(items);
     } catch {
       // ignore if offline
