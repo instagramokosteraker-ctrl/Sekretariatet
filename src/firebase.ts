@@ -29,6 +29,7 @@ import {
 import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './utils/readoutValidation';
 import firebaseConfig from '../firebase-applet-config.json';
 import type {
+  CardPunch,
   ClassCompetitionFormat,
   CloudCompetitionRecord,
   CloudEventExportItem,
@@ -39,6 +40,7 @@ import type {
   CompetitionSummary,
   Competitor,
   Course,
+  EmergencySettings,
   EventLifecycleStatus,
   FullCardReadoutPayload,
   PublicRacePayload,
@@ -2147,6 +2149,263 @@ export async function submitReadoutToFirestore(
               sanitizeFirestoreId(candidate.id, 'cmp') === result.competitorId
           ) ?? runner,
   };
+}
+
+export async function saveDirectCompetitionEntryToFirestore(params: {
+  competitionId: string;
+  payload: Partial<Competitor> & {
+    pendingReadout?: {
+      checkTimeSec?: number | null;
+      startTimeSec?: number | null;
+      finishTimeSec?: number | null;
+      punches?: CardPunch[];
+    };
+  };
+  competitors: Competitor[];
+  classes: CompClass[];
+  courses: Course[];
+  emergency: EmergencySettings;
+}): Promise<{ competitor: Competitor; runnerDbEntry: RunnerDbEntry | null }> {
+  const current = await ensureValidFirestoreUser();
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Direktanmäla kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
+
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (current.email || '').toLowerCase()
+  );
+  const adminSnap = isBootstrapAdmin
+    ? null
+    : await getDoc(doc(db, 'admins', ownerUid));
+  const role = adminSnap?.exists() ? adminSnap.data().role : null;
+  const isSuperAdmin = isBootstrapAdmin || role === 'SUPER_ADMIN';
+  if (!isSuperAdmin && role !== 'RACE_ADMIN') {
+    throw new Error('Ditt Google-konto saknar administratörsbehörighet för direktanmälan.');
+  }
+
+  const competitionId = sanitizeFirestoreId(params.competitionId, 'evt');
+  const competitionRef = doc(db, 'competitions', competitionId);
+  const competitionSnap = await getDoc(competitionRef);
+  if (!competitionSnap.exists()) {
+    throw new Error('Tävlingen hittades inte i Firestore.');
+  }
+  const competitionData = competitionSnap.data();
+  if (competitionData.status === 'COMPLETED' && !isSuperAdmin) {
+    throw new Error('Det går inte att direktanmäla till en avslutad tävling.');
+  }
+  if (competitionData.ownerUid !== current.uid && !isSuperAdmin) {
+    throw new Error(
+      'Ditt konto saknar behörighet att anmäla till den här tävlingen. Be tävlingens ägare om hjälp.'
+    );
+  }
+
+  const siNumber = Number(params.payload.siNumber);
+  const fullName = (params.payload.fullName || '').trim();
+  if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999 || !fullName) {
+    throw new Error('Ange ett giltigt SI-bricknummer och löparens namn.');
+  }
+
+  const competitorSnapshots = await getDocs(
+    collection(db, 'competitions', competitionId, 'competitors')
+  );
+  const existingCompetitors = competitorSnapshots.docs.map((snapshot) => snapshot.data());
+  const activeStatuses = new Set(['REGISTERED', 'CHECKED', 'IN_FOREST', 'PRELIMINARY_FIN']);
+  const activeConflict = existingCompetitors.find(
+    (competitor) =>
+      Number(competitor.siNumber) === siNumber && activeStatuses.has(String(competitor.status))
+  );
+  if (activeConflict) {
+    throw new Error(
+      `SI-bricka ${siNumber} används redan av en aktiv deltagare (#${activeConflict.bib} ${activeConflict.fullName}).`
+    );
+  }
+
+  const classId = sanitizeFirestoreId(
+    params.payload.classId || params.classes[0]?.id || 'cls_open',
+    'cls'
+  );
+  const targetClass = params.classes.find((candidate) => candidate.id === classId) ?? null;
+  const bib = Math.max(
+    400,
+    ...params.competitors.map((competitor) => competitor.bib),
+    ...existingCompetitors.map((competitor) => Number(competitor.bib) || 0)
+  ) + 1;
+  const nowIso = new Date().toISOString();
+  const pendingReadout = params.payload.pendingReadout;
+  const rawPunches = Array.isArray(pendingReadout?.punches)
+    ? pendingReadout.punches.slice(0, 192).map((punch) => ({ ...punch }))
+    : [];
+  const allocatedStartSec = params.payload.allocatedStartSec ?? null;
+  const effectiveStart =
+    pendingReadout?.startTimeSec ?? allocatedStartSec ?? Number(competitionData.zeroTimeSec ?? 36000);
+  const finishTimeSec = pendingReadout?.finishTimeSec ?? null;
+  const hasPendingReadout = Boolean(pendingReadout && Array.isArray(pendingReadout.punches));
+  const validation =
+    hasPendingReadout && finishTimeSec !== null
+      ? validateCompetitorReadout(
+          targetClass,
+          params.courses,
+          effectiveStart,
+          finishTimeSec,
+          rawPunches,
+          params.emergency
+        )
+      : null;
+  const cardPunches = hasPendingReadout
+    ? applyEmergencyTimeOffsets(rawPunches, params.emergency.controlTimeOffsets)
+    : [];
+  const status = validation
+    ? validation.ok
+      ? 'OK'
+      : 'MP'
+    : params.payload.status || 'REGISTERED';
+  const competitorId = `cmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const competitor: Competitor = {
+    id: competitorId,
+    bib,
+    fullName,
+    club: (params.payload.club || 'Klubblös').trim() || 'Klubblös',
+    classId,
+    siNumber,
+    cardSeries: params.payload.cardSeries || 'SI-Card 10',
+    isRentalCard: Boolean(params.payload.isRentalCard),
+    isBorrowedCard: Boolean(params.payload.isBorrowedCard),
+    rentalReturned: false,
+    isSelfRegistered: Boolean(params.payload.isSelfRegistered),
+    feePaid: Boolean(params.payload.feePaid),
+    status,
+    allocatedStartSec,
+    checkTimeSec: hasPendingReadout ? pendingReadout?.checkTimeSec ?? null : null,
+    startTimeSec: hasPendingReadout ? pendingReadout?.startTimeSec ?? null : null,
+    finishTimeSec,
+    manualFinishTimeSec: null,
+    runningTimeSec:
+      finishTimeSec !== null && finishTimeSec >= effectiveStart
+        ? finishTimeSec - effectiveStart
+        : null,
+    lastSeenControl: cardPunches.length > 0 ? 1 : null,
+    lastSeenTimeSec: finishTimeSec ?? pendingReadout?.startTimeSec ?? null,
+    readoutAt: hasPendingReadout ? nowIso : null,
+    radioSplits: [],
+    cardPunches,
+    rawReadout: hasPendingReadout
+      ? {
+          checkTimeSec: pendingReadout?.checkTimeSec ?? null,
+          startTimeSec: pendingReadout?.startTimeSec ?? null,
+          finishTimeSec,
+          punches: rawPunches,
+          receivedAt: nowIso,
+        }
+      : null,
+    validation,
+  };
+
+  const createdAt = serverTimestamp();
+  const mutableCompetitor = {
+    bib,
+    fullName: competitor.fullName.slice(0, 120),
+    club: competitor.club.slice(0, 100) || 'Klubblös',
+    classId,
+    siNumber,
+    cardSeries: competitor.cardSeries,
+    isRentalCard: competitor.isRentalCard,
+    rentalReturned: false,
+    isSelfRegistered: competitor.isSelfRegistered ?? false,
+    feePaid: competitor.feePaid ?? false,
+    status: competitor.status,
+    allocatedStartSec: encodeNullableSec(allocatedStartSec),
+    checkTimeSec: encodeNullableSec(competitor.checkTimeSec),
+    startTimeSec: encodeNullableSec(competitor.startTimeSec),
+    finishTimeSec: encodeNullableSec(finishTimeSec),
+    manualFinishTimeSec: -1,
+    runningTimeSec: encodeNullableSec(competitor.runningTimeSec),
+    readoutAtIso: competitor.readoutAt || '',
+    punchCodes: rawPunches.map((punch) => clampInt(punch.code, 1, 999, 31)),
+    punchTimes: rawPunches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
+  };
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
+    competitorId,
+    competitionId,
+    ...mutableCompetitor,
+    ownerUid,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  batch.update(competitionRef, {
+    competitorCount: existingCompetitors.length + 1,
+    updatedAt: serverTimestamp(),
+  });
+
+  let runnerDbEntry: RunnerDbEntry | null = null;
+  if (!competitor.isRentalCard && !competitor.isBorrowedCard) {
+    const runnerId = String(siNumber);
+    const runnerRef = doc(db, 'runnerDb', runnerId);
+    const runnerSnap = await getDoc(runnerRef);
+    const existingRunner = runnerSnap.exists() ? runnerSnap.data() : null;
+    const sameRunner =
+      existingRunner?.fullName?.trim().toLowerCase() === fullName.toLowerCase();
+
+    if (!existingRunner || sameRunner) {
+      const runnerData = {
+        siNumber,
+        cardSeries: competitor.cardSeries,
+        fullName: fullName.slice(0, 120),
+        club: competitor.club.slice(0, 100) || 'Klubblös',
+        birthYear:
+          typeof existingRunner?.birthYear === 'number' ? existingRunner.birthYear : null,
+        defaultClassName: targetClass?.name || '',
+        eventorPersonId:
+          typeof existingRunner?.eventorPersonId === 'string'
+            ? existingRunner.eventorPersonId
+            : '',
+        eventorOrgId:
+          typeof existingRunner?.eventorOrgId === 'string' ? existingRunner.eventorOrgId : '',
+        source: existingRunner?.source || 'LEARNED_ENTRY',
+        updatedAtIso: nowIso,
+      };
+
+      if (existingRunner) {
+        batch.update(runnerRef, {
+          ...runnerData,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch.set(runnerRef, {
+          runnerId,
+          ...runnerData,
+          source: 'LEARNED_ENTRY',
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      runnerDbEntry = {
+        id: runnerId,
+        ...runnerData,
+        source: runnerData.source as RunnerDbEntry['source'],
+        updatedAt: nowIso,
+      };
+    }
+  }
+
+  try {
+    await batch.commit();
+  } catch (err) {
+    handleWriteOrOfflineError(
+      err,
+      OperationType.CREATE,
+      `competitions/${competitionId}/competitors/${competitorId}`
+    );
+  }
+
+  return { competitor, runnerDbEntry };
 }
 
 export async function loadPublicRaceFromFirestore(

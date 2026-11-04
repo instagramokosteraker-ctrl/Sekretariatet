@@ -94,6 +94,7 @@ import {
   syncFullSeasonToFirestore,
   createCompetitionInFirestore,
   saveCompetitionImportToFirestore,
+  saveDirectCompetitionEntryToFirestore,
   auth,
   googleProvider,
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
@@ -2871,16 +2872,79 @@ export default function App() {
                     if (soundEnabledRef.current) playMeosFeedbackTone('registration');
                   }}
                   onCreateCompetitor={async (payload) => {
-                    const res = await apiFetch('/api/competitors', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(payload),
-                    });
-                    if (!res.ok) {
-                      const err = (await res.json().catch(() => ({}))) as { error?: string };
-                      return err.error ?? 'Kunde inte spara anmälan.';
+                    try {
+                      const res = await apiFetch('/api/competitors', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                      });
+                      if (res.ok) return null;
+                      if (res.status !== 404 && res.status !== 405) {
+                        const err = (await res.json().catch(() => ({}))) as { error?: string };
+                        return err.error ?? 'Kunde inte spara anmälan.';
+                      }
+                    } catch {
+                      // Use Firestore when the optional Secretariat API is unavailable.
                     }
-                    return null;
+
+                    try {
+                      const saved = await saveDirectCompetitionEntryToFirestore({
+                        competitionId: activeEventId,
+                        payload,
+                        competitors,
+                        classes,
+                        courses,
+                        emergency,
+                      });
+                      setCompetitors((current) => [saved.competitor, ...current]);
+                      const savedRunner = saved.runnerDbEntry;
+                      if (savedRunner) {
+                        setRunnerDb((current) => {
+                          const existingIndex = current.findIndex(
+                            (runner) => runner.siNumber === savedRunner.siNumber
+                          );
+                          if (existingIndex < 0) return [savedRunner, ...current];
+                          return current.map((runner, index) =>
+                            index === existingIndex ? savedRunner : runner
+                          );
+                        });
+                      }
+                      const now = new Date();
+                      const className =
+                        classes.find((candidate) => candidate.id === saved.competitor.classId)
+                          ?.name ?? null;
+                      setEvents((current) => [
+                        {
+                          id: `ev_${Date.now()}`,
+                          timestamp: now.toISOString(),
+                          clock24h: new Intl.DateTimeFormat('sv-SE', {
+                            timeZone: 'Europe/Stockholm',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          }).format(now),
+                          eventType: 'DIRECT_ENTRY',
+                          siNumber: saved.competitor.siNumber,
+                          competitorId: saved.competitor.id,
+                          competitorName: saved.competitor.fullName,
+                          club: saved.competitor.club,
+                          className,
+                          stationCode: 1,
+                          stationName: 'Sekretariat — Direktanmälan',
+                          runningTimeSec: saved.competitor.runningTimeSec,
+                          message: `Direktanmäld i ${className ?? '-'}${
+                            saved.competitor.isRentalCard ? ' (Hyrbricka utlämnad)' : ''
+                          }`,
+                        },
+                        ...current,
+                      ]);
+                      return null;
+                    } catch (error) {
+                      console.error('Kunde inte spara direktanmälan till Firestore:', error);
+                      return error instanceof Error
+                        ? error.message
+                        : 'Kunde inte spara anmälan i Firestore.';
+                    }
                   }}
                   onUpdateCompetitor={async (id, patch) => {
                     await apiFetch(`/api/competitors/${id}`, {
