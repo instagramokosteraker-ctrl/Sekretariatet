@@ -38,6 +38,7 @@ import type {
   Competitor,
   Course,
   EventLifecycleStatus,
+  PublicRacePayload,
   RunnerStatus,
   SICardSeries,
 } from './types/sportident';
@@ -1519,6 +1520,70 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     demoCleared: Boolean(clubData?.demoCleared),
     clubSettings,
     events,
+  };
+}
+
+export async function loadPublicRaceFromFirestore(
+  shortCode: string
+): Promise<PublicRacePayload | null> {
+  const season = await loadFullSeasonFromFirestore();
+  if (!season) return null;
+
+  const target = season.events.find(
+    (event) => event.competition.shortCode.toLowerCase() === shortCode.toLowerCase()
+  );
+  if (!target) return null;
+
+  const competitionsList: CompetitionSummary[] = season.events
+    .map((event) => ({
+      id: event.competition.id,
+      competitionId: event.competition.id,
+      shortCode: event.competition.shortCode,
+      status: event.competition.status,
+      name: event.competition.name,
+      organizer: event.competition.organizer,
+      date: event.competition.date,
+      zeroTimeStr: event.competition.zeroTimeStr,
+      arenaInfo: event.competition.arenaInfo,
+      seriesName: event.competition.seriesName,
+      allowSelfRegistration: event.competition.allowSelfRegistration !== false,
+      enableFeesAndSwish: Boolean(event.competition.enableFeesAndSwish),
+      competitorCount: event.competitors.length,
+      finishedCount: event.competitors.filter(
+        (competitor) => competitor.status === 'OK' || competitor.status === 'MP'
+      ).length,
+      classCount: event.classes.length,
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  const feesEnabled = Boolean(target.competition.enableFeesAndSwish);
+  const clubSettings = feesEnabled
+    ? season.clubSettings
+    : {
+        ...season.clubSettings,
+        swishNumber: '',
+        swishRecipientName: '',
+        defaultDirectEntryFeeSek: 0,
+        rentalCardFeeSek: 0,
+        missingRentalFeeSek: 0,
+      };
+
+  return {
+    competition: target.competition,
+    courses: target.courses,
+    classes: feesEnabled
+      ? target.classes
+      : target.classes.map((compClass) => ({ ...compClass, feeSek: 0 })),
+    competitors: target.competitors,
+    events: [],
+    emergency: {
+      brokenControls: target.brokenControls,
+      controlTimeOffsets: {},
+    },
+    competitionsList,
+    clubSettings,
+    seriesStandings: [],
+    updatedAt: new Date().toISOString(),
   };
 }
 

@@ -41,6 +41,7 @@ export interface OfflineQueueSnapshot {
   simulatedOffline: boolean;
   browserOnline: boolean;
   flushing: boolean;
+  lastError: string | null;
   totalSyncedSession: number;
   lastSyncedAt: string | null;
 }
@@ -58,6 +59,7 @@ class OfflineReadoutQueueManager {
   private simulatedOffline = false;
   private browserOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   private flushing = false;
+  private lastError: string | null = null;
   private totalSyncedSession = 0;
   private lastSyncedAt: string | null = null;
   private listeners = new Set<SnapshotListener>();
@@ -166,6 +168,7 @@ class OfflineReadoutQueueManager {
       simulatedOffline: this.simulatedOffline,
       browserOnline: this.browserOnline,
       flushing: this.flushing,
+      lastError: this.lastError,
       totalSyncedSession: this.totalSyncedSession,
       lastSyncedAt: this.lastSyncedAt,
     };
@@ -301,8 +304,13 @@ class OfflineReadoutQueueManager {
             eventId: item.eventId,
           }),
         });
-        if (!res.ok) return null;
+        if (!res.ok) {
+          this.lastError = await this.getResponseError(res);
+          this.emit();
+          return null;
+        }
         const data = (await res.json()) as Omit<ReadoutDeliveryResult, 'queuedOffline'>;
+        this.lastError = null;
         return { queuedOffline: false, ...data };
       }
 
@@ -315,14 +323,41 @@ class OfflineReadoutQueueManager {
             eventId: item.eventId,
           }),
         });
-        if (!res.ok) return null;
+        if (!res.ok) {
+          this.lastError = await this.getResponseError(res);
+          this.emit();
+          return null;
+        }
         const data = (await res.json()) as Omit<ReadoutDeliveryResult, 'queuedOffline'>;
+        this.lastError = null;
         return { queuedOffline: false, ...data };
       }
+      this.lastError = 'Köposten saknar giltiga avläsningsdata.';
+      this.emit();
       return null;
-    } catch {
+    } catch (error) {
+      this.lastError =
+        error instanceof Error
+          ? `Nätverksfel vid synkning: ${error.message}`
+          : 'Nätverksfel vid synkning.';
+      this.emit();
       return null;
     }
+  }
+
+  private async getResponseError(response: Response): Promise<string> {
+    let responseMessage = '';
+    try {
+      const body = (await response.json()) as { error?: unknown; message?: unknown };
+      if (typeof body.error === 'string') responseMessage = body.error;
+      else if (typeof body.message === 'string') responseMessage = body.message;
+    } catch {
+      // Some server errors have an empty or non-JSON response body.
+    }
+
+    return responseMessage
+      ? `Servern avvisade synkningen (${response.status}): ${responseMessage}`
+      : `Servern avvisade synkningen (${response.status}${response.statusText ? ` ${response.statusText}` : ''}).`;
   }
 
   public async flushQueue(): Promise<number> {
@@ -336,6 +371,7 @@ class OfflineReadoutQueueManager {
     }
 
     this.flushing = true;
+    this.lastError = null;
     this.emit();
 
     let syncedNow = 0;

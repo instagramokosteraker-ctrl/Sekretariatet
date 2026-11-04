@@ -469,13 +469,18 @@ export function ReadoutDashboard({
           {offlineSnap.pendingItems.length > 0 && !isOfflineActive && (
             <button
               type="button"
+              disabled={offlineSnap.flushing}
               onClick={() => void onFlushOfflineQueue()}
-              className="inline-flex items-center gap-1 px-2.5 py-1 font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1 px-2.5 py-1 font-medium text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 rounded-lg whitespace-nowrap shrink-0"
             >
               <RefreshCw
                 className={`w-3 h-3 ${offlineSnap.flushing ? 'animate-spin' : ''}`}
               />
-              <span>Synka ({offlineSnap.pendingItems.length})</span>
+              <span>
+                {offlineSnap.flushing
+                  ? 'Synkar...'
+                  : `Synka (${offlineSnap.pendingItems.length})`}
+              </span>
             </button>
           )}
 
@@ -491,6 +496,15 @@ export function ReadoutDashboard({
             {offlineSnap.simulatedOffline ? 'Återanslut 4G' : 'Testa offline'}
           </button>
         </div>
+        {offlineSnap.lastError && (
+          <div
+            role="alert"
+            className="w-full flex items-start gap-1.5 pt-1 text-[11px] text-red-700 dark:text-red-300"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>{offlineSnap.lastError}</span>
+          </div>
+        )}
       </section>
 
       {/* Compact 4-Column Competition KPI Strip */}

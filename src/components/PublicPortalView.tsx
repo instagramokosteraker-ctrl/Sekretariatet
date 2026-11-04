@@ -35,7 +35,10 @@ import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { PWAInstallButton } from './PWAInstallButton';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
-import { subscribePublicCompetitionSummaries } from '../firebase';
+import {
+  loadPublicRaceFromFirestore,
+  subscribePublicCompetitionSummaries,
+} from '../firebase';
 
 interface PublicPortalViewProps {
   shortCode: string | null; // null means Season Overview (/publik)
@@ -140,12 +143,24 @@ export function PublicPortalView({
           }
         }
       } else {
-        const res = await fetch(`/api/public/events/${encodeURIComponent(shortCode)}`);
-        if (!res.ok) {
+        let payload: PublicRacePayload | null = null;
+        try {
+          const res = await fetch(`/api/public/events/${encodeURIComponent(shortCode)}`);
+          if (res.ok) {
+            payload = (await res.json()) as PublicRacePayload;
+          }
+        } catch {
+          // Use Firestore for events that have not yet been hydrated to the server.
+        }
+
+        if (!payload) {
+          payload = await loadPublicRaceFromFirestore(shortCode);
+        }
+
+        if (!payload) {
           setError('Tävlingen eller kortlänken hittades inte.');
           setRaceData(null);
         } else {
-          const payload = (await res.json()) as PublicRacePayload;
           setRaceData(payload);
           setApiCompetitionsList(payload.competitionsList);
           if (payload.clubSettings) setSeasonClubSettings(payload.clubSettings);
