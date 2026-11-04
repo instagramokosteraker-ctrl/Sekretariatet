@@ -404,7 +404,9 @@ interface CloudEventExportItem {
   courses: Course[];
   classes: CompClass[];
   competitors: Competitor[];
+  stations?: SIStation[];
   brokenControls: number[];
+  emergency?: EmergencySettings;
   rolePins: RolePinMap;
   pinsCustomized: boolean;
 }
@@ -5177,7 +5179,9 @@ async function startServer() {
       courses: ev.courses,
       classes: ev.classes,
       competitors: ev.competitors,
+      stations: ev.stations,
       brokenControls: ev.emergency?.brokenControls ?? [],
+      emergency: ev.emergency,
       rolePins: ensureEventPins(ev),
       pinsCustomized: Boolean(ev.pinsCustomized),
     }));
@@ -5233,13 +5237,22 @@ async function startServer() {
         },
         courses: Array.isArray(item.courses) ? item.courses : [],
         classes: Array.isArray(item.classes) ? item.classes : [],
-        stations: existingLocal?.stations ?? buildDefaultStations(nowIso),
+        stations: Array.isArray(item.stations)
+          ? item.stations
+          : existingLocal?.stations ?? buildDefaultStations(nowIso),
         competitors: Array.isArray(item.competitors) ? item.competitors : [],
         emergency: {
-          brokenControls: Array.isArray(item.brokenControls)
-            ? item.brokenControls.map(Number).filter((n) => Number.isFinite(n) && n > 0)
-            : [],
-          controlTimeOffsets: existingLocal?.emergency?.controlTimeOffsets ?? {},
+          brokenControls: Array.isArray(item.emergency?.brokenControls)
+            ? item.emergency.brokenControls
+                .map(Number)
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : Array.isArray(item.brokenControls)
+              ? item.brokenControls.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+              : [],
+          controlTimeOffsets:
+            item.emergency?.controlTimeOffsets ??
+            existingLocal?.emergency?.controlTimeOffsets ??
+            {},
         },
         roc: existingLocal?.roc ?? buildDefaultRocStatus('1042'),
         events: existingLocal?.events ?? [],

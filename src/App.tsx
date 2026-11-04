@@ -95,10 +95,23 @@ import {
   createCompetitionInFirestore,
   saveCompetitionImportToFirestore,
   saveDirectCompetitionEntryToFirestore,
+  activateCompetitionInFirestore,
+  updateCompetitionMetadataInFirestore,
+  saveCourseToFirestore,
+  deleteCourseFromFirestore,
+  saveClassToFirestore,
+  deleteClassFromFirestore,
+  saveStationToFirestore,
+  deleteStationFromFirestore,
+  updateCompetitorInFirestore,
+  deleteCompetitorFromFirestore,
+  deleteRunnerDbEntryFromFirestore,
+  recalculateCompetitionFromFirestore,
   auth,
   googleProvider,
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
   subscribePublicCompetitionSummaries,
+  loadClubSettingsFromFirestore,
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
@@ -212,6 +225,24 @@ function formatLifecycleLabel(status?: EventLifecycleStatus): string {
   if (status === 'LIVE') return 'Pågår';
   if (status === 'UPCOMING') return 'Kommande';
   return 'Avslutad';
+}
+
+async function apiRequestUnavailable(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  fallbackMessage: string
+): Promise<boolean> {
+  let response: Response;
+  try {
+    response = await apiFetch(input, init);
+  } catch (error) {
+    if (error instanceof TypeError) return true;
+    throw error;
+  }
+  if (response.ok) return false;
+  if (response.status === 404 || response.status === 405) return true;
+  const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
+  throw new Error(errorBody.error ?? fallbackMessage);
 }
 
 export default function App() {
@@ -493,6 +524,20 @@ export default function App() {
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
 
   useEffect(() => {
+    let active = true;
+    void loadClubSettingsFromFirestore()
+      .then((settings) => {
+        if (active) setClubSettings(settings);
+      })
+      .catch((error) => {
+        console.error('Kunde inte läsa klubbinställningar vid appstart:', error);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     setLogoBroken(false);
   }, [clubSettings.logoDataUrl]);
 
@@ -692,15 +737,34 @@ export default function App() {
       punchTimeSec?: number;
       rawHex?: string;
     }) => {
+      const station = stations.find(
+        (candidate) => candidate.stationCode === params.stationCode
+      );
       const res = await offlineReadoutQueue.submitOnlinePunchGuaranteed(
-        params,
+        {
+          ...params,
+          stationName: station?.name,
+          stationFunction: station?.stationFunction,
+          timeOffsetSec:
+            emergency.controlTimeOffsets[String(params.stationCode)] ?? 0,
+        },
         activeEventIdRef.current
       );
+      if (!res.queuedOffline) {
+        const cloudSnap = await loadFullSeasonFromFirestore({
+          competitionId: activeEventIdRef.current,
+          includeRunnerDb: false,
+        });
+        const event = cloudSnap?.events.find(
+          (candidate) => candidate.competition.id === activeEventIdRef.current
+        );
+        if (event) setCompetitors(event.competitors);
+      }
       if (soundEnabledRef.current) {
         playMeosFeedbackTone(res.queuedOffline ? 'registration' : 'radio');
       }
     },
-    []
+    [emergency.controlTimeOffsets, stations]
   );
 
   // Wire physical Web Serial & WebUSB hardware callbacks
@@ -837,7 +901,7 @@ export default function App() {
             competition: activeEvt.competition,
             courses: activeEvt.courses,
             classes: activeEvt.classes,
-            stations: [],
+            stations: activeEvt.stations ?? [],
             competitors: activeEvt.competitors,
             runnerDb: cloudSnap.runnerDb ?? [],
             eventor: {
@@ -849,7 +913,11 @@ export default function App() {
               lastSyncedAt: null,
               autoCreateFromRunnerDbOnReadout: true,
             },
-            emergency: { brokenControls: activeEvt.brokenControls, controlTimeOffsets: {} },
+            emergency:
+              activeEvt.emergency ?? {
+                brokenControls: activeEvt.brokenControls,
+                controlTimeOffsets: {},
+              },
             roc: {
               enabled: false,
               unitId: '1042',
@@ -1080,7 +1148,7 @@ export default function App() {
     setCompetitionSwitchError(null);
     setSelectedRunnerId(null);
     setPendingUnknownReadout(null);
-    if (eventId === activeEventId) return;
+    if (eventId === activeEventId) return true;
     try {
       const res = await apiFetch(`/api/competitions/${encodeURIComponent(eventId)}/activate`, {
         method: 'POST',
@@ -1089,7 +1157,7 @@ export default function App() {
         const snap = (await res.json()) as MeosAppState;
         if (snap.activeEventId === eventId) {
           applySnapshot(snap);
-          return;
+          return true;
         }
       }
     } catch {
@@ -1109,12 +1177,21 @@ export default function App() {
         throw new Error('Den valda tävlingen kunde inte hämtas från Firestore.');
       }
 
+      await activateCompetitionInFirestore(eventId);
       setActiveEventId(eventId);
       setCompetition(targetEvt.competition);
       setCourses(targetEvt.courses);
       setClasses(targetEvt.classes);
+      setStations(targetEvt.stations ?? []);
       setCompetitors(targetEvt.competitors);
+      setEmergency(
+        targetEvt.emergency ?? {
+          brokenControls: targetEvt.brokenControls,
+          controlTimeOffsets: {},
+        }
+      );
       setIsEmptySeason(false);
+      return true;
     } catch (err) {
       console.error('Kunde inte aktivera vald tävling:', err);
       setCompetitionSwitchError(
@@ -1122,6 +1199,37 @@ export default function App() {
           ? err.message
           : 'Tävlingen kunde inte aktiveras. Kontrollera anslutningen och försök igen.'
       );
+      return false;
+    }
+  };
+
+  const handleUpdateCompetitionMetadata = async (
+    eventId: string,
+    patch: {
+      status?: EventLifecycleStatus;
+      date?: string;
+      zeroTimeStr?: string;
+      seriesName?: string;
+      enableFeesAndSwish?: boolean;
+    }
+  ) => {
+    const useFirestore = await apiRequestUnavailable(
+      `/api/competitions/${encodeURIComponent(eventId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+      'Kunde inte uppdatera tävlingen.'
+    );
+    if (useFirestore) {
+      await updateCompetitionMetadataInFirestore(eventId, patch);
+    }
+    setCompetitionsList((current) =>
+      current.map((item) => (item.id === eventId ? { ...item, ...patch } : item))
+    );
+    if (activeEventId === eventId) {
+      setCompetition((current) => ({ ...current, ...patch }));
     }
   };
 
@@ -2316,11 +2424,18 @@ export default function App() {
                   eventor={eventor}
                   runnerDbCount={runnerDb.length}
                   onUpdateCompetition={async (patch) => {
-                    await apiFetch('/api/competition', {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(patch),
-                    });
+                    const useFirestore = await apiRequestUnavailable(
+                      '/api/competition',
+                      {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(patch),
+                      },
+                      'Kunde inte spara tävlingsinställningarna.'
+                    );
+                    if (!useFirestore) return;
+                    await updateCompetitionMetadataInFirestore(activeEventId, patch);
+                    setCompetition((current) => ({ ...current, ...patch }));
                   }}
                   onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
                   onUpdateEventorSettings={async (patch) => {
@@ -2705,11 +2820,23 @@ export default function App() {
                   selectedRunnerId={selectedRunnerId}
                   onSelectRunner={(id) => setSelectedRunnerId(id)}
                   onMarkRentalReturned={async (id) => {
-                    await apiFetch(`/api/competitors/${id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ rentalReturned: true }),
-                    });
+                    const patch = { rentalReturned: true };
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/competitors/${id}`,
+                      {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(patch),
+                      },
+                      'Kunde inte uppdatera hyrbrickan.'
+                    );
+                    if (!useFirestore) return;
+                    await updateCompetitorInFirestore(activeEventId, id, patch);
+                    setCompetitors((current) =>
+                      current.map((competitor) =>
+                        competitor.id === id ? { ...competitor, ...patch } : competitor
+                      )
+                    );
                   }}
                   onSimulateFullReadout={handleSimulateFullReadout}
                   onSimulateOnlinePunch={handleSimulateOnlinePunch}
@@ -2771,23 +2898,77 @@ export default function App() {
                     });
                   }}
                   onCreateCompetitor={async (payload) => {
-                    const res = await apiFetch('/api/competitors', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(payload),
-                    });
-                    if (!res.ok) {
-                      const err = (await res.json().catch(() => ({}))) as { error?: string };
-                      return err.error ?? 'Kunde inte spara deltagare.';
+                    try {
+                      const useFirestore = await apiRequestUnavailable(
+                        '/api/competitors',
+                        {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        },
+                        'Kunde inte spara deltagare.'
+                      );
+                      if (!useFirestore) return null;
+                      const saved = await saveDirectCompetitionEntryToFirestore({
+                        competitionId: activeEventId,
+                        payload,
+                        competitors,
+                        classes,
+                        courses,
+                        emergency,
+                      });
+                      setCompetitors((current) => [saved.competitor, ...current]);
+                      const savedIsFinished =
+                        saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
+                      setCompetitionsList((current) =>
+                        current.map((item) =>
+                          item.id === activeEventId
+                            ? {
+                                ...item,
+                                competitorCount: item.competitorCount + 1,
+                                finishedCount: Math.min(
+                                  item.competitorCount + 1,
+                                  item.finishedCount + (savedIsFinished ? 1 : 0)
+                                ),
+                              }
+                            : item
+                        )
+                      );
+                      const savedRunner = saved.runnerDbEntry;
+                      if (savedRunner) {
+                        setRunnerDb((current) => {
+                          const existingIndex = current.findIndex(
+                            (runner) => runner.siNumber === savedRunner.siNumber
+                          );
+                          if (existingIndex < 0) return [savedRunner, ...current];
+                          return current.map((runner, index) =>
+                            index === existingIndex ? savedRunner : runner
+                          );
+                        });
+                      }
+                      return null;
+                    } catch (error) {
+                      console.error('Kunde inte spara deltagare i Firestore:', error);
+                      return error instanceof Error ? error.message : 'Kunde inte spara deltagare.';
                     }
-                    return null;
                   }}
                   onUpdateCompetitor={async (id, patch) => {
-                    await apiFetch(`/api/competitors/${id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(patch),
-                    });
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/competitors/${id}`,
+                      {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(patch),
+                      },
+                      'Kunde inte uppdatera deltagaren.'
+                    );
+                    if (!useFirestore) return;
+                    await updateCompetitorInFirestore(activeEventId, id, patch);
+                    setCompetitors((current) =>
+                      current.map((competitor) =>
+                        competitor.id === id ? { ...competitor, ...patch } : competitor
+                      )
+                    );
                   }}
                 />
               )}
@@ -2798,11 +2979,23 @@ export default function App() {
                   classes={classes}
                   zeroTimeSec={competition.zeroTimeSec}
                   onUpdateRunnerStatus={async (id, status: RunnerStatus) => {
-                    await apiFetch(`/api/competitors/${id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ status }),
-                    });
+                    const patch = { status };
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/competitors/${id}`,
+                      {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(patch),
+                      },
+                      'Kunde inte uppdatera löparstatus.'
+                    );
+                    if (!useFirestore) return;
+                    await updateCompetitorInFirestore(activeEventId, id, patch);
+                    setCompetitors((current) =>
+                      current.map((competitor) =>
+                        competitor.id === id ? { ...competitor, ...patch } : competitor
+                      )
+                    );
                   }}
                 />
               )}
@@ -2813,6 +3006,7 @@ export default function App() {
                   courses={courses}
                   classes={classes}
                   competitors={competitors}
+                  stations={stations}
                   onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
                 />
               )}
@@ -2897,6 +3091,22 @@ export default function App() {
                         emergency,
                       });
                       setCompetitors((current) => [saved.competitor, ...current]);
+                      const savedIsFinished =
+                        saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
+                      setCompetitionsList((current) =>
+                        current.map((item) =>
+                          item.id === activeEventId
+                            ? {
+                                ...item,
+                                competitorCount: item.competitorCount + 1,
+                                finishedCount: Math.min(
+                                  item.competitorCount + 1,
+                                  item.finishedCount + (savedIsFinished ? 1 : 0)
+                                ),
+                              }
+                            : item
+                        )
+                      );
                       const savedRunner = saved.runnerDbEntry;
                       if (savedRunner) {
                         setRunnerDb((current) => {
@@ -2947,28 +3157,88 @@ export default function App() {
                     }
                   }}
                   onUpdateCompetitor={async (id, patch) => {
-                    await apiFetch(`/api/competitors/${id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(patch),
-                    });
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/competitors/${id}`,
+                      {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(patch),
+                      },
+                      'Kunde inte uppdatera deltagaren.'
+                    );
+                    if (!useFirestore) return;
+                    await updateCompetitorInFirestore(activeEventId, id, patch);
+                    setCompetitors((current) =>
+                      current.map((competitor) =>
+                        competitor.id === id ? { ...competitor, ...patch } : competitor
+                      )
+                    );
                   }}
                   onDeleteCompetitor={async (id) => {
-                    await apiFetch(`/api/competitors/${id}`, { method: 'DELETE' });
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/competitors/${id}`,
+                      { method: 'DELETE' },
+                      'Kunde inte ta bort deltagaren.'
+                    );
+                    if (!useFirestore) return;
+                    await deleteCompetitorFromFirestore(activeEventId, id);
+                    setCompetitors((current) =>
+                      current.filter((competitor) => competitor.id !== id)
+                    );
                   }}
                   onImportRunnerDb={async (runners, source) => {
-                    const res = await apiFetch('/api/runner-db/import', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ runners, source }),
+                    let res: Response | null = null;
+                    try {
+                      res = await apiFetch('/api/runner-db/import', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ runners, source }),
+                      });
+                    } catch (error) {
+                      if (!(error instanceof TypeError)) throw error;
+                    }
+                    if (res?.ok) {
+                      return (await res.json()) as {
+                        importedCount: number;
+                        totalRunnerDb: number;
+                      };
+                    }
+                    if (res && res.status !== 404 && res.status !== 405) {
+                      const errorBody = (await res.json().catch(() => ({}))) as {
+                        error?: string;
+                      };
+                      throw new Error(errorBody.error ?? 'Kunde inte importera löpardatabasen.');
+                    }
+                    const imported = runners.map((runner) => ({ ...runner, source }));
+                    await saveCompetitionImportToFirestore({
+                      competitionId: activeEventId,
+                      courses,
+                      classes,
+                      competitors,
+                      runnerDbEntries: imported,
+                      competitorCount: competitors.length,
                     });
-                    return (await res.json()) as {
-                      importedCount: number;
-                      totalRunnerDb: number;
+                    const bySiNumber = new Map(
+                      runnerDb.map((runner) => [runner.siNumber, runner])
+                    );
+                    for (const runner of imported) bySiNumber.set(runner.siNumber, runner);
+                    setRunnerDb(Array.from(bySiNumber.values()));
+                    return {
+                      importedCount: imported.length,
+                      totalRunnerDb: bySiNumber.size,
                     };
                   }}
                   onDeleteRunnerDbEntry={async (id) => {
-                    await apiFetch(`/api/runner-db/${id}`, { method: 'DELETE' });
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/runner-db/${id}`,
+                      { method: 'DELETE' },
+                      'Kunde inte ta bort löparen.'
+                    );
+                    if (!useFirestore) return;
+                    await deleteRunnerDbEntryFromFirestore(Number(id));
+                    setRunnerDb((current) =>
+                      current.filter((runner) => runner.siNumber !== Number(id))
+                    );
                   }}
                 />
               )}
@@ -3002,49 +3272,138 @@ export default function App() {
                   competitors={competitors}
                   enableFeesAndSwish={Boolean(competition.enableFeesAndSwish)}
                   onSaveCourse={async (payload, existingId) => {
-                    await apiFetch(
+                    const useFirestore = await apiRequestUnavailable(
                       existingId ? `/api/courses/${existingId}` : '/api/courses',
                       {
                         method: existingId ? 'PUT' : 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload),
-                      }
+                      },
+                      'Kunde inte spara banan.'
                     );
+                    if (!useFirestore) return;
+                    const saved = await saveCourseToFirestore(
+                      activeEventId,
+                      payload,
+                      existingId
+                    );
+                    setCourses((current) =>
+                      existingId
+                        ? current.map((course) => (course.id === existingId ? saved : course))
+                        : [...current, saved]
+                    );
+                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                    setCompetitors(recalculated.competitors);
+                    setEmergency(recalculated.emergency);
                   }}
                   onDeleteCourse={async (id) => {
-                    await apiFetch(`/api/courses/${id}`, { method: 'DELETE' });
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/courses/${id}`,
+                      { method: 'DELETE' },
+                      'Kunde inte ta bort banan.'
+                    );
+                    if (!useFirestore) return;
+                    await deleteCourseFromFirestore(activeEventId, id);
+                    setCourses((current) => current.filter((course) => course.id !== id));
+                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                    setCompetitors(recalculated.competitors);
+                    setEmergency(recalculated.emergency);
                   }}
                   onSaveClass={async (payload, existingId) => {
-                    await apiFetch(
+                    const useFirestore = await apiRequestUnavailable(
                       existingId ? `/api/classes/${existingId}` : '/api/classes',
                       {
                         method: existingId ? 'PUT' : 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload),
-                      }
+                      },
+                      'Kunde inte spara klassen.'
                     );
+                    if (!useFirestore) return;
+                    const saved = await saveClassToFirestore(
+                      activeEventId,
+                      payload,
+                      existingId
+                    );
+                    setClasses((current) =>
+                      existingId
+                        ? current.map((cls) => (cls.id === existingId ? saved : cls))
+                        : [...current, saved]
+                    );
+                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                    setCompetitors(recalculated.competitors);
+                    setEmergency(recalculated.emergency);
                   }}
                   onImportCourseBatch={async (payload) => {
-                    const res = await apiFetch('/api/import/batch', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        courses: payload.courses,
-                        classes: payload.classes,
-                        entries: [],
-                        runnerDbEntries: [],
-                        replaceExisting: payload.replaceExisting,
-                        defaultFreeStart: payload.defaultFreeStart,
-                      }),
-                    });
-                    if (!res.ok) {
-                      const err = (await res.json().catch(() => ({}))) as { error?: string };
-                      throw new Error(err.error ?? 'Kunde inte importera banfil.');
+                    let res: Response | null = null;
+                    try {
+                      res = await apiFetch('/api/import/batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          courses: payload.courses,
+                          classes: payload.classes,
+                          entries: [],
+                          runnerDbEntries: [],
+                          replaceExisting: payload.replaceExisting,
+                          defaultFreeStart: payload.defaultFreeStart,
+                        }),
+                      });
+                    } catch (error) {
+                      if (!(error instanceof TypeError)) throw error;
                     }
-                    return (await res.json()) as {
-                      addedCourses: number;
-                      addedClasses: number;
-                      replaced?: boolean;
+                    if (res?.ok) {
+                      return (await res.json()) as {
+                        addedCourses: number;
+                        addedClasses: number;
+                        replaced?: boolean;
+                      };
+                    }
+                    if (res && res.status !== 404 && res.status !== 405) {
+                      const errorBody = (await res.json().catch(() => ({}))) as {
+                        error?: string;
+                      };
+                      throw new Error(errorBody.error ?? 'Kunde inte importera banfil.');
+                    }
+                    const importedClasses = payload.classes.map((cls) => ({
+                      ...cls,
+                      freeStart: payload.defaultFreeStart ?? cls.freeStart,
+                    }));
+                    const nextCourses = payload.replaceExisting
+                      ? payload.courses
+                      : Array.from(
+                          new Map(
+                            [...courses, ...payload.courses].map((course) => [
+                              course.id,
+                              course,
+                            ])
+                          ).values()
+                        );
+                    const nextClasses = payload.replaceExisting
+                      ? importedClasses
+                      : Array.from(
+                          new Map(
+                            [...classes, ...importedClasses].map((cls) => [cls.id, cls])
+                          ).values()
+                        );
+                    await saveCompetitionImportToFirestore({
+                      competitionId: activeEventId,
+                      courses: nextCourses,
+                      classes: nextClasses,
+                      competitors,
+                      runnerDbEntries: [],
+                      competitorCount: competitors.length,
+                      replaceCoursesAndClasses: payload.replaceExisting,
+                    });
+                    setCourses(nextCourses);
+                    setClasses(nextClasses);
+                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                    setCompetitors(recalculated.competitors);
+                    setEmergency(recalculated.emergency);
+                    return {
+                      addedCourses: payload.courses.length,
+                      addedClasses: importedClasses.length,
+                      replaced: payload.replaceExisting,
                     };
                   }}
                 />
@@ -3062,29 +3421,110 @@ export default function App() {
                   stations={stations}
                   serialStatus={serialStatus}
                   onUpdateEmergency={async (patch) => {
-                    const res = await apiFetch('/api/emergency', {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(patch),
-                    });
-                    return (await res.json()) as { recalculatedCount: number };
+                    let res: Response | null = null;
+                    try {
+                      res = await apiFetch('/api/emergency', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(patch),
+                      });
+                    } catch (error) {
+                      if (!(error instanceof TypeError)) throw error;
+                    }
+                    if (res?.ok) {
+                      const result = (await res.json()) as { recalculatedCount: number };
+                      return result;
+                    }
+                    if (res && res.status !== 404 && res.status !== 405) {
+                      const errorBody = (await res.json().catch(() => ({}))) as {
+                        error?: string;
+                      };
+                      throw new Error(errorBody.error ?? 'Kunde inte spara nödlägesinställningarna.');
+                    }
+                    const result = await recalculateCompetitionFromFirestore(activeEventId, patch);
+                    setEmergency(result.emergency);
+                    setCompetitors(result.competitors);
+                    return { recalculatedCount: result.recalculatedCount };
                   }}
                   onRecalculateAll={async () => {
-                    const res = await apiFetch('/api/emergency/recalculate-all', {
-                      method: 'POST',
-                    });
-                    return (await res.json()) as { recalculatedCount: number };
+                    let res: Response | null = null;
+                    try {
+                      res = await apiFetch('/api/emergency/recalculate-all', {
+                        method: 'POST',
+                      });
+                    } catch (error) {
+                      if (!(error instanceof TypeError)) throw error;
+                    }
+                    if (res?.ok) {
+                      return (await res.json()) as { recalculatedCount: number };
+                    }
+                    if (res && res.status !== 404 && res.status !== 405) {
+                      const errorBody = (await res.json().catch(() => ({}))) as {
+                        error?: string;
+                      };
+                      throw new Error(errorBody.error ?? 'Kunde inte räkna om tävlingens tider.');
+                    }
+                    const result = await recalculateCompetitionFromFirestore(activeEventId);
+                    setEmergency(result.emergency);
+                    setCompetitors(result.competitors);
+                    return { recalculatedCount: result.recalculatedCount };
                   }}
                   onAssignManualFinish={async (params) => {
-                    const res = await apiFetch('/api/emergency/manual-finish', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(params),
-                    });
-                    if (!res.ok) {
-                      const err = (await res.json().catch(() => ({}))) as { error?: string };
-                      return err.error ?? 'Kunde inte spara manuell måltid.';
+                    let res: Response | null = null;
+                    try {
+                      res = await apiFetch('/api/emergency/manual-finish', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(params),
+                      });
+                    } catch (error) {
+                      if (!(error instanceof TypeError)) throw error;
                     }
+                    if (res?.ok) return null;
+                    if (res && res.status !== 404 && res.status !== 405) {
+                      const errorBody = (await res.json().catch(() => ({}))) as {
+                        error?: string;
+                      };
+                      return errorBody.error ?? 'Kunde inte spara manuell måltid.';
+                    }
+                    const runner = competitors.find(
+                      (candidate) => candidate.id === params.competitorId
+                    );
+                    if (!runner) return 'Deltagaren hittades inte.';
+                    const parts = (params.finishClockStr || '').split(':').map(Number);
+                    if (
+                      parts.length < 2 ||
+                      parts.length > 3 ||
+                      parts.some((value) => !Number.isInteger(value)) ||
+                      parts[0] < 0 ||
+                      parts[0] > 23 ||
+                      parts[1] < 0 ||
+                      parts[1] > 59 ||
+                      (parts[2] !== undefined && (parts[2] < 0 || parts[2] > 59))
+                    ) {
+                      return 'Ange giltigt klockslag i format HH:MM:SS.';
+                    }
+                    const finishTimeSec =
+                      parts[0] * 3600 + parts[1] * 60 + (parts[2] ?? 0);
+                    const startTimeSec =
+                      runner.startTimeSec ??
+                      runner.allocatedStartSec ??
+                      competition.zeroTimeSec;
+                    const hasReadout = Boolean(
+                      runner.rawReadout || runner.cardPunches.length > 0
+                    );
+                    await updateCompetitorInFirestore(activeEventId, runner.id, {
+                      manualFinishTimeSec: finishTimeSec,
+                      finishTimeSec,
+                      runningTimeSec:
+                        finishTimeSec >= startTimeSec
+                          ? finishTimeSec - startTimeSec
+                          : null,
+                      ...(hasReadout ? {} : { status: 'OK' as RunnerStatus }),
+                    });
+                    const result = await recalculateCompetitionFromFirestore(activeEventId);
+                    setEmergency(result.emergency);
+                    setCompetitors(result.competitors);
                     return null;
                   }}
                   onUpdateRocSettings={async (patch) => {
@@ -3138,19 +3578,33 @@ export default function App() {
                     await sportidentSerial.triggerStationBeep(1);
                   }}
                   onCreateStation={async (payload) => {
-                    const res = await apiFetch('/api/stations', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(payload),
-                    });
-                    if (!res.ok) {
-                      const err = (await res.json().catch(() => ({}))) as { error?: string };
-                      return err.error ?? 'Kunde inte spara station.';
+                    try {
+                      const useFirestore = await apiRequestUnavailable(
+                        '/api/stations',
+                        {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        },
+                        'Kunde inte spara station.'
+                      );
+                      if (!useFirestore) return null;
+                      const saved = await saveStationToFirestore(activeEventId, payload);
+                      setStations((current) => [...current, saved]);
+                      return null;
+                    } catch (error) {
+                      return error instanceof Error ? error.message : 'Kunde inte spara station.';
                     }
-                    return null;
                   }}
                   onDeleteStation={async (id) => {
-                    await apiFetch(`/api/stations/${id}`, { method: 'DELETE' });
+                    const useFirestore = await apiRequestUnavailable(
+                      `/api/stations/${id}`,
+                      { method: 'DELETE' },
+                      'Kunde inte ta bort stationen.'
+                    );
+                    if (!useFirestore) return;
+                    await deleteStationFromFirestore(activeEventId, id);
+                    setStations((current) => current.filter((station) => station.id !== id));
                   }}
                   onOpenProtocolInspector={() => setActiveTab('protocol')}
                 />
@@ -3170,6 +3624,8 @@ export default function App() {
                   seriesStandings={seriesStandings}
                   currentUser={authSession.user}
                   onApplyStateSnapshot={applySnapshot}
+                  onActivateCompetition={handleActivateCompetition}
+                  onUpdateCompetitionMeta={handleUpdateCompetitionMetadata}
                   onOpenCreateCompetition={() => {
                     setNewEvtFeesAndSwish(false);
                     setCreateEventModalOpen(true);

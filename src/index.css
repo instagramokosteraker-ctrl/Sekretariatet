@@ -63,6 +63,68 @@
     color: var(--club-muted);
   }
 
+  html:not(.dark)[data-club-custom="true"] [class~="bg-white"],
+  html:not(.dark)[data-club-custom="true"] [class~="bg-slate-100"],
+  html:not(.dark)[data-club-custom="true"] [class~="bg-slate-200"] {
+    background-color: var(--club-surface);
+  }
+
+  html:not(.dark)[data-club-custom="true"] [class~="bg-slate-50"] {
+    background-color: var(--club-bg);
+  }
+
+  html:not(.dark)[data-club-custom="true"] [class~="text-slate-900"],
+  html:not(.dark)[data-club-custom="true"] [class~="text-slate-800"],
+  html:not(.dark)[data-club-custom="true"] [class~="text-slate-700"] {
+    color: var(--club-text);
+  }
+
+  html:not(.dark)[data-club-custom="true"] [class~="text-slate-600"],
+  html:not(.dark)[data-club-custom="true"] [class~="text-slate-500"],
+  html:not(.dark)[data-club-custom="true"] [class~="text-slate-400"] {
+    color: var(--club-muted);
+  }
+
+  html:not(.dark)[data-club-custom="true"] [class~="border-slate-100"],
+  html:not(.dark)[data-club-custom="true"] [class~="border-slate-200"],
+  html:not(.dark)[data-club-custom="true"] [class~="border-slate-300"] {
+    border-color: var(--club-border);
+  }
+
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-red-600"],
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-red-700"],
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-emerald-600"],
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-emerald-700"],
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-blue-600"],
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-blue-700"],
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-indigo-600"],
+  html[data-club-custom="true"]
+    :is(button, [role="button"])[class~="bg-indigo-700"] {
+    background-color: var(--club-accent);
+    color: var(--club-accent-fg);
+  }
+
+  html[data-club-custom="true"]
+    :is(button, [role="button"]):is(
+      [class~="bg-red-600"],
+      [class~="bg-red-700"],
+      [class~="bg-emerald-600"],
+      [class~="bg-emerald-700"],
+      [class~="bg-blue-600"],
+      [class~="bg-blue-700"],
+      [class~="bg-indigo-600"],
+      [class~="bg-indigo-700"]
+    ):hover:not(:disabled) {
+    background-color: var(--club-accent-hover);
+  }
+
   .club-accent-btn {
     background-color: var(--club-accent);
     color: var(--club-accent-fg);

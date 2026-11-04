@@ -5,6 +5,7 @@ import type {
   CompetitionMeta,
   Competitor,
   Course,
+  SIStation,
 } from '../types/sportident';
 import { formatDurationMmSs } from '../services/sportidentProtocol';
 import { SplitsAnalysisTable } from './SplitsAnalysisTable';
@@ -20,6 +21,7 @@ interface SpeakerResultsViewProps {
   courses: Course[];
   classes: CompClass[];
   competitors: Competitor[];
+  stations: SIStation[];
   onOpenPublicPortal?: () => void;
 }
 
@@ -28,13 +30,21 @@ export function SpeakerResultsView({
   courses,
   classes,
   competitors,
+  stations,
   onOpenPublicPortal,
 }: SpeakerResultsViewProps) {
   const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
   const [inspectedRunner, setInspectedRunner] = useState<Competitor | null>(null);
   const [copiedLivelox, setCopiedLivelox] = useState<boolean>(false);
+  const prewarningStations = stations.filter(
+    (station) => station.active && station.stationFunction === 'PREWARNING'
+  );
+  const prewarningLabel =
+    prewarningStations.length > 0
+      ? prewarningStations.map((station) => `K${station.stationCode} ${station.name}`).join(', ')
+      : 'inga förvarningskontroller konfigurerade';
 
-  // Incoming runners on finish chute (punched K100 Prewarning or Preliminary Finish)
+  // Incoming runners are identified by configured prewarning stations, not a control code.
   const incomingRunners = useMemo(() => {
     return competitors
       .filter(
@@ -129,13 +139,12 @@ export function SpeakerResultsView({
         </div>
       </div>
 
-      {/* Speaker Prewarning Strip (Förvarning K100 & Preliminärt i mål) */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
         <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-950/40">
           <div className="flex items-center gap-2 min-w-0">
             <Mic className="w-3.5 h-3.5 text-red-600 dark:text-red-400 shrink-0" />
             <h2 className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-              Speakerbevakning — På upploppet (K100) & Preliminärt i mål
+              Speakerbevakning — Förvarning ({prewarningLabel}) & preliminärt i mål
             </h2>
           </div>
           <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums shrink-0">
@@ -145,7 +154,7 @@ export function SpeakerResultsView({
 
         {incomingRunners.length === 0 ? (
           <p className="px-3.5 py-2 text-xs text-slate-500 dark:text-slate-400">
-            Ingen löpare mellan förvarningskontrollen (K100) och avläsningsbordet just nu.
+            Inga löpare har stämplat vid en konfigurerad förvarningskontroll eller gått i preliminärt mål.
           </p>
         ) : (
           <div className="divide-y divide-slate-200/80 dark:divide-slate-800/80 text-xs">
@@ -181,7 +190,8 @@ export function SpeakerResultsView({
                       </span>
                     ) : (
                       <span className="font-semibold text-amber-700 dark:text-amber-400">
-                        K100 {formatDurationMmSs(preSplit?.runningTimeSec ?? null)}
+                        {preSplit?.stationName} ·{' '}
+                        {formatDurationMmSs(preSplit?.runningTimeSec ?? null)}
                       </span>
                     )}
                   </div>

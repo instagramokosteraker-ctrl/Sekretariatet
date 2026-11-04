@@ -180,6 +180,25 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
+    // Older competition documents without controlTimeOffsets remain writable.
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('competitions/evt_live').update({
+        competitorCount: 11,
+        finishedCount: 6,
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    // Competition counters and control offsets are allowed on active races.
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('competitions/evt_live').update({
+        competitorCount: 12,
+        finishedCount: 6,
+        controlTimeOffsets: { '42': -3 },
+        updatedAt: serverTimestamp(),
+      })
+    );
+
     // 8. Terminal State Bypass on COMPLETED competition -> DENIED
     await assertFails(
       raceAdminCtx.firestore().doc('competitions/evt_done').update({
@@ -308,6 +327,8 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         updatedAt: serverTimestamp(),
       })
     );
+    await assertFails(attackerCtx.firestore().doc('runnerDb/8500111').delete());
+    await assertSucceeds(raceAdminCtx.firestore().doc('runnerDb/8500111').delete());
 
     // Readout receipts are write-once and restricted to the verified competition admin
     const receipt = {
@@ -350,6 +371,74 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .firestore()
         .doc('competitions/evt_live/readoutReceipts/ro_test_1')
         .update({ status: 'UNKNOWN' })
+    );
+
+    const station = {
+      stationId: 'st_42',
+      competitionId: 'evt_live',
+      ownerUid: 'race_admin_1',
+      stationCode: 42,
+      name: 'K42',
+      hardwareModel: 'SRR-USB (Air+)',
+      stationFunction: 'RADIO',
+      baudRate: 38400,
+      extendedProtocol: true,
+      batteryMv: 3500,
+      firmware: '',
+      lastSeenAt: '',
+      active: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('competitions/evt_live/stations/st_42').set(station)
+    );
+    await assertFails(
+      attackerCtx.firestore().doc('competitions/evt_live/stations/st_43').set({
+        ...station,
+        stationId: 'st_43',
+        ownerUid: 'attacker_uid',
+      })
+    );
+
+    const stationPunch = {
+      punchId: 'op_test_1',
+      competitionId: 'evt_live',
+      ownerUid: 'race_admin_1',
+      clientPunchId: 'op_test_1',
+      siNumber: 8500111,
+      stationCode: 42,
+      punchTimeSec: 36500,
+      rawHex: '',
+      stationName: 'K42',
+      stationFunction: 'RADIO',
+      competitorId: 'cmp_1',
+      runningTimeSec: 500,
+      isPrewarning: false,
+      createdAt: serverTimestamp(),
+    };
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/stationPunches/op_test_1')
+        .set(stationPunch)
+    );
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/stationPunches/op_attacker')
+        .set({
+          ...stationPunch,
+          punchId: 'op_attacker',
+          clientPunchId: 'op_attacker',
+          ownerUid: 'attacker_uid',
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/stationPunches/op_test_1')
+        .update({ stationCode: 43 })
     );
   } finally {
     await testEnv.cleanup();

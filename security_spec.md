@@ -13,16 +13,17 @@
    - `/adminInvites/{inviteId}` isolates `email` and restricts `get` strictly to the invited recipient (`resource.data.email == request.auth.token.email`) or verified club admins (`isAdmin()`). `list` is strictly restricted to `resource.data.createdByUid == request.auth.uid`.
 5. **Club Settings Singleton (`/clubSettings/{settingId}`)**:
    - Only `settingId == 'default'` is permitted. `list` is forbidden (`false`). Only verified admins can read/write, with strict numeric bounds on Swish and rental card fees, strict `#RRGGBB` hex validation on optional theme colors (`customBgColor`, `customTextColor`, `customAccentColor`), `<= 80` char limit on `portalTitle`, and strict `<= 200000` char / `data:image/(png|jpeg);base64,` validation on `logoDataUrl` (preventing oversized documents and SVG XSS).
-6. **Master Gate & Subcollection Sync (`courses`, `classes`, `competitors`, `readoutReceipts` under `/competitions/{competitionId}`)**:
-   - Every write to a competition subcollection verifies parent competition existence and ownership. `courses`, `classes`, and `competitors` also enforce parent Terminal State Locking (`status != 'COMPLETED'`) unless `isSuperAdmin()`.
-   - Readout receipts are write-once, available only to the verified competition admin, and cannot be listed, updated, or deleted. They provide Firestore queue idempotency and retain raw data for unknown cards.
+6. **Master Gate & Subcollection Sync (`courses`, `classes`, `competitors`, `stations`, `readoutReceipts`, `stationPunches` under `/competitions/{competitionId}`)**:
+   - Every write to a competition subcollection verifies parent competition existence and ownership. `courses`, `classes`, `competitors`, and `stations` also enforce parent Terminal State Locking (`status != 'COMPLETED'`) unless `isSuperAdmin()`.
+   - Readout receipts and online station punches are write-once, admin-scoped, and idempotent. Neither collection permits updates or deletes.
+   - Owner admins may update competition counters and emergency control settings only while a competition is not completed; completed competitions remain locked except to super admins.
    - `allow list` on `/competitions` and its subcollections enforces the applicable owner/admin condition with zero `get()`/`exists()` lookups inside `list`.
 7. **Total Array Guarding & Native Primitives**:
    - Zero `JSON.stringify` payloads. Course `controls` (`<= 128`), class `forkCourseIds` (`<= 32`), competition `brokenControls` (`<= 64`), and competitor/readout receipt `punchCodes`/`punchTimes` (`<= 192`, equal length) are bounded native lists with element-0 type verification.
 8. **Temporal & Immutable Field Integrity**:
    - `createdAt == request.time` on `create`; `createdAt == existing().createdAt` and `updatedAt == request.time` on `update`. Primary IDs and `ownerUid`/`createdByUid` are immutable.
 9. **Runner Database (`/runnerDb/{siNumber}`)**:
-   - Only verified admins can read or write runner records. The document ID is the SI number, the validated payload is allow-listed, and the original owner/creation timestamp cannot be changed.
+   - Only verified admins can read, write, or delete runner records. The document ID is the SI number, the validated payload is allow-listed, and the original owner/creation timestamp cannot be changed.
 
 ## 2. The "Dirty Dozen" Adversarial Payloads (Must Return `PERMISSION_DENIED`)
 

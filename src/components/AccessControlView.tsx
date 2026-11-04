@@ -44,6 +44,7 @@ import {
   DEFAULT_CLUB_SETTINGS,
   TOKEN_SERVICE_ACTIVATION_URL,
   auth,
+  createCompetitionInFirestore,
   deleteCompetitionFromFirestore,
   ensureAdminRoleInFirestore,
   ensureValidFirestoreUser,
@@ -81,6 +82,17 @@ interface AccessControlViewProps {
   seriesStandings: SeriesStandingsBundle[];
   currentUser: AuthSessionUser;
   onApplyStateSnapshot: (snap: MeosAppState) => void;
+  onActivateCompetition: (eventId: string) => Promise<boolean>;
+  onUpdateCompetitionMeta: (
+    eventId: string,
+    patch: {
+      status?: EventLifecycleStatus;
+      date?: string;
+      zeroTimeStr?: string;
+      seriesName?: string;
+      enableFeesAndSwish?: boolean;
+    }
+  ) => Promise<void>;
   onOpenCreateCompetition: () => void;
   onOpenPublicEvent: (shortCode: string | null) => void;
 }
@@ -494,13 +506,16 @@ export function AccessControlView({
     setEventBusyId(eventId);
     setEventsNotice(null);
     try {
-      const res = await apiFetch(`/api/competitions/${encodeURIComponent(eventId)}/activate`, {
-        method: 'POST',
-      });
-      if (res.ok) {
-        const snap = (await res.json()) as MeosAppState;
-        onApplyStateSnapshot(snap);
+      const activated = await onActivateCompetition(eventId);
+      if (activated) {
+        await loadCloudCompetitions();
+        setEventsNotice({ ok: true, msg: 'Tävlingen aktiverades.' });
       }
+    } catch (error) {
+      setEventsNotice({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte aktivera tävlingen.',
+      });
     } finally {
       setEventBusyId(null);
     }
@@ -519,18 +534,14 @@ export function AccessControlView({
     setEventBusyId(eventId);
     setEventsNotice(null);
     try {
-      const res = await apiFetch(`/api/competitions/${encodeURIComponent(eventId)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
+      await onUpdateCompetitionMeta(eventId, patch);
+      await loadCloudCompetitions();
+      setEventsNotice({ ok: true, msg: 'Tävlingsinställningarna sparades.' });
+    } catch (error) {
+      setEventsNotice({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte uppdatera tävlingen.',
       });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setEventsNotice({ ok: false, msg: err.error || 'Kunde inte uppdatera tävlingen.' });
-        return;
-      }
-      const snap = (await res.json()) as MeosAppState;
-      onApplyStateSnapshot(snap);
     } finally {
       setEventBusyId(null);
     }
@@ -540,21 +551,55 @@ export function AccessControlView({
     setEventBusyId(ev.id);
     setEventsNotice(null);
     try {
-      const res = await apiFetch(`/api/competitions/${encodeURIComponent(ev.id)}/duplicate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setEventsNotice({ ok: false, msg: err.error || 'Kunde inte duplicera tävlingen.' });
-        return;
+      let res: Response | null = null;
+      try {
+        res = await apiFetch(`/api/competitions/${encodeURIComponent(ev.id)}/duplicate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
       }
-      const snap = (await res.json()) as MeosAppState;
-      onApplyStateSnapshot(snap);
+
+      if (res?.ok) {
+        const snap = (await res.json()) as MeosAppState;
+        onApplyStateSnapshot(snap);
+      } else {
+        if (res && res.status !== 404 && res.status !== 405) {
+          const errorBody = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(errorBody.error ?? 'Kunde inte duplicera tävlingen.');
+        }
+        const cloudSnap = await loadFullSeasonFromFirestore({ competitionId: ev.id });
+        const source = cloudSnap?.events.find((item) => item.competition.id === ev.id);
+        if (!source) throw new Error('Tävlingen hittades inte i Firestore.');
+        const suffix = Date.now().toString().slice(-6);
+        await createCompetitionInFirestore({
+          competitionId: `evt-copy-${Date.now()}`,
+          shortCode: `${source.competition.shortCode.slice(0, 20)}-${suffix}`,
+          name: `${source.competition.name} (kopia)`.slice(0, 140),
+          organizer: source.competition.organizer,
+          date: getStockholmTodayIso(),
+          status: 'UPCOMING',
+          zeroTimeStr: source.competition.zeroTimeStr,
+          zeroTimeSec: source.competition.zeroTimeSec,
+          arenaInfo: source.competition.arenaInfo,
+          seriesName: source.competition.seriesName,
+          allowSelfRegistration: source.competition.allowSelfRegistration,
+          enableFeesAndSwish: source.competition.enableFeesAndSwish,
+          courses: source.courses,
+          classes: source.classes,
+        });
+        await loadCloudCompetitions();
+      }
       setEventsNotice({
         ok: true,
         msg: `Duplicerade banor och klasser från "${ev.name}" till en ny tävling.`,
+      });
+    } catch (error) {
+      setEventsNotice({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte duplicera tävlingen.',
       });
     } finally {
       setEventBusyId(null);

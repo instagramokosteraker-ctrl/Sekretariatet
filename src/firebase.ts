@@ -47,6 +47,8 @@ import type {
   RunnerDbEntry,
   RunnerStatus,
   SICardSeries,
+  SIStation,
+  StationFunction,
 } from './types/sportident';
 
 const app = initializeApp(firebaseConfig);
@@ -102,6 +104,27 @@ function clampInt(val: unknown, min: number, max: number, fallback: number): num
   const num = Number(val);
   if (!Number.isFinite(num)) return fallback;
   return Math.max(min, Math.min(max, Math.round(num)));
+}
+
+function normalizeControlTimeOffsets(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const offsets: Record<string, number> = {};
+  for (const [code, rawOffset] of Object.entries(raw)) {
+    const stationCode = Number(code);
+    const offset = Number(rawOffset);
+    if (
+      Number.isInteger(stationCode) &&
+      stationCode >= 1 &&
+      stationCode <= 999 &&
+      Number.isFinite(offset) &&
+      offset >= -7200 &&
+      offset <= 7200
+    ) {
+      const rounded = Math.round(offset);
+      if (rounded !== 0) offsets[String(stationCode)] = rounded;
+    }
+  }
+  return offsets;
 }
 
 function encodeNullableSec(val: number | null | undefined): number {
@@ -796,7 +819,7 @@ export async function deleteCompetitionFromFirestore(rawCompetitionId: string): 
   }
 
   const deleteOps: QueuedBatchOp[] = [];
-  for (const subName of ['courses', 'classes', 'competitors'] as const) {
+  for (const subName of ['courses', 'classes', 'competitors', 'stations'] as const) {
     const subPath = `competitions/${competitionId}/${subName}`;
     try {
       const subCollection = collection(db, 'competitions', competitionId, subName);
@@ -825,6 +848,108 @@ export async function deleteCompetitionFromFirestore(rawCompetitionId: string): 
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.DELETE, compPath);
   }
+}
+
+export async function updateCompetitionMetadataInFirestore(
+  competitionId: string,
+  patch: {
+    name?: string;
+    organizer?: string;
+    date?: string;
+    status?: EventLifecycleStatus;
+    zeroTimeStr?: string;
+    zeroTimeSec?: number;
+    arenaInfo?: string;
+    seriesName?: string;
+    allowSelfRegistration?: boolean;
+    enableFeesAndSwish?: boolean;
+  }
+): Promise<void> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const mutable: Record<string, unknown> = {};
+  if ('name' in patch) mutable.name = (patch.name || '').trim().slice(0, 140);
+  if ('organizer' in patch) mutable.organizer = (patch.organizer || '').trim().slice(0, 100);
+  if ('date' in patch) {
+    if (!patch.date || !ISO_DATE_REGEX.test(patch.date)) {
+      throw new Error('Tävlingens datum måste anges som ÅÅÅÅ-MM-DD.');
+    }
+    mutable.date = patch.date;
+  }
+  if ('status' in patch) mutable.status = patch.status;
+  if ('zeroTimeStr' in patch) {
+    if (!patch.zeroTimeStr || !CLOCK_REGEX.test(patch.zeroTimeStr)) {
+      throw new Error('Ogiltig nolltid.');
+    }
+    mutable.zeroTimeStr = patch.zeroTimeStr;
+    const [hours, minutes, seconds = '0'] = patch.zeroTimeStr.split(':');
+    mutable.zeroTimeSec =
+      Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+  }
+  if ('zeroTimeSec' in patch && !('zeroTimeStr' in patch)) {
+    mutable.zeroTimeSec = clampInt(patch.zeroTimeSec, 0, 86400, 36000);
+  }
+  if ('arenaInfo' in patch) mutable.arenaInfo = (patch.arenaInfo || '').trim().slice(0, 500);
+  if ('seriesName' in patch) mutable.seriesName = (patch.seriesName || '').trim().slice(0, 80);
+  if ('allowSelfRegistration' in patch) {
+    mutable.allowSelfRegistration = Boolean(patch.allowSelfRegistration);
+  }
+  if ('enableFeesAndSwish' in patch) {
+    mutable.enableFeesAndSwish = Boolean(patch.enableFeesAndSwish);
+  }
+  if (Object.keys(mutable).length === 0) return;
+  await updateDoc(doc(db, 'competitions', context.competitionId), {
+    ...mutable,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function activateCompetitionInFirestore(
+  rawCompetitionId: string
+): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Aktivering kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (current.email || '').toLowerCase()
+  );
+  const adminSnap = isBootstrapAdmin
+    ? null
+    : await getDoc(doc(db, 'admins', ownerUid));
+  const role = adminSnap?.exists() ? adminSnap.data().role : null;
+  const isSuperAdmin = isBootstrapAdmin || role === 'SUPER_ADMIN';
+  if (!isSuperAdmin && role !== 'RACE_ADMIN') {
+    throw new Error('Ditt Google-konto saknar administratörsbehörighet.');
+  }
+  const competitionId = sanitizeFirestoreId(rawCompetitionId, 'evt');
+  const competitionSnap = await getDoc(doc(db, 'competitions', competitionId));
+  if (!competitionSnap.exists()) throw new Error('Tävlingen hittades inte i Firestore.');
+  if (competitionSnap.data().ownerUid !== current.uid && !isSuperAdmin) {
+    throw new Error('Du saknar behörighet att aktivera den här tävlingen.');
+  }
+
+  const clubRef = doc(db, 'clubSettings', 'default');
+  const clubSnap = await getDoc(clubRef);
+  if (!clubSnap.exists()) throw new Error('Klubbinställningarna saknas i Firestore.');
+  const clubData = clubSnap.data();
+  if (clubData.ownerUid !== current.uid && !isSuperAdmin) {
+    throw new Error('Du saknar behörighet att ändra klubbens aktiva tävling.');
+  }
+  const competitionIds = Array.isArray(clubData.competitionIds)
+    ? clubData.competitionIds.filter(
+        (id: unknown): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
+      )
+    : [];
+  await updateDoc(clubRef, {
+    activeEventId: competitionId,
+    competitionIds: Array.from(new Set([...competitionIds, competitionId])),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 /**
@@ -945,6 +1070,9 @@ export async function syncFullSeasonToFirestore(
       brokenControls: (ev.brokenControls || [])
         .slice(0, 64)
         .map((n) => clampInt(n, 1, 999, 31)),
+      ...(ev.emergency
+        ? { controlTimeOffsets: normalizeControlTimeOffsets(ev.emergency.controlTimeOffsets) }
+        : {}),
       pinStart: PIN_REGEX.test(ev.rolePins?.START || '') ? ev.rolePins.START : '1100',
       pinReadout: PIN_REGEX.test(ev.rolePins?.READOUT || '') ? ev.rolePins.READOUT : '2200',
       pinForest: PIN_REGEX.test(ev.rolePins?.FOREST || '') ? ev.rolePins.FOREST : '3300',
@@ -1218,6 +1346,71 @@ export async function syncFullSeasonToFirestore(
       }
     }
 
+    if (ev.stations) {
+      const existingStationIds = new Set<string>();
+      try {
+        const stationSnap = await getDocs(
+          query(
+            collection(db, 'competitions', competitionId, 'stations'),
+            where('ownerUid', '==', ownerUid)
+          )
+        );
+        stationSnap.docs.forEach((station) => existingStationIds.add(station.id));
+      } catch (err) {
+        handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/stations`);
+      }
+
+      const nextStationIds = new Set<string>();
+      for (const station of ev.stations) {
+        const stationId = sanitizeFirestoreId(station.id, 'st');
+        nextStationIds.add(stationId);
+        const stationRef = doc(db, 'competitions', competitionId, 'stations', stationId);
+        const stationMutable = {
+          stationCode: clampInt(station.stationCode, 1, 999, 42),
+          name: (station.name || 'SI-station').trim().slice(0, 120) || 'SI-station',
+          hardwareModel: station.hardwareModel,
+          stationFunction: station.stationFunction,
+          baudRate: station.baudRate === 4800 ? 4800 : 38400,
+          extendedProtocol: Boolean(station.extendedProtocol),
+          batteryMv: clampInt(station.batteryMv, 0, 6000, 0),
+          firmware: (station.firmware || '').trim().slice(0, 80),
+          lastSeenAt: station.lastSeenAt || '',
+          active: station.active !== false,
+        };
+        if (existingStationIds.has(stationId)) {
+          childOps.push({
+            kind: 'update',
+            ref: stationRef,
+            path: `competitions/${competitionId}/stations/${stationId}`,
+            data: { ...stationMutable, updatedAt: serverTimestamp() },
+          });
+        } else {
+          childOps.push({
+            kind: 'set',
+            ref: stationRef,
+            path: `competitions/${competitionId}/stations/${stationId}`,
+            data: {
+              stationId,
+              competitionId,
+              ownerUid,
+              ...stationMutable,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+          });
+        }
+      }
+      for (const oldId of existingStationIds) {
+        if (!nextStationIds.has(oldId)) {
+          childOps.push({
+            kind: 'delete',
+            ref: doc(db, 'competitions', competitionId, 'stations', oldId),
+            path: `competitions/${competitionId}/stations/${oldId}`,
+          });
+        }
+      }
+    }
+
     if (childOps.length > 0) {
       await commitQueuedBatchOps(childOps);
     }
@@ -1369,6 +1562,8 @@ export async function loadFullSeasonFromFirestore(options?: {
     const brokenControls = Array.isArray(compDocData.brokenControls)
       ? (compDocData.brokenControls as unknown[]).map(Number)
       : [];
+    const controlTimeOffsets = normalizeControlTimeOffsets(compDocData.controlTimeOffsets);
+    const emergency: EmergencySettings = { brokenControls, controlTimeOffsets };
 
     try {
       const crsSnap = await getDocs(
@@ -1437,6 +1632,19 @@ export async function loadFullSeasonFromFirestore(options?: {
       handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/classes`);
     }
 
+    const stationSnapshots = await getDocs(
+      collection(db, 'competitions', competitionId, 'stations')
+    );
+    const stationFunctions = new Map<number, StationFunction>();
+    for (const stationDoc of stationSnapshots.docs) {
+      const station = stationDoc.data();
+      const code = Number(station.stationCode);
+      const stationFunction = station.stationFunction as StationFunction;
+      if (Number.isInteger(code) && code >= 1 && code <= 999) {
+        stationFunctions.set(code, stationFunction);
+      }
+    }
+
     try {
       const cmpSnap = await getDocs(
         collection(db, 'competitions', competitionId, 'competitors')
@@ -1489,7 +1697,7 @@ export async function loadFullSeasonFromFirestore(options?: {
                   Number(compDocData.zeroTimeSec ?? 36000),
                 effectiveFinish,
                 punches,
-                { brokenControls, controlTimeOffsets: {} }
+                  emergency
               )
             : null;
 
@@ -1529,6 +1737,39 @@ export async function loadFullSeasonFromFirestore(options?: {
           validation,
         });
       }
+      const stationPunchSnap = await getDocs(
+        collection(db, 'competitions', competitionId, 'stationPunches')
+      );
+      for (const punchDoc of stationPunchSnap.docs) {
+        const punch = punchDoc.data();
+        const stationFunction =
+          stationFunctions.get(Number(punch.stationCode)) ?? 'RADIO';
+        if (
+          stationFunction !== 'RADIO' &&
+          stationFunction !== 'PREWARNING'
+        ) {
+          continue;
+        }
+        const competitor = competitors.find(
+          (candidate) =>
+            candidate.id === punch.competitorId &&
+            candidate.siNumber === Number(punch.siNumber)
+        );
+        if (!competitor) continue;
+        const split = {
+          controlCode: Number(punch.stationCode),
+          stationName: String(punch.stationName || `K${punch.stationCode}`),
+          punchTimeSec: Number(punch.punchTimeSec),
+          runningTimeSec: decodeNullableSec(punch.runningTimeSec),
+          isPrewarning: stationFunction === 'PREWARNING',
+        };
+        competitor.radioSplits = [
+          ...competitor.radioSplits.filter(
+            (existing) => existing.controlCode !== split.controlCode
+          ),
+          split,
+        ].sort((a, b) => a.punchTimeSec - b.punchTimeSec);
+      }
       competitors.sort((a, b) => a.bib - b.bib);
     } catch (err) {
       if (isTransientOfflineFirestoreError(err)) {
@@ -1542,6 +1783,44 @@ export async function loadFullSeasonFromFirestore(options?: {
       statusRaw === 'LIVE' || statusRaw === 'UPCOMING' || statusRaw === 'COMPLETED'
         ? statusRaw
         : 'LIVE';
+    const stations: SIStation[] = stationSnapshots.docs.map((stationDoc) => {
+      const station = stationDoc.data();
+      const hardwareModels: SIStation['hardwareModel'][] = [
+        'BSM8-USB',
+        'BSM7-USB',
+        'SRR-USB (Air+)',
+        'BSF9 Master',
+        'BSF8 Master',
+      ];
+      const stationFunctions: StationFunction[] = [
+        'CLEAR',
+        'CHECK',
+        'START',
+        'RADIO',
+        'PREWARNING',
+        'FINISH',
+        'READOUT',
+      ];
+      return {
+        id: station.stationId || stationDoc.id,
+        stationCode: Number(station.stationCode || 42),
+        name: String(station.name || `Station ${station.stationCode || 42}`),
+        hardwareModel: hardwareModels.includes(station.hardwareModel)
+          ? station.hardwareModel
+          : 'SRR-USB (Air+)',
+        stationFunction: stationFunctions.includes(station.stationFunction)
+          ? station.stationFunction
+          : 'RADIO',
+        baudRate: station.baudRate === 4800 ? 4800 : 38400,
+        extendedProtocol: Boolean(station.extendedProtocol),
+        batteryMv: Number(station.batteryMv || 0),
+        firmware: String(station.firmware || ''),
+        lastSeenAt: typeof station.lastSeenAt === 'string' && station.lastSeenAt
+          ? station.lastSeenAt
+          : null,
+        active: station.active !== false,
+      };
+    });
 
     events.push({
       competition: {
@@ -1561,7 +1840,9 @@ export async function loadFullSeasonFromFirestore(options?: {
       courses,
       classes,
       competitors,
+      stations,
       brokenControls,
+      emergency,
       rolePins: {
         START: String(compDocData.pinStart || '1100'),
         READOUT: String(compDocData.pinReadout || '2200'),
@@ -1645,6 +1926,7 @@ export async function saveCompetitionImportToFirestore(params: {
   competitors: Competitor[];
   runnerDbEntries: RunnerDbEntry[];
   competitorCount: number;
+  replaceCoursesAndClasses?: boolean;
 }): Promise<void> {
   const current = await ensureValidFirestoreUser();
   if (
@@ -1844,9 +2126,761 @@ export async function saveCompetitionImportToFirestore(params: {
     await batch.commit();
   }
 
+  if (params.replaceCoursesAndClasses) {
+    const retainedIds = {
+      courses: new Set(params.courses.map((course) => sanitizeFirestoreId(course.id, 'crs'))),
+      classes: new Set(params.classes.map((cls) => sanitizeFirestoreId(cls.id, 'cls'))),
+    };
+    const staleRefs: DocumentReference[] = [];
+    for (const collectionName of ['courses', 'classes'] as const) {
+      const snapshots = await getDocs(
+        collection(db, 'competitions', competitionId, collectionName)
+      );
+      for (const snapshot of snapshots.docs) {
+        if (
+          !retainedIds[collectionName].has(snapshot.id) &&
+          (snapshot.data().ownerUid === ownerUid || isSuperAdmin)
+        ) {
+          staleRefs.push(snapshot.ref);
+        }
+      }
+    }
+    for (let offset = 0; offset < staleRefs.length; offset += 400) {
+      const batch = writeBatch(db);
+      for (const ref of staleRefs.slice(offset, offset + 400)) batch.delete(ref);
+      await batch.commit();
+    }
+  }
+
   await updateDoc(competitionRef, {
     competitorCount: clampInt(params.competitorCount, 0, 50000, 0),
     updatedAt: serverTimestamp(),
+  });
+}
+
+interface CompetitionMutationContext {
+  competitionId: string;
+  ownerUid: string;
+  isSuperAdmin: boolean;
+}
+
+async function getCompetitionMutationContext(
+  rawCompetitionId: string
+): Promise<CompetitionMutationContext> {
+  const current = await ensureValidFirestoreUser();
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Ändringen kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
+
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (current.email || '').toLowerCase()
+  );
+  const adminSnap = isBootstrapAdmin
+    ? null
+    : await getDoc(doc(db, 'admins', ownerUid));
+  const role = adminSnap?.exists() ? adminSnap.data().role : null;
+  const isSuperAdmin = isBootstrapAdmin || role === 'SUPER_ADMIN';
+  if (!isSuperAdmin && role !== 'RACE_ADMIN') {
+    throw new Error('Ditt Google-konto saknar administratörsbehörighet för Firestore.');
+  }
+
+  const competitionId = sanitizeFirestoreId(rawCompetitionId, 'evt');
+  const competitionSnap = await getDoc(doc(db, 'competitions', competitionId));
+  if (!competitionSnap.exists()) {
+    throw new Error('Tävlingen hittades inte i Firestore.');
+  }
+  const competition = competitionSnap.data();
+  if (competition.ownerUid !== current.uid && !isSuperAdmin) {
+    throw new Error('Ditt konto saknar behörighet att ändra den här tävlingen.');
+  }
+  if (competition.status === 'COMPLETED' && !isSuperAdmin) {
+    throw new Error('Det går inte att ändra en avslutad tävling.');
+  }
+
+  return { competitionId, ownerUid, isSuperAdmin };
+}
+
+export async function saveCourseToFirestore(
+  competitionId: string,
+  payload: Partial<Course>,
+  existingId?: string
+): Promise<Course> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const id = existingId
+    ? sanitizeFirestoreId(existingId, 'crs')
+    : doc(collection(db, 'competitions', context.competitionId, 'courses')).id;
+  const ref = doc(db, 'competitions', context.competitionId, 'courses', id);
+  const mutable = {
+    name: (payload.name || '').trim().slice(0, 120),
+    lengthMeters: clampInt(payload.lengthMeters, 0, 200000, 0),
+    climbMeters: clampInt(payload.climbMeters, 0, 20000, 0),
+    controls: (payload.controls || []).slice(0, 128).map((code) => clampInt(code, 1, 999, 31)),
+  };
+  if (!mutable.name || mutable.controls.length === 0) {
+    throw new Error('Banan måste ha ett namn och minst en kontroll.');
+  }
+
+  const existing = await getDoc(ref);
+  if (existing.exists()) {
+    if (existing.data().ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+      throw new Error('Banan tillhör ett annat administratörskonto.');
+    }
+    await updateDoc(ref, { ...mutable, updatedAt: serverTimestamp() });
+  } else {
+    await setDoc(ref, {
+      courseId: id,
+      competitionId: context.competitionId,
+      ...mutable,
+      ownerUid: context.ownerUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+  return { id, ...mutable };
+}
+
+export async function deleteCourseFromFirestore(
+  competitionId: string,
+  courseId: string
+): Promise<void> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const id = sanitizeFirestoreId(courseId, 'crs');
+  await deleteDoc(doc(db, 'competitions', context.competitionId, 'courses', id));
+}
+
+export async function saveClassToFirestore(
+  competitionId: string,
+  payload: Partial<CompClass>,
+  existingId?: string
+): Promise<CompClass> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const id = existingId
+    ? sanitizeFirestoreId(existingId, 'cls')
+    : doc(collection(db, 'competitions', context.competitionId, 'classes')).id;
+  const ref = doc(db, 'competitions', context.competitionId, 'classes', id);
+  const classFormat: ClassCompetitionFormat =
+    payload.classFormat === 'FORKED' || payload.classFormat === 'ROGAINING'
+      ? payload.classFormat
+      : 'STANDARD';
+  const mutable: {
+    name: string;
+    courseId: string;
+    classFormat: ClassCompetitionFormat;
+    forkCourseIds: string[];
+    rogainingMaxTimeSec: number;
+    rogainingPenaltyPerMin: number;
+    allowDirectEntry: boolean;
+    freeStart: boolean;
+    autoMatchCourse: boolean;
+    feeSek: number;
+  } = {
+    name: (payload.name || '').trim().slice(0, 80),
+    courseId: payload.courseId ? sanitizeFirestoreId(payload.courseId, 'crs') : '',
+    classFormat,
+    forkCourseIds: (payload.forkCourseIds || [])
+      .slice(0, 32)
+      .map((courseId) => sanitizeFirestoreId(courseId, 'crs')),
+    rogainingMaxTimeSec:
+      payload.rogainingMaxTimeSec !== null && payload.rogainingMaxTimeSec !== undefined
+        ? clampInt(payload.rogainingMaxTimeSec, 60, 86400, 2700)
+        : -1,
+    rogainingPenaltyPerMin:
+      payload.rogainingPenaltyPerMin !== null && payload.rogainingPenaltyPerMin !== undefined
+        ? clampInt(payload.rogainingPenaltyPerMin, 0, 1000, 10)
+        : -1,
+    allowDirectEntry: payload.allowDirectEntry !== false,
+    freeStart: payload.freeStart !== false,
+    autoMatchCourse: Boolean(payload.autoMatchCourse),
+    feeSek: clampInt(payload.feeSek, 0, 10000, 100),
+  };
+  if (!mutable.name) {
+    throw new Error('Klassen måste ha ett namn.');
+  }
+
+  const existing = await getDoc(ref);
+  if (existing.exists()) {
+    if (existing.data().ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+      throw new Error('Klassen tillhör ett annat administratörskonto.');
+    }
+    if (payload.feeSek === undefined) {
+      mutable.feeSek = clampInt(existing.data().feeSek, 0, 10000, 100);
+    }
+    await updateDoc(ref, { ...mutable, updatedAt: serverTimestamp() });
+  } else {
+    await setDoc(ref, {
+      classId: id,
+      competitionId: context.competitionId,
+      ...mutable,
+      ownerUid: context.ownerUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+  return {
+    id,
+    ...mutable,
+    courseId: mutable.courseId || null,
+    rogainingMaxTimeSec: mutable.rogainingMaxTimeSec < 0 ? null : mutable.rogainingMaxTimeSec,
+    rogainingPenaltyPerMin:
+      mutable.rogainingPenaltyPerMin < 0 ? null : mutable.rogainingPenaltyPerMin,
+  };
+}
+
+export async function deleteClassFromFirestore(
+  competitionId: string,
+  classId: string
+): Promise<void> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const id = sanitizeFirestoreId(classId, 'cls');
+  await deleteDoc(doc(db, 'competitions', context.competitionId, 'classes', id));
+}
+
+export async function saveStationToFirestore(
+  competitionId: string,
+  payload: Partial<SIStation>
+): Promise<SIStation> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const id = payload.id
+    ? sanitizeFirestoreId(payload.id, 'st')
+    : doc(collection(db, 'competitions', context.competitionId, 'stations')).id;
+  const ref = doc(db, 'competitions', context.competitionId, 'stations', id);
+  const hardwareModels: SIStation['hardwareModel'][] = [
+    'BSM8-USB',
+    'BSM7-USB',
+    'SRR-USB (Air+)',
+    'BSF9 Master',
+    'BSF8 Master',
+  ];
+  const stationFunctions: StationFunction[] = [
+    'CLEAR',
+    'CHECK',
+    'START',
+    'RADIO',
+    'PREWARNING',
+    'FINISH',
+    'READOUT',
+  ];
+  const station: SIStation = {
+    id,
+    stationCode: clampInt(payload.stationCode, 1, 999, 42),
+    name: (payload.name || '').trim().slice(0, 120),
+    hardwareModel: hardwareModels.includes(payload.hardwareModel as SIStation['hardwareModel'])
+      ? (payload.hardwareModel as SIStation['hardwareModel'])
+      : 'SRR-USB (Air+)',
+    stationFunction: stationFunctions.includes(payload.stationFunction as StationFunction)
+      ? (payload.stationFunction as StationFunction)
+      : 'RADIO',
+    baudRate: payload.baudRate === 4800 ? 4800 : 38400,
+    extendedProtocol: Boolean(payload.extendedProtocol),
+    batteryMv: clampInt(payload.batteryMv, 0, 6000, 0),
+    firmware: (payload.firmware || '').trim().slice(0, 80),
+    lastSeenAt: payload.lastSeenAt || null,
+    active: payload.active !== false,
+  };
+  if (!station.name) throw new Error('Stationen måste ha ett namn.');
+
+  const duplicateStations = await getDocs(
+    query(
+      collection(db, 'competitions', context.competitionId, 'stations'),
+      where('stationCode', '==', station.stationCode)
+    )
+  );
+  if (duplicateStations.docs.some((stationDoc) => stationDoc.id !== id)) {
+    throw new Error(`Stationskod CN ${station.stationCode} är redan konfigurerad.`);
+  }
+
+  const existing = await getDoc(ref);
+  if (existing.exists()) {
+    if (existing.data().ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+      throw new Error('Stationen tillhör ett annat administratörskonto.');
+    }
+    await updateDoc(ref, {
+      stationCode: station.stationCode,
+      name: station.name,
+      hardwareModel: station.hardwareModel,
+      stationFunction: station.stationFunction,
+      baudRate: station.baudRate,
+      extendedProtocol: station.extendedProtocol,
+      batteryMv: station.batteryMv,
+      firmware: station.firmware,
+      lastSeenAt: station.lastSeenAt || '',
+      active: station.active,
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await setDoc(ref, {
+      stationId: id,
+      competitionId: context.competitionId,
+      ownerUid: context.ownerUid,
+      stationCode: station.stationCode,
+      name: station.name,
+      hardwareModel: station.hardwareModel,
+      stationFunction: station.stationFunction,
+      baudRate: station.baudRate,
+      extendedProtocol: station.extendedProtocol,
+      batteryMv: station.batteryMv,
+      firmware: station.firmware,
+      lastSeenAt: station.lastSeenAt || '',
+      active: station.active,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+  return station;
+}
+
+export async function deleteStationFromFirestore(
+  competitionId: string,
+  stationId: string
+): Promise<void> {
+  const context = await getCompetitionMutationContext(competitionId);
+  await deleteDoc(
+    doc(
+      db,
+      'competitions',
+      context.competitionId,
+      'stations',
+      sanitizeFirestoreId(stationId, 'st')
+    )
+  );
+}
+
+export async function updateCompetitorInFirestore(
+  competitionId: string,
+  competitorId: string,
+  patch: Partial<Competitor>
+): Promise<void> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const id = sanitizeFirestoreId(competitorId, 'cmp');
+  const mutable: Record<string, unknown> = {};
+  const fields: Array<keyof Competitor> = [
+    'bib',
+    'fullName',
+    'club',
+    'classId',
+    'siNumber',
+    'cardSeries',
+    'isRentalCard',
+    'rentalReturned',
+    'isSelfRegistered',
+    'feePaid',
+    'status',
+    'allocatedStartSec',
+    'checkTimeSec',
+    'startTimeSec',
+    'finishTimeSec',
+    'manualFinishTimeSec',
+    'runningTimeSec',
+  ];
+  for (const field of fields) {
+    if (field in patch) {
+      const value = patch[field];
+      if (value === undefined) continue;
+      mutable[field] =
+        field === 'allocatedStartSec' ||
+        field === 'checkTimeSec' ||
+        field === 'startTimeSec' ||
+        field === 'finishTimeSec' ||
+        field === 'manualFinishTimeSec' ||
+        field === 'runningTimeSec'
+          ? encodeNullableSec(value as number | null | undefined)
+          : value;
+    }
+  }
+  if ('readoutAt' in patch) {
+    mutable.readoutAtIso = (patch.readoutAt || '').slice(0, 40);
+  }
+  if ('cardPunches' in patch) {
+    const punches = (patch.cardPunches || []).slice(0, 192);
+    mutable.punchCodes = punches.map((punch) => clampInt(punch.code, 1, 999, 31));
+    mutable.punchTimes = punches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0));
+  }
+  if (Object.keys(mutable).length === 0) return;
+
+  const competitionRef = doc(db, 'competitions', context.competitionId);
+  const competitorRef = doc(
+    db,
+    'competitions',
+    context.competitionId,
+    'competitors',
+    id
+  );
+  await runTransaction(db, async (transaction) => {
+    const [competitionSnap, competitorSnap] = await Promise.all([
+      transaction.get(competitionRef),
+      transaction.get(competitorRef),
+    ]);
+    if (!competitionSnap.exists() || !competitorSnap.exists()) {
+      throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+    }
+    const competition = competitionSnap.data();
+    const existing = competitorSnap.data();
+    if (competition.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+      throw new Error('Ditt konto saknar behörighet att uppdatera deltagaren.');
+    }
+    transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
+    if (typeof mutable.status === 'string') {
+      const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
+      const previouslyFinished = finishedStatuses.has(String(existing.status));
+      const willBeFinished = finishedStatuses.has(mutable.status);
+      if (previouslyFinished !== willBeFinished) {
+        transaction.update(competitionRef, {
+          finishedCount: clampInt(
+            Number(competition.finishedCount || 0) + (willBeFinished ? 1 : -1),
+            0,
+            Number(competition.competitorCount || 0),
+            0
+          ),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+  });
+}
+
+export async function deleteCompetitorFromFirestore(
+  competitionId: string,
+  competitorId: string
+): Promise<void> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const competitionRef = doc(db, 'competitions', context.competitionId);
+  const competitorRef = doc(
+    db,
+    'competitions',
+    context.competitionId,
+    'competitors',
+    sanitizeFirestoreId(competitorId, 'cmp')
+  );
+
+  await runTransaction(db, async (transaction) => {
+    const [competitionSnap, competitorSnap] = await Promise.all([
+      transaction.get(competitionRef),
+      transaction.get(competitorRef),
+    ]);
+    if (!competitionSnap.exists() || !competitorSnap.exists()) {
+      throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+    }
+    const competition = competitionSnap.data();
+    const competitor = competitorSnap.data();
+    if (
+      competition.ownerUid !== context.ownerUid &&
+      !context.isSuperAdmin
+    ) {
+      throw new Error('Ditt konto saknar behörighet att ta bort deltagaren.');
+    }
+    if (competition.status === 'COMPLETED' && !context.isSuperAdmin) {
+      throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
+    }
+    const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
+    transaction.delete(competitorRef);
+    transaction.update(competitionRef, {
+      competitorCount: Math.max(0, Number(competition.competitorCount || 0) - 1),
+      ...(finished
+        ? { finishedCount: Math.max(0, Number(competition.finishedCount || 0) - 1) }
+        : {}),
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+export async function deleteRunnerDbEntryFromFirestore(siNumber: number): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Raderingen kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (current.email || '').toLowerCase()
+  );
+  const adminSnap = isBootstrapAdmin
+    ? null
+    : await getDoc(doc(db, 'admins', sanitizeFirestoreId(current.uid, 'usr')));
+  const role = adminSnap?.exists() ? adminSnap.data().role : null;
+  if (!isBootstrapAdmin && role !== 'RACE_ADMIN' && role !== 'SUPER_ADMIN') {
+    throw new Error('Ditt Google-konto saknar administratörsbehörighet.');
+  }
+  if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999) {
+    throw new Error('Ogiltigt SI-nummer.');
+  }
+  await deleteDoc(doc(db, 'runnerDb', String(siNumber)));
+}
+
+export async function recalculateCompetitionFromFirestore(
+  competitionId: string,
+  patch?: Partial<EmergencySettings>
+): Promise<{
+  recalculatedCount: number;
+  emergency: EmergencySettings;
+  competitors: Competitor[];
+}> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const season = await loadFullSeasonFromFirestore({
+    competitionId: context.competitionId,
+    includeRunnerDb: false,
+  });
+  const event = season?.events.find(
+    (candidate) => candidate.competition.id === context.competitionId
+  );
+  if (!event) throw new Error('Tävlingen hittades inte i Firestore.');
+
+  const emergency: EmergencySettings = {
+    brokenControls: Array.from(
+      new Set(
+        (patch?.brokenControls ?? event.brokenControls)
+          .map((code) => clampInt(code, 1, 999, 31))
+      )
+    ).slice(0, 64),
+    controlTimeOffsets: normalizeControlTimeOffsets(
+      patch?.controlTimeOffsets ?? event.emergency?.controlTimeOffsets
+    ),
+  };
+  const competitors = event.competitors.map((runner) => ({ ...runner }));
+  const updates: Array<{ ref: DocumentReference; data: Record<string, unknown> }> = [];
+  let recalculatedCount = 0;
+  for (const runner of competitors) {
+    const raw = runner.rawReadout;
+    const sourcePunches = raw ? raw.punches : runner.cardPunches;
+    const hasReadoutData = Boolean(raw || runner.readoutAt || sourcePunches.length > 0);
+    if (!hasReadoutData) continue;
+
+    const effectiveStart =
+      runner.startTimeSec ??
+      raw?.startTimeSec ??
+      runner.allocatedStartSec ??
+      event.competition.zeroTimeSec;
+    const effectiveFinish =
+      runner.manualFinishTimeSec ?? raw?.finishTimeSec ?? runner.finishTimeSec;
+    const validation = validateCompetitorReadout(
+      event.classes.find((candidate) => candidate.id === runner.classId),
+      event.courses,
+      effectiveStart,
+      effectiveFinish,
+      sourcePunches,
+      emergency
+    );
+    runner.cardPunches = applyEmergencyTimeOffsets(
+      sourcePunches,
+      emergency.controlTimeOffsets
+    );
+    runner.finishTimeSec = effectiveFinish;
+    runner.runningTimeSec =
+      effectiveFinish !== null && effectiveFinish >= effectiveStart
+        ? effectiveFinish - effectiveStart
+        : null;
+    runner.validation = validation;
+    if (runner.status !== 'DNF' && runner.status !== 'DNS') {
+      runner.status = validation.ok ? 'OK' : 'MP';
+    }
+
+    updates.push({
+      ref: doc(
+        db,
+        'competitions',
+        context.competitionId,
+        'competitors',
+        sanitizeFirestoreId(runner.id, 'cmp')
+      ),
+      data: {
+        status: runner.status,
+        finishTimeSec: encodeNullableSec(runner.finishTimeSec),
+        runningTimeSec: encodeNullableSec(runner.runningTimeSec),
+        punchCodes: runner.cardPunches.map((punch) => clampInt(punch.code, 1, 999, 31)),
+        punchTimes: runner.cardPunches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
+        updatedAt: serverTimestamp(),
+      },
+    });
+    recalculatedCount += 1;
+  }
+
+  const finishedCount = competitors.filter((runner) =>
+    ['OK', 'MP', 'PRELIMINARY_FIN'].includes(runner.status)
+  ).length;
+  for (let offset = 0; offset < updates.length; offset += 400) {
+    const batch = writeBatch(db);
+    for (const update of updates.slice(offset, offset + 400)) {
+      batch.update(update.ref, update.data);
+    }
+    await batch.commit();
+  }
+  await updateDoc(doc(db, 'competitions', context.competitionId), {
+    brokenControls: emergency.brokenControls,
+    controlTimeOffsets: emergency.controlTimeOffsets,
+    finishedCount,
+    updatedAt: serverTimestamp(),
+  });
+
+  return { recalculatedCount, emergency, competitors };
+}
+
+export async function submitOnlinePunchToFirestore(
+  competitionId: string,
+  punch: {
+    clientPunchId: string;
+    siNumber: number;
+    stationCode: number;
+    punchTimeSec?: number;
+    rawHex?: string;
+    stationName?: string;
+    stationFunction?: StationFunction;
+    timeOffsetSec?: number;
+  }
+): Promise<{ deduplicated: boolean }> {
+  const context = await getCompetitionMutationContext(competitionId);
+  if (!Number.isInteger(punch.siNumber) || punch.siNumber < 1 || punch.siNumber > 99999999) {
+    throw new Error('Ogiltigt SI-nummer vid online-stämpling.');
+  }
+  if (!Number.isInteger(punch.stationCode) || punch.stationCode < 1 || punch.stationCode > 999) {
+    throw new Error('Ogiltig kontrollkod vid online-stämpling.');
+  }
+  const rawTimeSec = punch.punchTimeSec ?? Number.NaN;
+  if (punch.punchTimeSec !== undefined && (!Number.isInteger(rawTimeSec) || rawTimeSec < 0 || rawTimeSec > 86400)) {
+    throw new Error('Ogiltig tid vid online-stämpling.');
+  }
+  const clientPunchId = sanitizeFirestoreId(punch.clientPunchId, 'op');
+  const season = await loadFullSeasonFromFirestore({
+    competitionId: context.competitionId,
+    includeRunnerDb: false,
+  });
+  const event = season?.events.find((candidate) => candidate.competition.id === context.competitionId);
+  if (!event) throw new Error('Tävlingen hittades inte i Firestore för online-stämplingen.');
+  const configuredStation = event.stations.find(
+    (station) => station.active && station.stationCode === punch.stationCode
+  );
+  const stationFunction: StationFunction = configuredStation?.stationFunction ?? 'RADIO';
+  const stationName = (
+    configuredStation?.name ||
+    punch.stationName ||
+    `Radiokontroll K${punch.stationCode}`
+  )
+    .trim()
+    .slice(0, 120);
+  const now = new Date();
+  const rawSec =
+    punch.punchTimeSec ??
+    Number(
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Stockholm',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      })
+        .format(now)
+        .split(':')
+        .reduce((acc, part) => acc * 60 + Number(part), 0)
+    );
+  const offsetSec = Number.isFinite(punch.timeOffsetSec)
+    ? Math.round(Number(punch.timeOffsetSec))
+    : 0;
+  const punchTimeSec = (((rawSec + offsetSec) % 86400) + 86400) % 86400;
+  const matchingRunners = event.competitors.filter(
+    (competitor) =>
+      competitor.siNumber === punch.siNumber && competitor.status !== 'DNS'
+  );
+  const runner =
+    matchingRunners.find((competitor) =>
+      ['IN_FOREST', 'CHECKED', 'REGISTERED', 'PRELIMINARY_FIN'].includes(competitor.status)
+    ) ??
+    matchingRunners[0] ??
+    null;
+  const competitorId = runner ? sanitizeFirestoreId(runner.id, 'cmp') : '';
+  const competitorRef = runner
+    ? doc(db, 'competitions', context.competitionId, 'competitors', competitorId)
+    : null;
+  const competitionRef = doc(db, 'competitions', context.competitionId);
+  const punchRef = doc(
+    db,
+    'competitions',
+    context.competitionId,
+    'stationPunches',
+    clientPunchId
+  );
+  const startRef =
+    runner?.startTimeSec ?? runner?.allocatedStartSec ?? event.competition.zeroTimeSec;
+  const runningTimeSec = runner && punchTimeSec >= startRef ? punchTimeSec - startRef : -1;
+  const isPrewarning = stationFunction === 'PREWARNING';
+
+  return runTransaction(db, async (transaction) => {
+    const [existingPunch, competitionSnap] = await Promise.all([
+      transaction.get(punchRef),
+      transaction.get(competitionRef),
+    ]);
+    if (existingPunch.exists()) return { deduplicated: true };
+    if (!competitionSnap.exists()) throw new Error('Tävlingen hittades inte i Firestore.');
+
+    const competitorSnap = competitorRef ? await transaction.get(competitorRef) : null;
+    const competition = competitionSnap.data();
+    const createdAt = serverTimestamp();
+    transaction.set(punchRef, {
+      punchId: clientPunchId,
+      competitionId: context.competitionId,
+      ownerUid: context.ownerUid,
+      clientPunchId,
+      siNumber: punch.siNumber,
+      stationCode: punch.stationCode,
+      punchTimeSec,
+      rawHex: (punch.rawHex || '').slice(0, 2000),
+      stationName,
+      stationFunction,
+      competitorId: competitorSnap?.exists() ? competitorId : '',
+      runningTimeSec,
+      isPrewarning,
+      createdAt,
+    });
+
+    if (!competitorSnap?.exists() || !competitorRef) {
+      return { deduplicated: false };
+    }
+
+    const competitor = competitorSnap.data();
+    const update: Record<string, unknown> = { updatedAt: serverTimestamp() };
+    if (stationFunction === 'CHECK') {
+      update.checkTimeSec = punchTimeSec;
+      if (competitor.status === 'REGISTERED' || competitor.status === 'DNS') {
+        update.status = 'CHECKED';
+      }
+    } else if (stationFunction === 'START') {
+      update.startTimeSec = punchTimeSec;
+      if (
+        competitor.status === 'REGISTERED' ||
+        competitor.status === 'CHECKED' ||
+        competitor.status === 'DNS'
+      ) {
+        update.status = 'IN_FOREST';
+      }
+    } else if (stationFunction === 'FINISH') {
+      update.finishTimeSec = punchTimeSec;
+      update.runningTimeSec = runningTimeSec;
+      if (competitor.status !== 'OK' && competitor.status !== 'MP') {
+        update.status = 'PRELIMINARY_FIN';
+      }
+      if (
+        !['OK', 'MP', 'DNF', 'PRELIMINARY_FIN'].includes(String(competitor.status))
+      ) {
+        transaction.update(competitionRef, {
+          finishedCount: Math.min(
+            Number(competition.competitorCount || 0),
+            Number(competition.finishedCount || 0) + 1
+          ),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } else if (
+      (stationFunction === 'RADIO' || stationFunction === 'PREWARNING') &&
+      (competitor.status === 'REGISTERED' || competitor.status === 'CHECKED')
+    ) {
+      update.status = 'IN_FOREST';
+    }
+    transaction.update(competitorRef, update);
+    return { deduplicated: false };
   });
 }
 
@@ -1990,7 +3024,7 @@ export async function submitReadoutToFirestore(
         effectiveStart,
         effectiveFinish,
         punches,
-        { brokenControls: event.brokenControls, controlTimeOffsets: {} }
+        event.emergency ?? { brokenControls: event.brokenControls, controlTimeOffsets: {} }
       )
     : null;
   const updatedCompetitor: Competitor | null =
@@ -2328,6 +3362,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     punchCodes: rawPunches.map((punch) => clampInt(punch.code, 1, 999, 31)),
     punchTimes: rawPunches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
   };
+  const nextCompetitorCount = existingCompetitors.length + 1;
   const batch = writeBatch(db);
   batch.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
     competitorId,
@@ -2338,7 +3373,11 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     updatedAt: createdAt,
   });
   batch.update(competitionRef, {
-    competitorCount: existingCompetitors.length + 1,
+    competitorCount: nextCompetitorCount,
+    finishedCount: Math.min(
+      nextCompetitorCount,
+      Number(competitionData.finishedCount || 0) + (status === 'OK' || status === 'MP' ? 1 : 0)
+    ),
     updatedAt: serverTimestamp(),
   });
 
@@ -2714,17 +3753,10 @@ export const DEFAULT_CLUB_SETTINGS: ClubSettings = {
  * `getDoc(doc(db, 'clubSettings', 'default'))`
  * NEVER uses `getDocs()` on the whole collection because collection listing is forbidden in firestore.rules (`allow list: if false;`).
  * - If the document does not exist yet, returns default settings cleanly without throwing an error.
- * - Verifies that auth.currentUser has loaded completely before making the call.
- * - On permission-denied, throws an instructive message explaining that the user account needs to be registered under /admins in Firestore.
+ * The document allows public single-document reads, so branding can load before login.
+ * - On permission-denied, throws a clear error rather than silently hiding a rules issue.
  */
 export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
-  const current = await ensureValidFirestoreUser();
-  if (!current) {
-    if (!auth.currentUser) {
-      throw new Error('Du måste vara inloggad med Google för att hämta klubbinställningar.');
-    }
-  }
-
   try {
     const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
     if (!clubSnap.exists()) {
@@ -2754,7 +3786,7 @@ export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
       msg.includes('missing or insufficient permissions')
     ) {
       throw new Error(
-        'Behörighet saknas (permission-denied). Ditt Google-konto behöver finnas registrerat under /admins i Firestore.'
+        'Behörighet saknas när klubbinställningarna hämtas från Firestore.'
       );
     }
     if (isTransientOfflineFirestoreError(err)) {
@@ -2856,6 +3888,7 @@ export async function createCompetitionInFirestore(
     competitorCount: 0,
     finishedCount: 0,
     brokenControls: [] as number[],
+    controlTimeOffsets: {},
     pinStart,
     pinReadout,
     pinForest,

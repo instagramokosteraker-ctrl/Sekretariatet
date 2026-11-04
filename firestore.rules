@@ -216,6 +216,7 @@ service cloud.firestore {
           'competitorCount',
           'finishedCount',
           'brokenControls',
+          'controlTimeOffsets',
           'pinStart',
           'pinReadout',
           'pinForest',
@@ -243,6 +244,13 @@ service cloud.firestore {
         data.finishedCount <= data.competitorCount &&
         data.brokenControls is list && data.brokenControls.size() <= 64 &&
         (data.brokenControls.size() == 0 || data.brokenControls[0] is int) &&
+        (
+          !data.keys().hasAny(['controlTimeOffsets']) ||
+          (
+            data.controlTimeOffsets is map &&
+            data.controlTimeOffsets.size() <= 64
+          )
+        ) &&
         data.pinStart is string && data.pinStart.size() >= 4 && data.pinStart.size() <= 6 && data.pinStart.matches('^\\d{4,6}$') &&
         data.pinReadout is string && data.pinReadout.size() >= 4 && data.pinReadout.size() <= 6 && data.pinReadout.matches('^\\d{4,6}$') &&
         data.pinForest is string && data.pinForest.size() >= 4 && data.pinForest.size() <= 6 && data.pinForest.matches('^\\d{4,6}$') &&
@@ -729,6 +737,11 @@ service cloud.firestore {
           'updatedAt'
         ]) &&
         isAdmin();
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(siNumber) &&
+        resource != null &&
+        isAdmin();
     }
 
     // =========================================================================
@@ -780,6 +793,7 @@ service cloud.firestore {
               'competitorCount',
               'finishedCount',
               'brokenControls',
+              'controlTimeOffsets',
               'pinStart',
               'pinReadout',
               'pinForest',
@@ -807,6 +821,7 @@ service cloud.firestore {
               'competitorCount',
               'finishedCount',
               'brokenControls',
+              'controlTimeOffsets',
               'pinStart',
               'pinReadout',
               'pinForest',
@@ -1199,6 +1214,240 @@ service cloud.firestore {
           parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
           parentCompetitionData(competitionId).status != 'COMPLETED' &&
           isAdmin();
+
+        allow update, delete: if false;
+      }
+
+      match /stations/{stationId} {
+        function isValidCloudStation(data) {
+          return data.keys().hasAll([
+              'stationId',
+              'competitionId',
+              'ownerUid',
+              'stationCode',
+              'name',
+              'hardwareModel',
+              'stationFunction',
+              'baudRate',
+              'extendedProtocol',
+              'batteryMv',
+              'firmware',
+              'lastSeenAt',
+              'active',
+              'createdAt',
+              'updatedAt'
+            ]) &&
+            data.keys().hasOnly([
+              'stationId',
+              'competitionId',
+              'ownerUid',
+              'stationCode',
+              'name',
+              'hardwareModel',
+              'stationFunction',
+              'baudRate',
+              'extendedProtocol',
+              'batteryMv',
+              'firmware',
+              'lastSeenAt',
+              'active',
+              'createdAt',
+              'updatedAt'
+            ]) &&
+            isValidId(data.stationId) &&
+            isValidId(data.competitionId) &&
+            isValidId(data.ownerUid) &&
+            data.stationCode is int && data.stationCode >= 1 && data.stationCode <= 999 &&
+            data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+            (
+              data.hardwareModel == 'BSM8-USB' ||
+              data.hardwareModel == 'BSM7-USB' ||
+              data.hardwareModel == 'SRR-USB (Air+)' ||
+              data.hardwareModel == 'BSF9 Master' ||
+              data.hardwareModel == 'BSF8 Master'
+            ) &&
+            (
+              data.stationFunction == 'CLEAR' ||
+              data.stationFunction == 'CHECK' ||
+              data.stationFunction == 'START' ||
+              data.stationFunction == 'RADIO' ||
+              data.stationFunction == 'PREWARNING' ||
+              data.stationFunction == 'FINISH' ||
+              data.stationFunction == 'READOUT'
+            ) &&
+            (data.baudRate == 38400 || data.baudRate == 4800) &&
+            data.extendedProtocol is bool &&
+            data.batteryMv is int && data.batteryMv >= 0 && data.batteryMv <= 6000 &&
+            data.firmware is string && data.firmware.size() <= 80 &&
+            data.lastSeenAt is string && data.lastSeenAt.size() <= 40 &&
+            data.active is bool &&
+            data.createdAt is timestamp &&
+            data.updatedAt is timestamp;
+        }
+
+        allow get, list: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+            isSuperAdmin()
+          ) &&
+          isAdmin();
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(stationId) &&
+          isValidCloudStation(incoming()) &&
+          incoming().stationId == stationId &&
+          incoming().competitionId == competitionId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          parentCompetitionData(competitionId).status != 'COMPLETED' &&
+          (
+            (
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+
+        allow update: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(stationId) &&
+          isValidCloudStation(incoming()) &&
+          resource != null &&
+          incoming().stationId == existing().stationId &&
+          incoming().competitionId == existing().competitionId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'stationCode',
+            'name',
+            'hardwareModel',
+            'stationFunction',
+            'baudRate',
+            'extendedProtocol',
+            'batteryMv',
+            'firmware',
+            'lastSeenAt',
+            'active',
+            'updatedAt'
+          ]) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(stationId) &&
+          resource != null &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
+      }
+
+      match /stationPunches/{punchId} {
+        function isValidStationPunch(data) {
+          return data.keys().hasAll([
+              'punchId',
+              'competitionId',
+              'ownerUid',
+              'clientPunchId',
+              'siNumber',
+              'stationCode',
+              'punchTimeSec',
+              'rawHex',
+              'stationName',
+              'stationFunction',
+              'competitorId',
+              'runningTimeSec',
+              'isPrewarning',
+              'createdAt'
+            ]) &&
+            data.keys().hasOnly([
+              'punchId',
+              'competitionId',
+              'ownerUid',
+              'clientPunchId',
+              'siNumber',
+              'stationCode',
+              'punchTimeSec',
+              'rawHex',
+              'stationName',
+              'stationFunction',
+              'competitorId',
+              'runningTimeSec',
+              'isPrewarning',
+              'createdAt'
+            ]) &&
+            isValidId(data.punchId) &&
+            isValidId(data.competitionId) &&
+            isValidId(data.ownerUid) &&
+            isValidId(data.clientPunchId) &&
+            data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
+            data.stationCode is int && data.stationCode >= 1 && data.stationCode <= 999 &&
+            data.punchTimeSec is int && data.punchTimeSec >= 0 && data.punchTimeSec <= 86400 &&
+            data.rawHex is string && data.rawHex.size() <= 2000 &&
+            data.stationName is string && data.stationName.size() >= 1 &&
+              data.stationName.size() <= 120 &&
+            (
+              data.stationFunction == 'CLEAR' ||
+              data.stationFunction == 'CHECK' ||
+              data.stationFunction == 'START' ||
+              data.stationFunction == 'RADIO' ||
+              data.stationFunction == 'PREWARNING' ||
+              data.stationFunction == 'FINISH' ||
+              data.stationFunction == 'READOUT'
+            ) &&
+            (data.competitorId == '' || isValidId(data.competitorId)) &&
+            data.runningTimeSec is int &&
+              data.runningTimeSec >= -1 && data.runningTimeSec <= 86400 &&
+            data.isPrewarning is bool &&
+            data.createdAt is timestamp;
+        }
+
+        allow get, list: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+            isSuperAdmin()
+          ) &&
+          isAdmin();
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(punchId) &&
+          isValidStationPunch(incoming()) &&
+          incoming().punchId == punchId &&
+          incoming().clientPunchId == punchId &&
+          incoming().competitionId == competitionId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          parentCompetitionData(competitionId).status != 'COMPLETED' &&
+          (
+            (
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
 
         allow update, delete: if false;
       }

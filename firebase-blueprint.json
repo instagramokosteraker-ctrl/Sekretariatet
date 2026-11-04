@@ -146,6 +146,134 @@
           "createdAt"
         ]
       },
+    "CloudStation": {
+      "title": "CloudStation",
+      "description": "Competition-scoped SI hardware station configuration.",
+      "type": "object",
+      "properties": {
+        "stationId": { "type": "string" },
+        "competitionId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "stationCode": { "type": "integer", "minimum": 1, "maximum": 999 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "hardwareModel": {
+          "type": "string",
+          "enum": ["BSM8-USB", "BSM7-USB", "SRR-USB (Air+)", "BSF9 Master", "BSF8 Master"]
+        },
+        "stationFunction": {
+          "type": "string",
+          "enum": ["CLEAR", "CHECK", "START", "RADIO", "PREWARNING", "FINISH", "READOUT"]
+        },
+        "baudRate": { "type": "integer", "enum": [4800, 38400] },
+        "extendedProtocol": { "type": "boolean" },
+        "batteryMv": { "type": "integer", "minimum": 0, "maximum": 6000 },
+        "firmware": { "type": "string", "maxLength": 80 },
+        "lastSeenAt": { "type": "string", "maxLength": 40 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "stationId",
+        "competitionId",
+        "ownerUid",
+        "stationCode",
+        "name",
+        "hardwareModel",
+        "stationFunction",
+        "baudRate",
+        "extendedProtocol",
+        "batteryMv",
+        "firmware",
+        "lastSeenAt",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StationPunch": {
+      "title": "StationPunch",
+      "description": "Write-once, idempotent online station punch recorded under a competition.",
+      "type": "object",
+      "properties": {
+        "punchId": {
+          "type": "string",
+          "description": "Client punch identifier matching the document ID."
+        },
+        "competitionId": {
+          "type": "string",
+          "description": "Parent competition identifier."
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Verified administrator UID that submitted the punch."
+        },
+        "clientPunchId": {
+          "type": "string",
+          "description": "Stable client-generated idempotency key."
+        },
+        "siNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99999999
+        },
+        "stationCode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999
+        },
+        "punchTimeSec": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "rawHex": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "stationName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "stationFunction": {
+          "type": "string",
+          "enum": ["CLEAR", "CHECK", "START", "RADIO", "PREWARNING", "FINISH", "READOUT"]
+        },
+        "competitorId": {
+          "type": "string",
+          "description": "Matched competitor ID, or empty for an unknown card."
+        },
+        "runningTimeSec": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 86400
+        },
+        "isPrewarning": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "punchId",
+        "competitionId",
+        "ownerUid",
+        "clientPunchId",
+        "siNumber",
+        "stationCode",
+        "punchTimeSec",
+        "rawHex",
+        "stationName",
+        "stationFunction",
+        "competitorId",
+        "runningTimeSec",
+        "isPrewarning",
+        "createdAt"
+      ]
+    },
     "AdminInvite": {
       "title": "AdminInvite",
       "description": "PII-isolated authorization invite allowing a specific verified Google email to claim a club admin role.",
@@ -429,6 +557,10 @@
         "brokenControls": {
           "type": "array",
           "description": "List of control codes marked malfunctioning in the forest."
+        },
+        "controlTimeOffsets": {
+          "type": "object",
+          "description": "Optional station-code to time-offset map in seconds."
         },
         "pinStart": {
           "type": "string",
@@ -961,6 +1093,14 @@
     "/competitions/{competitionId}/readoutReceipts/{receiptId}": {
       "schema": { "$ref": "#/entities/ReadoutReceipt" },
       "description": "Write-once, admin-only SI-card readout receipts for offline queue delivery and idempotency."
+    },
+    "/competitions/{competitionId}/stations/{stationId}": {
+      "schema": { "$ref": "#/entities/CloudStation" },
+      "description": "Competition-scoped SI hardware station configuration."
+    },
+    "/competitions/{competitionId}/stationPunches/{punchId}": {
+      "schema": { "$ref": "#/entities/StationPunch" },
+      "description": "Write-once, admin-only online station punches with idempotent client delivery."
     },
     "/runnerDb/{siNumber}": {
       "schema": { "$ref": "#/entities/RunnerDbEntry" },

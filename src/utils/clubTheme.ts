@@ -123,6 +123,7 @@ export function applyClubThemeToDocument(
   const customAccent = sanitizeHexColor(settings?.customAccentColor);
 
   const effectiveAccent = customAccent || '#dc2626';
+  const hasCustomTheme = Boolean(customBg || customText || customAccent);
   const accentLum = relativeLuminance(effectiveAccent);
   const accentHover =
     accentLum > 0.45
@@ -133,6 +134,11 @@ export function applyClubThemeToDocument(
   root.style.setProperty('--club-accent', effectiveAccent);
   root.style.setProperty('--club-accent-hover', accentHover);
   root.style.setProperty('--club-accent-fg', accentFg);
+  if (hasCustomTheme) {
+    root.setAttribute('data-club-custom', 'true');
+  } else {
+    root.removeAttribute('data-club-custom');
+  }
 
   if (!darkMode && (customBg || customText)) {
     const bg = customBg || '#f8fafc';
@@ -151,7 +157,6 @@ export function applyClubThemeToDocument(
     const border = mixHex(bg, text, 0.14);
     const muted = mixHex(bg, text, 0.66);
 
-    root.setAttribute('data-club-custom', 'true');
     root.style.setProperty('--club-bg', bg);
     root.style.setProperty('--club-surface', surface);
     root.style.setProperty('--club-surface-subtle', surfaceSubtle);
@@ -159,7 +164,6 @@ export function applyClubThemeToDocument(
     root.style.setProperty('--club-text', text);
     root.style.setProperty('--club-muted', muted);
   } else {
-    root.removeAttribute('data-club-custom');
     root.style.removeProperty('--club-bg');
     root.style.removeProperty('--club-surface');
     root.style.removeProperty('--club-surface-subtle');

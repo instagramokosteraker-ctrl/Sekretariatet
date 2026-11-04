@@ -4,8 +4,9 @@ import type {
   FullCardReadoutPayload,
   LiveEventItem,
   RunnerDbEntry,
+  StationFunction,
 } from '../types/sportident';
-import { submitReadoutToFirestore } from '../firebase';
+import { submitOnlinePunchToFirestore, submitReadoutToFirestore } from '../firebase';
 
 export interface QueuedReadoutItem {
   id: string;
@@ -19,6 +20,9 @@ export interface QueuedReadoutItem {
     stationCode: number;
     punchTimeSec?: number;
     rawHex?: string;
+    stationName?: string;
+    stationFunction?: StationFunction;
+    timeOffsetSec?: number;
   };
 }
 
@@ -86,7 +90,6 @@ class OfflineReadoutQueueManager {
       this.retryTimer = setInterval(() => {
         if (
           this.items.length > 0 &&
-          this.items[0].kind !== 'ONLINE_PUNCH' &&
           !this.simulatedOffline &&
           this.browserOnline
         ) {
@@ -260,6 +263,9 @@ class OfflineReadoutQueueManager {
       stationCode: number;
       punchTimeSec?: number;
       rawHex?: string;
+      stationName?: string;
+      stationFunction?: StationFunction;
+      timeOffsetSec?: number;
     },
     eventId?: string
   ): Promise<{ queuedOffline: boolean }> {
@@ -307,10 +313,10 @@ class OfflineReadoutQueueManager {
       }
 
       if (item.kind === 'ONLINE_PUNCH' && item.onlinePunchPayload) {
-        this.lastError =
-          'Synkning av online-stämplingar stöds inte i Firestore ännu. Posten ligger kvar i kön.';
-        this.emit();
-        return null;
+        if (!item.eventId) throw new Error('Tävlingen för online-stämplingen saknas.');
+        await submitOnlinePunchToFirestore(item.eventId, item.onlinePunchPayload);
+        this.lastError = null;
+        return { queuedOffline: false };
       }
       this.lastError = 'Köposten saknar giltiga avläsningsdata.';
       this.emit();

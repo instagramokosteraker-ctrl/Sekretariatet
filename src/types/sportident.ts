@@ -116,7 +116,7 @@ export interface CompClass {
 
 export interface SIStation {
   id: string;
-  stationCode: number; // e.g. 10 (Check), 20 (Start), 42 (Radio), 100 (Förvarning), 90 (Mål), 1 (Avläsning)
+  stationCode: number;
   name: string;
   hardwareModel: HardwareModel;
   stationFunction: StationFunction;
@@ -517,7 +517,9 @@ export interface CloudEventExportItem {
   courses: Course[];
   classes: CompClass[];
   competitors: Competitor[];
+  stations?: SIStation[];
   brokenControls: number[];
+  emergency?: EmergencySettings;
   rolePins: RolePinMap;
   pinsCustomized: boolean;
 }

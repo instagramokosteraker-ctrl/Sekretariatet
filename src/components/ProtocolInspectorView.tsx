@@ -125,13 +125,13 @@ export function ProtocolInspectorView({
               onClick={() =>
                 setHexEditor(
                   bytesToHex(
-                    buildTransRecFrame({ stationCode: 100, siNumber: 8339104, timeSec: 38075 })
+                    buildTransRecFrame({ stationCode: 42, siNumber: 8339104, timeSec: 38075 })
                   )
                 )
               }
               className="px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-lg"
             >
-              Mall: 0xD3 Förvarning K100
+              Mall: 0xD3 Radiostämpling K42
             </button>
 
             <button
