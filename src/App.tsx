@@ -7,7 +7,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   Binary,
-  ChevronDown,
   CloudOff,
   Compass,
   Eye,
@@ -258,7 +257,6 @@ export default function App() {
     return 'readout';
   });
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [eventPickerOpen, setEventPickerOpen] = useState(false);
   const [createEventModalOpen, setCreateEventModalOpen] = useState(false);
 
   useEffect(() => {
@@ -334,14 +332,12 @@ export default function App() {
     if (authSession.user.sessionKind === 'PIN_OFFICIAL') {
       const lockedRole = authSession.user.officialRole as OfficialRoleMode;
       handleChangeRoleMode(lockedRole, false);
-      setEventPickerOpen(false);
       setCreateEventModalOpen(false);
     }
   }, [authSession, handleChangeRoleMode]);
 
   const handleLogout = useCallback(async () => {
     setMobileNavOpen(false);
-    setEventPickerOpen(false);
     setCreateEventModalOpen(false);
     await logoutSecretariatSession();
   }, []);
@@ -480,6 +476,7 @@ export default function App() {
   const [activeEventId, setActiveEventId] = useState<string>('');
   const activeEventIdRef = useRef<string>('');
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
+  const [competitionSwitchError, setCompetitionSwitchError] = useState<string | null>(null);
   const [isEmptySeason, setIsEmptySeason] = useState<boolean>(true);
   const [isFreshColdStart, setIsFreshColdStart] = useState<boolean>(false);
   const [demoCleared, setDemoCleared] = useState<boolean>(false);
@@ -1079,17 +1076,20 @@ export default function App() {
   }
 
   const handleActivateCompetition = async (eventId: string) => {
-    setEventPickerOpen(false);
+    setCompetitionSwitchError(null);
     setSelectedRunnerId(null);
     setPendingUnknownReadout(null);
+    if (eventId === activeEventId) return;
     try {
       const res = await apiFetch(`/api/competitions/${encodeURIComponent(eventId)}/activate`, {
         method: 'POST',
       });
       if (res.ok) {
         const snap = (await res.json()) as MeosAppState;
-        applySnapshot(snap);
-        return;
+        if (snap.activeEventId === eventId) {
+          applySnapshot(snap);
+          return;
+        }
       }
     } catch {
       // Backend not running (Vercel)
@@ -1097,37 +1097,46 @@ export default function App() {
 
     try {
       const cloudSnap = await loadFullSeasonFromFirestore();
-      if (cloudSnap) {
-        const targetEvt = cloudSnap.events.find((e) => e.competition.id === eventId);
-        if (targetEvt) {
-          setActiveEventId(eventId);
-          setCompetition(targetEvt.competition);
-          setCourses(targetEvt.courses);
-          setClasses(targetEvt.classes);
-          setCompetitors(targetEvt.competitors);
-          setRunnerDb(cloudSnap.runnerDb ?? []);
-          setCompetitionsList(
-            cloudSnap.events.map((e) => ({
-              id: e.competition.id,
-              shortCode: e.competition.shortCode,
-              status: e.competition.status,
-              name: e.competition.name,
-              organizer: e.competition.organizer,
-              date: e.competition.date,
-              zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
-              arenaInfo: e.competition.arenaInfo || '',
-              seriesName: e.competition.seriesName,
-              allowSelfRegistration: e.competition.allowSelfRegistration !== false,
-              enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
-              competitorCount: e.competitors.length,
-              finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
-              classCount: e.classes.length,
-            }))
-          );
-        }
+      if (!cloudSnap) {
+        throw new Error('Tävlingarna kunde inte hämtas från Firestore.');
       }
+      const targetEvt = cloudSnap.events.find((e) => e.competition.id === eventId);
+      if (!targetEvt) {
+        throw new Error('Den valda tävlingen kunde inte hämtas från Firestore.');
+      }
+
+      setActiveEventId(eventId);
+      setCompetition(targetEvt.competition);
+      setCourses(targetEvt.courses);
+      setClasses(targetEvt.classes);
+      setCompetitors(targetEvt.competitors);
+      setRunnerDb(cloudSnap.runnerDb ?? []);
+      setIsEmptySeason(false);
+      setCompetitionsList(
+        cloudSnap.events.map((e) => ({
+          id: e.competition.id,
+          shortCode: e.competition.shortCode,
+          status: e.competition.status,
+          name: e.competition.name,
+          organizer: e.competition.organizer,
+          date: e.competition.date,
+          zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
+          arenaInfo: e.competition.arenaInfo || '',
+          seriesName: e.competition.seriesName,
+          allowSelfRegistration: e.competition.allowSelfRegistration !== false,
+          enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
+          competitorCount: e.competitors.length,
+          finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
+          classCount: e.classes.length,
+        }))
+      );
     } catch (err) {
-      console.warn('Kunde inte aktivera tävling från Firestore:', err);
+      console.error('Kunde inte aktivera vald tävling:', err);
+      setCompetitionSwitchError(
+        err instanceof Error
+          ? err.message
+          : 'Tävlingen kunde inte aktiveras. Kontrollera anslutningen och försök igen.'
+      );
     }
   };
 
@@ -1279,7 +1288,6 @@ export default function App() {
       setNewEvtAutoClasses(true);
       setNewEvtFreeStart(true);
       setCreateEventModalOpen(false);
-      setEventPickerOpen(false);
 
       // Trigger full season sync if server is alive
       void (async () => {
@@ -1589,54 +1597,9 @@ export default function App() {
             </div>
           ) : (
             <>
-              <div
-                className={`w-full px-2.5 py-1.5 text-left bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-lg ${
-                  competitionsList.length > 1
-                    ? 'hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors'
-                    : ''
-                }`}
-              >
-                {competitionsList.length > 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => setEventPickerOpen((v) => !v)}
-                    aria-expanded={eventPickerOpen}
-                    className="w-full text-left"
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                        {sidebarCompetition?.name || competition.name}
-                      </span>
-                      <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    </div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                      {`${formatLifecycleLabel(sidebarCompetition?.status ?? competition.status)} · ${sidebarCompetition?.date ?? competition.date} kl. ${(sidebarCompetition?.zeroTimeStr ?? competition.zeroTimeStr).slice(0, 5)}`}
-                    </div>
-                  </button>
-                ) : (
-                  <>
-                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                      {sidebarIsEmptySeason
-                        ? 'Ingen aktiv tävling'
-                        : sidebarCompetition?.name || competition.name}
-                    </div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                      {sidebarIsEmptySeason
-                        ? 'Tom säsong'
-                        : `${formatLifecycleLabel(sidebarCompetition?.status ?? competition.status)} · ${sidebarCompetition?.date ?? competition.date} kl. ${(sidebarCompetition?.zeroTimeStr ?? competition.zeroTimeStr).slice(0, 5)}`}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {eventPickerOpen && competitionsList.length > 1 && (
-                <div className="mt-1.5 p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-30">
-                  <label
-                    htmlFor="desktop-event-select"
-                    className="block mb-1 text-[11px] font-medium text-slate-500 dark:text-slate-400"
-                  >
-                    Byt aktiv tävling
-                  </label>
+              {competitionsList.length > 1 ? (
+                <label className="block">
+                  <span className="sr-only">Aktiv tävling</span>
                   <select
                     id="desktop-event-select"
                     value={
@@ -1645,7 +1608,10 @@ export default function App() {
                         : competitionsList[0].id
                     }
                     onChange={(e) => void handleActivateCompetition(e.target.value)}
-                    className="w-full px-2 py-1.5 text-xs font-medium bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100"
+                    aria-describedby={
+                      competitionSwitchError ? 'competition-switch-error' : undefined
+                    }
+                    className="w-full px-2.5 py-2 text-xs font-semibold bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
                   >
                     {competitionsList.map((ev) => (
                       <option key={ev.id} value={ev.id}>
@@ -1653,7 +1619,35 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                </label>
+              ) : (
+                <div className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-lg">
+                  <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    {sidebarIsEmptySeason
+                      ? 'Ingen aktiv tävling'
+                      : sidebarCompetition?.name || competition.name}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                    {sidebarIsEmptySeason
+                      ? 'Tom säsong'
+                      : `${formatLifecycleLabel(sidebarCompetition?.status ?? competition.status)} · ${sidebarCompetition?.date ?? competition.date} kl. ${(sidebarCompetition?.zeroTimeStr ?? competition.zeroTimeStr).slice(0, 5)}`}
+                  </div>
                 </div>
+              )}
+              {competitionsList.length > 1 && sidebarCompetition && (
+                <div className="mt-1 px-2.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  {formatLifecycleLabel(sidebarCompetition.status)} · {sidebarCompetition.date} kl.{' '}
+                  {sidebarCompetition.zeroTimeStr.slice(0, 5)}
+                </div>
+              )}
+              {competitionSwitchError && (
+                <p
+                  id="competition-switch-error"
+                  role="alert"
+                  className="mt-1 px-2.5 text-[11px] text-red-600 dark:text-red-400"
+                >
+                  {competitionSwitchError}
+                </p>
               )}
 
               {/* Funktionärsläge (Admin Workspace Preview Filter) */}
@@ -1861,6 +1855,15 @@ export default function App() {
                       </select>
                     </label>
                   ) : null}
+                  {competitionSwitchError && (
+                    <p
+                      id="mobile-competition-switch-error"
+                      role="alert"
+                      className="text-[11px] text-red-600 dark:text-red-400"
+                    >
+                      {competitionSwitchError}
+                    </p>
+                  )}
                   <div className="flex items-center gap-2 pt-0.5">
                     <label
                       htmlFor="mobile-role-select"
