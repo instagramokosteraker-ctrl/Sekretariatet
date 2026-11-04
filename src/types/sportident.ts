@@ -76,6 +76,7 @@ export interface CompetitionMeta {
 
 export interface CompetitionSummary {
   id: string;
+  competitionId?: string;
   shortCode: string;
   status: EventLifecycleStatus;
   name: string;

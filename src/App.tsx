@@ -94,10 +94,12 @@ import {
   syncFullSeasonToFirestore,
   createCompetitionInFirestore,
   auth,
+  db,
   googleProvider,
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
 import { ForestSafetyView } from './components/ForestSafetyView';
 import { SpeakerResultsView } from './components/SpeakerResultsView';
@@ -384,12 +386,56 @@ export default function App() {
   };
 
   const [firebaseUserPresent, setFirebaseUserPresent] = useState<boolean>(false);
+  const [firebaseUserUid, setFirebaseUserUid] = useState<string | null>(null);
   useEffect(() => {
     const unsub = subscribeFirebaseAuth((u) => {
-      setFirebaseUserPresent(Boolean(u && u.emailVerified));
+      const verifiedUid = u?.emailVerified ? u.uid : null;
+      setFirebaseUserPresent(Boolean(verifiedUid));
+      setFirebaseUserUid(verifiedUid);
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (!firebaseUserUid) return;
+
+    const competitionsQuery = query(
+      collection(db, 'competitions'),
+      where('ownerUid', '==', firebaseUserUid)
+    );
+
+    return onSnapshot(
+      competitionsQuery,
+      (snapshot) => {
+        const competitions = snapshot.docs
+          .map((docSnap) => {
+            const data = docSnap.data() as Partial<CompetitionSummary>;
+            return {
+              id: docSnap.id,
+              competitionId: docSnap.id,
+              shortCode: data.shortCode ?? '',
+              status: data.status ?? 'UPCOMING',
+              name: data.name ?? '',
+              organizer: data.organizer ?? '',
+              date: data.date ?? '',
+              zeroTimeStr: data.zeroTimeStr ?? '18:00:00',
+              arenaInfo: data.arenaInfo ?? '',
+              seriesName: data.seriesName,
+              allowSelfRegistration: data.allowSelfRegistration ?? true,
+              enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
+              competitorCount: data.competitorCount ?? 0,
+              finishedCount: data.finishedCount ?? 0,
+              classCount: data.classCount ?? 0,
+            };
+          })
+          .sort((a, b) => b.date.localeCompare(a.date));
+        setCompetitionsList(competitions);
+      },
+      (error) => {
+        console.error('Kunde inte prenumerera på tävlingar från Firestore:', error);
+      }
+    );
+  }, [firebaseUserUid]);
 
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
