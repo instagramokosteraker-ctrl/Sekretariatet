@@ -441,6 +441,7 @@ export interface ClubAdminAccount {
   displayName: string;
   role: ClubAdminTier;
   isBootstrapOwner?: boolean;
+  isPendingInvite?: boolean;
   addedAt: string;
 }
 

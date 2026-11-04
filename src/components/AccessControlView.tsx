@@ -49,6 +49,7 @@ import {
   ensureValidFirestoreUser,
   getStockholmTodayIso,
   isTokenServiceApiDisabled,
+  listMyAdminInvitesFromFirestore,
   listMyCloudCompetitionsFromFirestore,
   loadClubSettingsFromFirestore,
   loadFullSeasonFromFirestore,
@@ -355,6 +356,32 @@ export function AccessControlView({
           setOfflineCustomized(false);
         }
 
+        if (firebaseReadyUser) {
+          try {
+            const invites = await listMyAdminInvitesFromFirestore();
+            setAdmins((currentAdmins) => {
+              const byEmail = new Map(
+                currentAdmins.map((admin) => [admin.email.toLowerCase(), admin])
+              );
+              for (const invite of invites) {
+                const email = invite.email.toLowerCase();
+                if (!byEmail.has(email)) {
+                  byEmail.set(email, {
+                    email: invite.email,
+                    displayName: invite.displayName,
+                    role: invite.role,
+                    isPendingInvite: true,
+                    addedAt: new Date().toISOString(),
+                  });
+                }
+              }
+              return Array.from(byEmail.values());
+            });
+          } catch (error) {
+            console.error('Kunde inte läsa Google-administratörsinbjudningar från Firestore:', error);
+          }
+        }
+
         if (rentalsRes.ok) {
           const rData = (await rentalsRes.json()) as { rentals?: RentalCardOverviewItem[] };
           setRentals(rData.rentals ?? []);
@@ -419,7 +446,14 @@ export function AccessControlView({
     } finally {
       setLoading(false);
     }
-  }, [activeEventId, classes, competitionName, competitors, currentUser]);
+  }, [
+    activeEventId,
+    classes,
+    competitionName,
+    competitors,
+    currentUser,
+    firebaseReadyUser,
+  ]);
 
   const loadCloudCompetitions = useCallback(async () => {
     const validUser = await ensureValidFirestoreUser();
@@ -945,6 +979,41 @@ export function AccessControlView({
     setAdminBusy(true);
     setAdminNotice(null);
     try {
+      if (firebaseReadyUser) {
+        const user = await ensureValidFirestoreUser();
+        if (!user) {
+          throw new Error('Logga in med ett verifierat Google-konto innan du lägger till administratörer.');
+        }
+        const roleClaim = await ensureAdminRoleInFirestore(user);
+        if (!roleClaim.claimed) {
+          throw new Error('Ditt Google-konto saknar Firestore-administratörsbehörighet.');
+        }
+        await upsertAdminInviteInFirestore({
+          email: normEmail,
+          displayName: cleanName,
+          role: grantedRole,
+          isSuperAdmin,
+        });
+        setAdmins((current) => [
+          ...current.filter((admin) => admin.email.toLowerCase() !== normEmail),
+          {
+            email: normEmail,
+            displayName: cleanName,
+            role: grantedRole,
+            isPendingInvite: true,
+            addedAt: new Date().toISOString(),
+          },
+        ]);
+        setNewAdminEmail('');
+        setNewAdminName('');
+        setNewAdminRole('RACE_ADMIN');
+        setAdminNotice({
+          ok: true,
+          msg: `Inbjudan till ${normEmail} skapad. Personen behöver logga in med det Google-kontot för att aktivera behörigheten.`,
+        });
+        return;
+      }
+
       const res = await apiFetch('/api/auth/admins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -993,6 +1062,14 @@ export function AccessControlView({
             }) i både tävlingsservern och Firestore RBAC.`
           : `Lade till ${normEmail} i tävlingsservern.`,
       });
+    } catch (error) {
+      setAdminNotice({
+        ok: false,
+        msg:
+          error instanceof Error
+            ? error.message
+            : 'Kunde inte lägga till Google-administratör.',
+      });
     } finally {
       setAdminBusy(false);
     }
@@ -1002,6 +1079,27 @@ export function AccessControlView({
     setAdminBusy(true);
     setAdminNotice(null);
     try {
+      if (adm.isPendingInvite && firebaseReadyUser) {
+        await upsertAdminInviteInFirestore({
+          email: adm.email,
+          displayName: adm.displayName,
+          role: nextRole,
+          isSuperAdmin,
+        });
+        setAdmins((current) =>
+          current.map((admin) =>
+            admin.email.toLowerCase() === adm.email.toLowerCase()
+              ? { ...admin, role: nextRole }
+              : admin
+          )
+        );
+        setAdminNotice({
+          ok: true,
+          msg: `Uppdaterade inbjudan för ${adm.email}. Behörigheten aktiveras när personen loggar in.`,
+        });
+        return;
+      }
+
       const res = await apiFetch(`/api/auth/admins/${encodeURIComponent(adm.email)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1037,6 +1135,14 @@ export function AccessControlView({
           nextRole === 'SUPER_ADMIN' ? 'Huvudadministratör' : 'Tävlingsledare'
         }.`,
       });
+    } catch (error) {
+      setAdminNotice({
+        ok: false,
+        msg:
+          error instanceof Error
+            ? error.message
+            : 'Kunde inte ändra behörighetsnivå.',
+      });
     } finally {
       setAdminBusy(false);
     }
@@ -1046,6 +1152,23 @@ export function AccessControlView({
     setAdminBusy(true);
     setAdminNotice(null);
     try {
+      const pendingInvite = admins.find(
+        (admin) =>
+          admin.email.toLowerCase() === email.toLowerCase() && admin.isPendingInvite
+      );
+      if (pendingInvite && firebaseReadyUser) {
+        await removeAdminInviteFromFirestore(email);
+        setAdmins((current) =>
+          current.filter((admin) => admin.email.toLowerCase() !== email.toLowerCase())
+        );
+        setConfirmRemoveEmail(null);
+        setAdminNotice({
+          ok: true,
+          msg: `Tog bort den ännu ej aktiverade inbjudan för ${email}.`,
+        });
+        return;
+      }
+
       const res = await apiFetch(`/api/auth/admins/${encodeURIComponent(email)}`, {
         method: 'DELETE',
       });
@@ -1073,6 +1196,14 @@ export function AccessControlView({
       setAdminNotice({
         ok: true,
         msg: `Tog bort Google-behörigheten för ${email}.`,
+      });
+    } catch (error) {
+      setAdminNotice({
+        ok: false,
+        msg:
+          error instanceof Error
+            ? error.message
+            : 'Kunde inte ta bort kontot.',
       });
     } finally {
       setAdminBusy(false);
@@ -1894,7 +2025,7 @@ export function AccessControlView({
                 Administratörer & Tävlingsledare (Google-inloggning)
               </h2>
               <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                {admins.length} behöriga
+                {admins.length} konton/inbjudningar
               </span>
             </div>
 
@@ -1930,6 +2061,11 @@ export function AccessControlView({
                         <span className="font-mono text-[11px] text-slate-600 dark:text-slate-300 break-all sm:break-normal">
                           {adm.email}
                         </span>
+                        {adm.isPendingInvite && (
+                          <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                            Inbjuden · väntar på första inloggning
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
