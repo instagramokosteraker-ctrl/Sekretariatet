@@ -44,7 +44,108 @@
         }
       },
       "required": ["uid", "displayName", "role", "inviteId", "createdAt", "updatedAt"]
-    },
+      },
+      "ReadoutReceipt": {
+        "title": "ReadoutReceipt",
+        "description": "Write-once receipt for an offline SI-card readout, used for idempotent Firestore delivery and retaining unknown-card data.",
+        "type": "object",
+        "properties": {
+          "receiptId": {
+            "type": "string",
+            "description": "Client readout ID matching the document ID.",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_\\-]+$"
+          },
+          "competitionId": {
+            "type": "string",
+            "description": "Parent competition identifier."
+          },
+          "ownerUid": {
+            "type": "string",
+            "description": "Verified administrator UID that submitted the readout."
+          },
+          "clientReadoutId": {
+            "type": "string",
+            "description": "Stable client-generated idempotency key."
+          },
+          "siNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99999999
+          },
+          "cardSeries": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "stationCode": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999
+          },
+          "checkTimeSec": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 86400
+          },
+          "startTimeSec": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 86400
+          },
+          "finishTimeSec": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 86400
+          },
+          "punchCodes": {
+            "type": "array",
+            "maxItems": 192,
+            "items": { "type": "integer" }
+          },
+          "punchTimes": {
+            "type": "array",
+            "maxItems": 192,
+            "items": { "type": "integer" }
+          },
+          "rawHex": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": ["UNKNOWN", "PROCESSED"]
+          },
+          "competitorId": {
+            "type": "string",
+            "description": "Matched competitor ID, or empty for an unknown card."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Server timestamp when the immutable receipt was created."
+          }
+        },
+        "required": [
+          "receiptId",
+          "competitionId",
+          "ownerUid",
+          "clientReadoutId",
+          "siNumber",
+          "cardSeries",
+          "stationCode",
+          "checkTimeSec",
+          "startTimeSec",
+          "finishTimeSec",
+          "punchCodes",
+          "punchTimes",
+          "rawHex",
+          "status",
+          "competitorId",
+          "createdAt"
+        ]
+      },
     "AdminInvite": {
       "title": "AdminInvite",
       "description": "PII-isolated authorization invite allowing a specific verified Google email to claim a club admin role.",
@@ -771,6 +872,10 @@
     "/competitions/{competitionId}/competitors/{competitorId}": {
       "schema": { "$ref": "#/entities/CloudCompetitor" },
       "description": "Competitors, rental SI-card status, and raw punch lists belonging to a cloud-persisted competition."
+    },
+    "/competitions/{competitionId}/readoutReceipts/{receiptId}": {
+      "schema": { "$ref": "#/entities/ReadoutReceipt" },
+      "description": "Write-once, admin-only SI-card readout receipts for offline queue delivery and idempotency."
     }
   }
 }

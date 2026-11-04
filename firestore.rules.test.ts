@@ -1,6 +1,6 @@
 /**
- * Zero-Trust Firestore Security Rules Test Suite ("Dirty Dozen" Verification)
- * Verifies all 12 adversarial payloads in security_spec.md return PERMISSION_DENIED.
+ * Zero-Trust Firestore Security Rules Test Suite
+ * Verifies security_spec adversarial payloads and write-once readout receipts.
  */
 import {
   assertFails,
@@ -8,6 +8,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
+import { serverTimestamp } from 'firebase/firestore';
 import fs from 'fs';
 import path from 'path';
 
@@ -280,6 +281,49 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
 
     // Positive sanity check: Valid owner read succeeds
     await assertSucceeds(raceAdminCtx.firestore().doc('competitions/evt_live').get());
+
+    // Readout receipts are write-once and restricted to the verified competition admin
+    const receipt = {
+      receiptId: 'ro_test_1',
+      competitionId: 'evt_live',
+      ownerUid: 'race_admin_1',
+      clientReadoutId: 'ro_test_1',
+      siNumber: 8500111,
+      cardSeries: 'SI-Card 10',
+      stationCode: 1,
+      checkTimeSec: -1,
+      startTimeSec: 36000,
+      finishTimeSec: 37500,
+      punchCodes: [31],
+      punchTimes: [36500],
+      rawHex: '',
+      status: 'PROCESSED',
+      competitorId: 'cmp_1',
+      createdAt: serverTimestamp(),
+    };
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/readoutReceipts/ro_test_1')
+        .set(receipt)
+    );
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/readoutReceipts/ro_attacker')
+        .set({
+          ...receipt,
+          receiptId: 'ro_attacker',
+          clientReadoutId: 'ro_attacker',
+          ownerUid: 'attacker_uid',
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/readoutReceipts/ro_test_1')
+        .update({ status: 'UNKNOWN' })
+    );
   } finally {
     await testEnv.cleanup();
   }

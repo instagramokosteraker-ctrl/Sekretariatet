@@ -619,6 +619,7 @@ export default function App() {
   }, [activeEventId]);
 
   const handleReadoutResultFeedback = useCallback((res: ReadoutDeliveryResult) => {
+    const syncedCompetitor = res.competitor;
     if (res.queuedOffline) {
       if (soundEnabledRef.current) playMeosFeedbackTone('registration');
       return;
@@ -629,10 +630,15 @@ export default function App() {
         suggestedRunner: res.suggestedRunner ?? null,
       });
       if (soundEnabledRef.current) playMeosFeedbackTone('mp');
-    } else if (res.competitor) {
-      setSelectedRunnerId(res.competitor.id);
+    } else if (syncedCompetitor) {
+      setCompetitors((current) =>
+        current.map((competitor) =>
+          competitor.id === syncedCompetitor.id ? syncedCompetitor : competitor
+        )
+      );
+      setSelectedRunnerId(syncedCompetitor.id);
       if (soundEnabledRef.current) {
-        playMeosFeedbackTone(res.competitor.status === 'OK' ? 'ok' : 'mp');
+        playMeosFeedbackTone(syncedCompetitor.status === 'OK' ? 'ok' : 'mp');
       }
     }
   }, []);

@@ -5,7 +5,7 @@ import type {
   LiveEventItem,
   RunnerDbEntry,
 } from '../types/sportident';
-import { apiFetch } from './authClient';
+import { submitReadoutToFirestore } from '../firebase';
 
 export interface QueuedReadoutItem {
   id: string;
@@ -84,7 +84,12 @@ class OfflineReadoutQueueManager {
       void this.reconcileWithIndexedDb();
 
       this.retryTimer = setInterval(() => {
-        if (this.items.length > 0 && !this.simulatedOffline && this.browserOnline) {
+        if (
+          this.items.length > 0 &&
+          this.items[0].kind !== 'ONLINE_PUNCH' &&
+          !this.simulatedOffline &&
+          this.browserOnline
+        ) {
           void this.flushQueue();
         }
       }, 4000);
@@ -203,7 +208,7 @@ class OfflineReadoutQueueManager {
 
   /**
    * Stores the SI-card readout in the durable browser queue FIRST before attempting
-   * delivery to the server, guaranteeing zero lost readouts if 4G drops in the forest.
+   * delivery to Firestore, guaranteeing zero lost readouts if 4G drops in the forest.
    */
   public async submitReadoutGuaranteed(
     readout: FullCardReadoutPayload,
@@ -296,41 +301,16 @@ class OfflineReadoutQueueManager {
   ): Promise<ReadoutDeliveryResult | null> {
     try {
       if (item.kind === 'READOUT' && item.readoutPayload) {
-        const res = await apiFetch('/api/readout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...item.readoutPayload,
-            eventId: item.eventId,
-          }),
-        });
-        if (!res.ok) {
-          this.lastError = await this.getResponseError(res);
-          this.emit();
-          return null;
-        }
-        const data = (await res.json()) as Omit<ReadoutDeliveryResult, 'queuedOffline'>;
+        const data = await submitReadoutToFirestore(item.eventId, item.readoutPayload);
         this.lastError = null;
         return { queuedOffline: false, ...data };
       }
 
       if (item.kind === 'ONLINE_PUNCH' && item.onlinePunchPayload) {
-        const res = await apiFetch('/api/online-punch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...item.onlinePunchPayload,
-            eventId: item.eventId,
-          }),
-        });
-        if (!res.ok) {
-          this.lastError = await this.getResponseError(res);
-          this.emit();
-          return null;
-        }
-        const data = (await res.json()) as Omit<ReadoutDeliveryResult, 'queuedOffline'>;
-        this.lastError = null;
-        return { queuedOffline: false, ...data };
+        this.lastError =
+          'Synkning av online-stämplingar stöds inte i Firestore ännu. Posten ligger kvar i kön.';
+        this.emit();
+        return null;
       }
       this.lastError = 'Köposten saknar giltiga avläsningsdata.';
       this.emit();
@@ -338,26 +318,11 @@ class OfflineReadoutQueueManager {
     } catch (error) {
       this.lastError =
         error instanceof Error
-          ? `Nätverksfel vid synkning: ${error.message}`
-          : 'Nätverksfel vid synkning.';
+          ? `Firestore kunde inte synka avläsningen: ${error.message}`
+          : 'Firestore kunde inte synka avläsningen.';
       this.emit();
       return null;
     }
-  }
-
-  private async getResponseError(response: Response): Promise<string> {
-    let responseMessage = '';
-    try {
-      const body = (await response.json()) as { error?: unknown; message?: unknown };
-      if (typeof body.error === 'string') responseMessage = body.error;
-      else if (typeof body.message === 'string') responseMessage = body.message;
-    } catch {
-      // Some server errors have an empty or non-JSON response body.
-    }
-
-    return responseMessage
-      ? `Servern avvisade synkningen (${response.status}): ${responseMessage}`
-      : `Servern avvisade synkningen (${response.status}${response.statusText ? ` ${response.statusText}` : ''}).`;
   }
 
   public async flushQueue(): Promise<number> {
@@ -380,7 +345,7 @@ class OfflineReadoutQueueManager {
       for (const item of snapshotCopy) {
         if (this.simulatedOffline || !this.browserOnline) break;
         const res = await this.deliverSingleItem(item);
-        if (!res) break; // Stop FIFO flush if server unreachable
+        if (!res) break;
 
         this.items = this.items.filter((x) => x.id !== item.id);
         this.totalSyncedSession += 1;

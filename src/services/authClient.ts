@@ -23,6 +23,12 @@ const SESSION_STORAGE_KEY = 'passersi_auth_session_v1';
 type AuthListener = (session: StoredAuthSession | null) => void;
 const listeners = new Set<AuthListener>();
 
+export function apiWebSocketUrl(path: string): string {
+  const url = new URL(path, window.location.origin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+}
+
 export function getStoredAuthSession(): StoredAuthSession | null {
   if (typeof window === 'undefined') return null;
   try {

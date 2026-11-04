@@ -18,6 +18,7 @@ import {
   getFirestore,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -25,6 +26,7 @@ import {
   writeBatch,
   type DocumentReference,
 } from 'firebase/firestore';
+import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './utils/readoutValidation';
 import firebaseConfig from '../firebase-applet-config.json';
 import type {
   ClassCompetitionFormat,
@@ -38,6 +40,7 @@ import type {
   Competitor,
   Course,
   EventLifecycleStatus,
+  FullCardReadoutPayload,
   PublicRacePayload,
   RunnerStatus,
   SICardSeries,
@@ -1326,6 +1329,9 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     const courses: Course[] = [];
     const classes: CompClass[] = [];
     const competitors: Competitor[] = [];
+    const brokenControls = Array.isArray(compDocData.brokenControls)
+      ? (compDocData.brokenControls as unknown[]).map(Number)
+      : [];
 
     try {
       const crsSnap = await getDocs(
@@ -1432,7 +1438,23 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
         const checkSec = decodeNullableSec(cmd.checkTimeSec);
         const startSec = decodeNullableSec(cmd.startTimeSec);
         const finishSec = decodeNullableSec(cmd.finishTimeSec);
+        const manualFinishSec = decodeNullableSec(cmd.manualFinishTimeSec);
+        const allocatedStartSec = decodeNullableSec(cmd.allocatedStartSec);
         const hasReadout = Boolean(cmd.readoutAtIso) || punches.length > 0;
+        const effectiveFinish = manualFinishSec ?? finishSec;
+        const validation =
+          hasReadout && effectiveFinish !== null
+            ? validateCompetitorReadout(
+                classes.find((candidate) => candidate.id === cmd.classId),
+                courses,
+                startSec ??
+                  allocatedStartSec ??
+                  Number(compDocData.zeroTimeSec ?? 36000),
+                effectiveFinish,
+                punches,
+                { brokenControls, controlTimeOffsets: {} }
+              )
+            : null;
 
         competitors.push({
           id: cmd.competitorId || d.id,
@@ -1447,11 +1469,11 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
           isSelfRegistered: Boolean(cmd.isSelfRegistered),
           feePaid: Boolean(cmd.feePaid),
           status: cmd.status || 'REGISTERED',
-          allocatedStartSec: decodeNullableSec(cmd.allocatedStartSec),
+          allocatedStartSec,
           checkTimeSec: checkSec,
           startTimeSec: startSec,
           finishTimeSec: finishSec,
-          manualFinishTimeSec: decodeNullableSec(cmd.manualFinishTimeSec),
+          manualFinishTimeSec: manualFinishSec,
           runningTimeSec: decodeNullableSec(cmd.runningTimeSec),
           lastSeenControl: punches.length > 0 ? 1 : null,
           lastSeenTimeSec: finishSec ?? startSec ?? checkSec,
@@ -1467,7 +1489,7 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
                 receivedAt: cmd.readoutAtIso || new Date().toISOString(),
               }
             : null,
-          validation: null,
+          validation,
         });
       }
       competitors.sort((a, b) => a.bib - b.bib);
@@ -1502,9 +1524,7 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
       courses,
       classes,
       competitors,
-      brokenControls: Array.isArray(compDocData.brokenControls)
-        ? (compDocData.brokenControls as unknown[]).map(Number)
-        : [],
+      brokenControls,
       rolePins: {
         START: String(compDocData.pinStart || '1100'),
         READOUT: String(compDocData.pinReadout || '2200'),
@@ -1520,6 +1540,307 @@ export async function loadFullSeasonFromFirestore(): Promise<CloudSeasonSnapshot
     demoCleared: Boolean(clubData?.demoCleared),
     clubSettings,
     events,
+  };
+}
+
+export async function submitReadoutToFirestore(
+  eventId: string | undefined,
+  readout: FullCardReadoutPayload
+): Promise<{
+  competitor?: Competitor | null;
+  unknownCardReadout?: {
+    siNumber: number;
+    checkTimeSec?: number | null;
+    startTimeSec?: number | null;
+    finishTimeSec?: number | null;
+    punches?: FullCardReadoutPayload['punches'];
+  };
+}> {
+  const current = await ensureValidFirestoreUser();
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Synkning kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
+  if (!BOOTSTRAP_SUPER_ADMIN_EMAILS.includes((current.email || '').toLowerCase())) {
+    const adminSnap = await getDoc(doc(db, 'admins', current.uid));
+    const role = adminSnap.exists() ? adminSnap.data().role : null;
+    if (role !== 'RACE_ADMIN' && role !== 'SUPER_ADMIN') {
+      throw new Error('Ditt Google-konto saknar administratörsbehörighet för Firestore-synkning.');
+    }
+  }
+  if (!eventId) {
+    throw new Error('Tävlingen för den köade avläsningen saknas.');
+  }
+
+  const siNumber = Number(readout.siNumber);
+  if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999) {
+    throw new Error('Ogiltigt SI-nummer vid utläsning.');
+  }
+  if (!Array.isArray(readout.punches) || readout.punches.length > 192) {
+    throw new Error('Avläsningen innehåller ett ogiltigt antal stämplingar.');
+  }
+  const normalizeReadoutTime = (value: number | null | undefined): number | null => {
+    if (value === null || value === undefined) return null;
+    if (!Number.isInteger(value) || value < 0 || value > 86400) {
+      throw new Error('Avläsningen innehåller en ogiltig tid.');
+    }
+    return value;
+  };
+  const checkTimeSec = normalizeReadoutTime(readout.checkTimeSec);
+  const cardStartTimeSec = normalizeReadoutTime(readout.startTimeSec);
+  const cardFinishTimeSec = normalizeReadoutTime(readout.finishTimeSec);
+  if (
+    typeof readout.cardSeries !== 'string' ||
+    readout.cardSeries.length === 0 ||
+    readout.cardSeries.length > 24
+  ) {
+    throw new Error('Avläsningen innehåller en ogiltig SI-bricktyp.');
+  }
+  const punches = readout.punches.map((punch) => {
+    const code = Number(punch.code);
+    const timeSec = Number(punch.timeSec);
+    if (
+      !Number.isInteger(code) ||
+      code < 1 ||
+      code > 999 ||
+      !Number.isInteger(timeSec) ||
+      timeSec < 0 ||
+      timeSec > 86400
+    ) {
+      throw new Error('Avläsningen innehåller en ogiltig stämpling.');
+    }
+    return { code, timeSec };
+  });
+
+  const season = await loadFullSeasonFromFirestore();
+  const event = season?.events.find(
+    (candidate) =>
+      candidate.competition.id === eventId ||
+      candidate.competition.shortCode.toLowerCase() === eventId.toLowerCase()
+  );
+  if (!event) {
+    throw new Error('Tävlingen hittades inte i Firestore för den köade avläsningen.');
+  }
+
+  const competitionId = sanitizeFirestoreId(event.competition.id, 'evt');
+  const eligibleRunners = event.competitors.filter(
+    (runner) => runner.siNumber === siNumber && runner.status !== 'DNS'
+  );
+  const runner =
+    eligibleRunners.find(
+      (candidate) =>
+        candidate.status === 'IN_FOREST' ||
+        candidate.status === 'CHECKED' ||
+        candidate.status === 'REGISTERED' ||
+        candidate.status === 'PRELIMINARY_FIN'
+    ) ??
+    eligibleRunners[0] ??
+    null;
+
+  const clientReadoutId = sanitizeFirestoreId(
+    readout.clientReadoutId || `ro-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    'ro'
+  );
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const nowSec = Number(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Stockholm',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    })
+      .format(now)
+      .split(':')
+      .reduce((acc, part) => acc * 60 + Number(part), 0)
+  );
+  const cardStartIsStale =
+    cardStartTimeSec !== null &&
+    punches.length > 0 &&
+    cardStartTimeSec > punches[0].timeSec &&
+    runner?.startTimeSec !== null &&
+    runner?.startTimeSec !== undefined &&
+    runner.startTimeSec <= punches[0].timeSec;
+  const usableCardStart = cardStartIsStale ? null : cardStartTimeSec;
+  const effectiveStart =
+    usableCardStart ??
+    runner?.startTimeSec ??
+    runner?.allocatedStartSec ??
+    event.competition.zeroTimeSec;
+  const effectiveFinish =
+    runner?.manualFinishTimeSec ??
+    cardFinishTimeSec ??
+    runner?.finishTimeSec ??
+    nowSec;
+  const validation = runner
+    ? validateCompetitorReadout(
+        event.classes.find((candidate) => candidate.id === runner.classId),
+        event.courses,
+        effectiveStart,
+        effectiveFinish,
+        punches,
+        { brokenControls: event.brokenControls, controlTimeOffsets: {} }
+      )
+    : null;
+  const updatedCompetitor: Competitor | null =
+    runner && validation
+      ? {
+          ...runner,
+          checkTimeSec: checkTimeSec ?? runner.checkTimeSec,
+          startTimeSec: usableCardStart ?? runner.startTimeSec,
+          finishTimeSec: effectiveFinish,
+          runningTimeSec:
+            effectiveFinish >= effectiveStart ? effectiveFinish - effectiveStart : null,
+          lastSeenControl: 1,
+          lastSeenTimeSec: effectiveFinish,
+          readoutAt: nowIso,
+          cardPunches: applyEmergencyTimeOffsets(punches, {}),
+          rawReadout: {
+            checkTimeSec,
+            startTimeSec: usableCardStart ?? null,
+            finishTimeSec: cardFinishTimeSec ?? effectiveFinish,
+            punches,
+            rawHex: readout.rawHex?.slice(0, 2000),
+            receivedAt: nowIso,
+            clientReadoutId,
+          },
+          status: validation.ok ? 'OK' : 'MP',
+          validation,
+        }
+      : null;
+
+  const competitionRef = doc(db, 'competitions', competitionId);
+  const receiptRef = doc(
+    db,
+    'competitions',
+    competitionId,
+    'readoutReceipts',
+    clientReadoutId
+  );
+  const ownerUid = current.uid;
+  const result = await runTransaction(db, async (transaction) => {
+    const [competitionSnap, receiptSnap] = await Promise.all([
+      transaction.get(competitionRef),
+      transaction.get(receiptRef),
+    ]);
+    if (!competitionSnap.exists()) {
+      throw new Error('Tävlingen finns inte längre i Firestore.');
+    }
+    const competitionData = competitionSnap.data();
+    if (competitionData.ownerUid !== current.uid) {
+      throw new Error('Du saknar behörighet att synka till den här tävlingen.');
+    }
+    if (receiptSnap.exists()) {
+      const receipt = receiptSnap.data();
+      return {
+        status: receipt.status === 'UNKNOWN' ? ('UNKNOWN' as const) : ('PROCESSED' as const),
+        competitorId:
+          typeof receipt.competitorId === 'string' ? receipt.competitorId : null,
+      };
+    }
+    if (competitionData.status === 'COMPLETED') {
+      throw new Error('Tävlingen är avslutad och tar inte emot fler avläsningar.');
+    }
+
+    const commonReceipt = {
+      receiptId: clientReadoutId,
+      competitionId,
+      ownerUid,
+      clientReadoutId,
+      siNumber,
+      cardSeries: readout.cardSeries,
+      stationCode:
+        Number.isInteger(readout.stationCode) &&
+        readout.stationCode >= 1 &&
+        readout.stationCode <= 999
+          ? readout.stationCode
+          : 1,
+      checkTimeSec: encodeNullableSec(checkTimeSec),
+      startTimeSec: encodeNullableSec(cardStartTimeSec),
+      finishTimeSec: encodeNullableSec(cardFinishTimeSec),
+      punchCodes: punches.map((punch) => punch.code),
+      punchTimes: punches.map((punch) => punch.timeSec),
+      rawHex: (readout.rawHex || '').slice(0, 2000),
+      createdAt: serverTimestamp(),
+    };
+
+    if (!runner || !updatedCompetitor || !validation) {
+      transaction.set(receiptRef, {
+        ...commonReceipt,
+        status: 'UNKNOWN',
+        competitorId: '',
+      });
+      return { status: 'UNKNOWN' as const, competitorId: null };
+    }
+
+    const competitorId = sanitizeFirestoreId(runner.id, 'cmp');
+    const competitorRef = doc(
+      db,
+      'competitions',
+      competitionId,
+      'competitors',
+      competitorId
+    );
+    const competitorSnap = await transaction.get(competitorRef);
+    if (!competitorSnap.exists()) {
+      throw new Error('Deltagaren hittades inte längre i Firestore.');
+    }
+
+    const previousStatus = String(competitorSnap.data().status || 'REGISTERED');
+    const wasFinished =
+      previousStatus === 'OK' ||
+      previousStatus === 'MP' ||
+      previousStatus === 'DNF' ||
+      previousStatus === 'PRELIMINARY_FIN';
+    const finishedCount = Math.max(0, Number(competitionData.finishedCount) || 0);
+
+    transaction.update(competitorRef, {
+      status: updatedCompetitor.status,
+      checkTimeSec: encodeNullableSec(updatedCompetitor.checkTimeSec),
+      startTimeSec: encodeNullableSec(updatedCompetitor.startTimeSec),
+      finishTimeSec: encodeNullableSec(updatedCompetitor.finishTimeSec),
+      runningTimeSec: encodeNullableSec(updatedCompetitor.runningTimeSec),
+      readoutAtIso: nowIso,
+      punchCodes: punches.map((punch) => punch.code),
+      punchTimes: punches.map((punch) => punch.timeSec),
+      updatedAt: serverTimestamp(),
+    });
+    transaction.update(competitionRef, {
+      finishedCount: finishedCount + (wasFinished ? 0 : 1),
+      updatedAt: serverTimestamp(),
+    });
+    transaction.set(receiptRef, {
+      ...commonReceipt,
+      status: 'PROCESSED',
+      competitorId,
+    });
+    return { status: 'PROCESSED' as const, competitorId };
+  });
+
+  if (result.status === 'UNKNOWN') {
+    return {
+      unknownCardReadout: {
+        siNumber,
+        checkTimeSec: readout.checkTimeSec,
+        startTimeSec: readout.startTimeSec,
+        finishTimeSec: readout.finishTimeSec,
+        punches,
+      },
+    };
+  }
+  return {
+    competitor:
+      result.competitorId ===
+      (runner ? sanitizeFirestoreId(runner.id, 'cmp') : null)
+        ? updatedCompetitor
+        : event.competitors.find(
+            (candidate) =>
+              sanitizeFirestoreId(candidate.id, 'cmp') === result.competitorId
+          ) ?? runner,
   };
 }
 

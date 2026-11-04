@@ -39,6 +39,7 @@ import {
   loadPublicRaceFromFirestore,
   subscribePublicCompetitionSummaries,
 } from '../firebase';
+import { apiWebSocketUrl } from '../services/authClient';
 
 interface PublicPortalViewProps {
   shortCode: string | null; // null means Season Overview (/publik)
@@ -218,8 +219,7 @@ export function PublicPortalView({
 
     const connect = () => {
       if (!active) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${window.location.host}/api/ws`);
+      ws = new WebSocket(apiWebSocketUrl('/api/ws'));
       ws.onmessage = () => {
         if (active) void loadData();
       };

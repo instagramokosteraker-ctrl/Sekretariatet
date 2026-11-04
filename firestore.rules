@@ -1028,6 +1028,90 @@ service cloud.firestore {
             isSuperAdmin()
           );
       }
+
+      match /readoutReceipts/{receiptId} {
+        function isValidReadoutReceipt(data) {
+          return data.keys().hasAll([
+              'receiptId',
+              'competitionId',
+              'ownerUid',
+              'clientReadoutId',
+              'siNumber',
+              'cardSeries',
+              'stationCode',
+              'checkTimeSec',
+              'startTimeSec',
+              'finishTimeSec',
+              'punchCodes',
+              'punchTimes',
+              'rawHex',
+              'status',
+              'competitorId',
+              'createdAt'
+            ]) &&
+            data.keys().hasOnly([
+              'receiptId',
+              'competitionId',
+              'ownerUid',
+              'clientReadoutId',
+              'siNumber',
+              'cardSeries',
+              'stationCode',
+              'checkTimeSec',
+              'startTimeSec',
+              'finishTimeSec',
+              'punchCodes',
+              'punchTimes',
+              'rawHex',
+              'status',
+              'competitorId',
+              'createdAt'
+            ]) &&
+            isValidId(data.receiptId) &&
+            isValidId(data.competitionId) &&
+            isValidId(data.ownerUid) &&
+            isValidId(data.clientReadoutId) &&
+            data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
+            data.cardSeries is string && data.cardSeries.size() >= 1 && data.cardSeries.size() <= 24 &&
+            data.stationCode is int && data.stationCode >= 1 && data.stationCode <= 999 &&
+            data.checkTimeSec is int && data.checkTimeSec >= -1 && data.checkTimeSec <= 86400 &&
+            data.startTimeSec is int && data.startTimeSec >= -1 && data.startTimeSec <= 86400 &&
+            data.finishTimeSec is int && data.finishTimeSec >= -1 && data.finishTimeSec <= 86400 &&
+            data.punchCodes is list && data.punchCodes.size() <= 192 &&
+            data.punchTimes is list && data.punchTimes.size() <= 192 &&
+            data.punchCodes.size() == data.punchTimes.size() &&
+            (data.punchCodes.size() == 0 || (data.punchCodes[0] is int && data.punchTimes[0] is int)) &&
+            data.rawHex is string && data.rawHex.size() <= 2000 &&
+            (data.status == 'UNKNOWN' || data.status == 'PROCESSED') &&
+            (data.competitorId == '' || isValidId(data.competitorId)) &&
+            data.createdAt is timestamp;
+        }
+
+        allow get: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(receiptId) &&
+          parentCompetitionExists(competitionId) &&
+          parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+          isAdmin();
+
+        allow list: if false;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(receiptId) &&
+          isValidReadoutReceipt(incoming()) &&
+          incoming().receiptId == receiptId &&
+          incoming().competitionId == competitionId &&
+          incoming().ownerUid == request.auth.uid &&
+          incoming().clientReadoutId == receiptId &&
+          incoming().createdAt == request.time &&
+          parentCompetitionExists(competitionId) &&
+          parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+          parentCompetitionData(competitionId).status != 'COMPLETED' &&
+          isAdmin();
+
+        allow update, delete: if false;
+      }
     }
   }
 }

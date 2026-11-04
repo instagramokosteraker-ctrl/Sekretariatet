@@ -13,11 +13,12 @@
    - `/adminInvites/{inviteId}` isolates `email` and restricts `get` strictly to the invited recipient (`resource.data.email == request.auth.token.email`) or verified club admins (`isAdmin()`). `list` is strictly restricted to `resource.data.createdByUid == request.auth.uid`.
 5. **Club Settings Singleton (`/clubSettings/{settingId}`)**:
    - Only `settingId == 'default'` is permitted. `list` is forbidden (`false`). Only verified admins can read/write, with strict numeric bounds on Swish and rental card fees, strict `#RRGGBB` hex validation on optional theme colors (`customBgColor`, `customTextColor`, `customAccentColor`), `<= 80` char limit on `portalTitle`, and strict `<= 200000` char / `data:image/(png|jpeg);base64,` validation on `logoDataUrl` (preventing oversized documents and SVG XSS).
-6. **Master Gate & Subcollection Sync (`courses`, `classes`, `competitors` under `/competitions/{competitionId}`)**:
-   - Every single-document `get`, `create`, `update`, and non-super-admin `delete` on `courses`, `classes`, and `competitors` verifies parent competition existence via `exists(/databases/$(database)/documents/competitions/$(competitionId))` and enforces parent Terminal State Locking (`status != 'COMPLETED'`) unless `isSuperAdmin()`.
-   - `allow list` on `/competitions` and its subcollections enforces `resource.data.ownerUid == request.auth.uid` with zero `get()`/`exists()` lookups inside `list`.
+6. **Master Gate & Subcollection Sync (`courses`, `classes`, `competitors`, `readoutReceipts` under `/competitions/{competitionId}`)**:
+   - Every write to a competition subcollection verifies parent competition existence and ownership. `courses`, `classes`, and `competitors` also enforce parent Terminal State Locking (`status != 'COMPLETED'`) unless `isSuperAdmin()`.
+   - Readout receipts are write-once, available only to the verified competition admin, and cannot be listed, updated, or deleted. They provide Firestore queue idempotency and retain raw data for unknown cards.
+   - `allow list` on `/competitions` and its subcollections enforces the applicable owner/admin condition with zero `get()`/`exists()` lookups inside `list`.
 7. **Total Array Guarding & Native Primitives**:
-   - Zero `JSON.stringify` payloads. Course `controls` (`<= 128`), class `forkCourseIds` (`<= 32`), competition `brokenControls` (`<= 64`), and competitor `punchCodes`/`punchTimes` (`<= 192`, equal length) are bounded native lists with element-0 type verification.
+   - Zero `JSON.stringify` payloads. Course `controls` (`<= 128`), class `forkCourseIds` (`<= 32`), competition `brokenControls` (`<= 64`), and competitor/readout receipt `punchCodes`/`punchTimes` (`<= 192`, equal length) are bounded native lists with element-0 type verification.
 8. **Temporal & Immutable Field Integrity**:
    - `createdAt == request.time` on `create`; `createdAt == existing().createdAt` and `updatedAt == request.time` on `update`. Primary IDs and `ownerUid`/`createdByUid` are immutable.
 
