@@ -13,6 +13,7 @@ interface SplitsAnalysisTableProps {
   competitors: Competitor[];
   selectedClassId: string;
   onSelectClassId: (id: string) => void;
+  onSelectClub?: (clubName: string) => void;
   onInspectRunner?: (runner: Competitor) => void;
 }
 
@@ -22,6 +23,7 @@ export function SplitsAnalysisTable({
   competitors,
   selectedClassId,
   onSelectClassId,
+  onSelectClub,
   onInspectRunner,
 }: SplitsAnalysisTableProps) {
   const [cellMode, setCellMode] = useState<SplitsCellMode>('LEG_AND_BOM');
@@ -408,7 +410,21 @@ export function SplitsAnalysisTable({
                                   {r.fullName}
                                 </span>
                                 <span className="hidden sm:inline text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                                  · #{r.bib} · {r.club}
+                                  · #{r.bib} ·{' '}
+                                  {r.club.trim() ? (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        onSelectClub?.(r.club.trim());
+                                      }}
+                                      className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                    >
+                                      {r.club}
+                                    </button>
+                                  ) : (
+                                    'Klubblös'
+                                  )}
                                 </span>
                                 {isExpanded ? (
                                   <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
@@ -417,7 +433,21 @@ export function SplitsAnalysisTable({
                                 )}
                               </div>
                               <div className="sm:hidden text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                                #{r.bib} · {r.club}
+                                #{r.bib} ·{' '}
+                                {r.club.trim() ? (
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onSelectClub?.(r.club.trim());
+                                    }}
+                                    className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                  >
+                                    {r.club}
+                                  </button>
+                                ) : (
+                                  'Klubblös'
+                                )}
                               </div>
                             </td>
 

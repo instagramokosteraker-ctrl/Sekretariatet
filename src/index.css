@@ -125,12 +125,6 @@
     background-color: var(--club-accent-hover);
   }
 
-  input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),
-  textarea {
-    background-color: #ffffff;
-    color: #0f172a;
-  }
-
   .club-accent-btn {
     background-color: var(--club-accent);
     color: var(--club-accent-fg);
@@ -153,4 +147,10 @@
   .club-accent-text {
     color: var(--club-accent);
   }
+}
+
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),
+textarea {
+  background-color: #ffffff;
+  color: #0f172a;
 }

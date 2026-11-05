@@ -81,6 +81,7 @@ export function PublicPortalView({
   const [activeTab, setActiveTab] = useState<PublicEventTab>('RESULTS');
   const [resultsGrouping, setResultsGrouping] = useState<'CLASS' | 'CLUB'>('CLASS');
   const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
+  const [selectedClubName, setSelectedClubName] = useState<string | null>(null);
 
   // Runner detail inline panel
   const [inspectedRunner, setInspectedRunner] = useState<Competitor | null>(null);
@@ -178,6 +179,7 @@ export function PublicPortalView({
 
   useEffect(() => {
     setLoading(true);
+    setSelectedClubName(null);
     void loadData();
   }, [loadData]);
 
@@ -402,8 +404,10 @@ export function PublicPortalView({
 
   const filteredCompetitors = useMemo(() => {
     if (!raceData) return [];
-    return raceData.competitors;
-  }, [raceData]);
+    return selectedClubName
+      ? raceData.competitors.filter((competitor) => competitor.club.trim() === selectedClubName)
+      : raceData.competitors;
+  }, [raceData, selectedClubName]);
 
   const handleSelfRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -879,6 +883,23 @@ export function PublicPortalView({
                 </div>
               )}
 
+              {(activeTab === 'RESULTS' || activeTab === 'STARTLIST') &&
+                selectedClubName && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+                    <h2 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      {activeTab === 'STARTLIST' ? 'Klubb-startlista' : 'Klubb-resultatlista'}:{' '}
+                      {selectedClubName}
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedClubName(null)}
+                      className="text-xs font-semibold text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                    >
+                      Visa alla klubbar
+                    </button>
+                  </div>
+                )}
+
               {/* Results Grouping Bar */}
               {activeTab === 'RESULTS' && (
                 <div className="flex items-center justify-end gap-2">
@@ -913,17 +934,24 @@ export function PublicPortalView({
               {activeTab === 'RESULTS' &&
                 (resultsGrouping === 'CLASS' ? (
                   <SplitsAnalysisTable
-                    classes={raceData.classes}
+                    classes={
+                      selectedClubName
+                        ? raceData.classes.filter((cls) =>
+                            filteredCompetitors.some((competitor) => competitor.classId === cls.id)
+                          )
+                        : raceData.classes
+                    }
                     courses={raceData.courses}
                     competitors={filteredCompetitors}
                     selectedClassId={selectedClassId}
                     onSelectClassId={setSelectedClassId}
+                    onSelectClub={setSelectedClubName}
                   />
                 ) : (
                   <div className="space-y-2.5">
                     {uniqueClubs.map((clubName) => {
                       const clubRunners = filteredCompetitors.filter(
-                        (c) => c.club === clubName
+                        (c) => c.club.trim() === clubName
                       );
                       if (clubRunners.length === 0) return null;
                       return (
@@ -932,7 +960,15 @@ export function PublicPortalView({
                           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden"
                         >
                           <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/40">
-                            <h3 className="text-xs font-semibold">{clubName}</h3>
+                            <h3 className="text-xs font-semibold">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedClubName(clubName)}
+                                className="text-left text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                              >
+                                {clubName}
+                              </button>
+                            </h3>
                             <span className="text-[11px] font-mono tabular-nums text-slate-500">
                               {clubRunners.length} delt.
                             </span>
@@ -1007,12 +1043,13 @@ export function PublicPortalView({
               {activeTab === 'STARTLIST' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {raceData.classes.map((cls) => {
-                    const inCls = raceData.competitors
+                    const inCls = filteredCompetitors
                       .filter((c) => c.classId === cls.id)
                       .sort(
                         (a, b) =>
                           (a.allocatedStartSec ?? 999999) - (b.allocatedStartSec ?? 999999)
                       );
+                    if (selectedClubName && inCls.length === 0) return null;
                     return (
                       <section
                         key={cls.id}
@@ -1041,7 +1078,18 @@ export function PublicPortalView({
                                     {r.fullName}
                                   </span>
                                   <span className="text-[11px] text-slate-500 ml-1.5">
-                                    #{r.bib} · {r.club}
+                                    #{r.bib} ·{' '}
+                                    {r.club.trim() ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedClubName(r.club.trim())}
+                                        className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                      >
+                                        {r.club}
+                                      </button>
+                                    ) : (
+                                      'Klubblös'
+                                    )}
                                   </span>
                                   {r.isSelfRegistered && (
                                     <span className="ml-1 text-[10px] text-sky-700 dark:text-sky-400">
