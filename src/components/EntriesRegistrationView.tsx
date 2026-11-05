@@ -126,6 +126,8 @@ export function EntriesRegistrationView({
 }: EntriesRegistrationViewProps) {
   const [siInput, setSiInput] = useState('');
   const [fullName, setFullName] = useState('');
+  const [nameSuggestionOpen, setNameSuggestionOpen] = useState(false);
+  const [activeNameSuggestionIndex, setActiveNameSuggestionIndex] = useState(0);
   const [club, setClub] = useState('');
   const [classId, setClassId] = useState<string>(classes[3]?.id ?? classes[0]?.id ?? '');
   const [isRentalCard, setIsRentalCard] = useState(false);
@@ -145,6 +147,25 @@ export function EntriesRegistrationView({
   );
   const formCalculatedFeeSek =
     (selectedFormClass?.feeSek ?? defaultEntryFee) + (isRentalCard ? rentalFeeExtra : 0);
+
+  const nameSuggestions = useMemo(() => {
+    const query = fullName
+      .trim()
+      .toLocaleLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    if (query.length < 2) return [];
+    return runnerDb
+      .filter((runner) =>
+        runner.fullName
+          .toLocaleLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .split(/\s+/)
+          .some((part) => part.startsWith(query))
+      )
+      .slice(0, 8);
+  }, [fullName, runnerDb]);
 
   useEffect(() => {
     if (classes.length > 0 && !classes.some((c) => c.id === classId)) {
@@ -350,6 +371,46 @@ export function EntriesRegistrationView({
     );
   }, [runnerDb, search]);
 
+  const selectNameSuggestion = (runner: RunnerDbEntry) => {
+    setFullName(runner.fullName);
+    setClub(runner.club);
+    setNameSuggestionOpen(false);
+    setActiveNameSuggestionIndex(0);
+    if (runner.defaultClassName) {
+      const targetClass = classes.find(
+        (candidate) =>
+          candidate.name.toLocaleLowerCase() === runner.defaultClassName!.toLocaleLowerCase()
+      );
+      if (targetClass) setClassId(targetClass.id);
+    }
+  };
+
+  const handleNameInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!nameSuggestionOpen || nameSuggestions.length === 0) {
+      if (e.key === 'ArrowDown' && nameSuggestions.length > 0) {
+        setNameSuggestionOpen(true);
+        setActiveNameSuggestionIndex(0);
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      setActiveNameSuggestionIndex((index) => (index + 1) % nameSuggestions.length);
+      e.preventDefault();
+    } else if (e.key === 'ArrowUp') {
+      setActiveNameSuggestionIndex(
+        (index) => (index - 1 + nameSuggestions.length) % nameSuggestions.length
+      );
+      e.preventDefault();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      selectNameSuggestion(nameSuggestions[activeNameSuggestionIndex]);
+    } else if (e.key === 'Escape') {
+      setNameSuggestionOpen(false);
+    }
+  };
+
   const enteredSiSet = useMemo(
     () => new Set(competitors.map((c) => c.siNumber)),
     [competitors]
@@ -513,7 +574,7 @@ export function EntriesRegistrationView({
             />
           </div>
 
-          <div>
+          <div className="relative">
             <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
               Löparens namn
             </label>
@@ -521,11 +582,64 @@ export function EntriesRegistrationView({
               ref={nameInputRef}
               type="text"
               value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={nameSuggestionOpen && nameSuggestions.length > 0}
+              aria-controls="direct-entry-runner-suggestions"
+              aria-activedescendant={
+                nameSuggestionOpen && nameSuggestions.length > 0
+                  ? `direct-entry-runner-suggestion-${activeNameSuggestionIndex}`
+                  : undefined
+              }
+              onFocus={() => {
+                if (nameSuggestions.length > 0) setNameSuggestionOpen(true);
+              }}
+              onBlur={() => setNameSuggestionOpen(false)}
+              onKeyDown={handleNameInputKeyDown}
+              onChange={(e) => {
+                setFullName(e.target.value);
+                setNameSuggestionOpen(true);
+                setActiveNameSuggestionIndex(0);
+              }}
               placeholder="Förnamn Efternamn"
               className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
               required
             />
+            {nameSuggestionOpen && nameSuggestions.length > 0 && (
+              <div
+                id="direct-entry-runner-suggestions"
+                role="listbox"
+                aria-label="Löpare i databasen"
+                className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 py-1 shadow-lg"
+              >
+                {nameSuggestions.map((runner, index) => (
+                  <button
+                    id={`direct-entry-runner-suggestion-${index}`}
+                    key={`${runner.siNumber}-${runner.id}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeNameSuggestionIndex}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => selectNameSuggestion(runner)}
+                    className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs ${
+                      index === activeNameSuggestionIndex
+                        ? 'bg-slate-100 dark:bg-slate-800'
+                        : 'hover:bg-slate-50 dark:hover:bg-slate-800/70'
+                    }`}
+                  >
+                    <span className="truncate font-medium text-slate-900 dark:text-slate-100">
+                      {runner.fullName}
+                      <span className="ml-1.5 font-normal text-slate-500 dark:text-slate-400">
+                        {runner.club}
+                      </span>
+                    </span>
+                    <span className="shrink-0 font-mono tabular-nums text-[10px] text-slate-500 dark:text-slate-400">
+                      SI {formatSiNumber(runner.siNumber)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div>
