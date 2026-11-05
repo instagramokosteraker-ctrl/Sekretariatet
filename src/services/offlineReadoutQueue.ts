@@ -54,6 +54,7 @@ const STORAGE_KEY = 'passersi_offline_readout_queue_v1';
 const SIM_OFFLINE_KEY = 'passersi_simulate_offline_forest';
 const IDB_NAME = 'PasserSI_ForestQueueDB';
 const IDB_STORE = 'pending_readouts';
+const DELIVERY_TIMEOUT_MS = 30_000;
 
 type SnapshotListener = (snap: OfflineQueueSnapshot) => void;
 type SyncedResultListener = (res: ReadoutDeliveryResult) => void;
@@ -91,7 +92,8 @@ class OfflineReadoutQueueManager {
         if (
           this.items.length > 0 &&
           !this.simulatedOffline &&
-          this.browserOnline
+          this.browserOnline &&
+          !this.lastError
         ) {
           void this.flushQueue();
         }
@@ -209,6 +211,26 @@ class OfflineReadoutQueueManager {
     }
   }
 
+  private async withDeliveryTimeout<T>(delivery: Promise<T>): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        delivery,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () =>
+              reject(
+                new Error('Synkningen tog för lång tid. Kontrollera anslutningen och försök igen.')
+              ),
+            DELIVERY_TIMEOUT_MS
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
   /**
    * Stores the SI-card readout in the durable browser queue FIRST before attempting
    * delivery to Firestore, guaranteeing zero lost readouts if 4G drops in the forest.
@@ -307,17 +329,22 @@ class OfflineReadoutQueueManager {
   ): Promise<ReadoutDeliveryResult | null> {
     try {
       if (item.kind === 'READOUT' && item.readoutPayload) {
-        const data = await submitReadoutToFirestore(item.eventId, item.readoutPayload);
+        const data = await this.withDeliveryTimeout(
+          submitReadoutToFirestore(item.eventId, item.readoutPayload)
+        );
         this.lastError = null;
         return { queuedOffline: false, ...data };
       }
 
       if (item.kind === 'ONLINE_PUNCH' && item.onlinePunchPayload) {
         if (!item.eventId) throw new Error('Tävlingen för online-stämplingen saknas.');
-        await submitOnlinePunchToFirestore(item.eventId, item.onlinePunchPayload);
+        await this.withDeliveryTimeout(
+          submitOnlinePunchToFirestore(item.eventId, item.onlinePunchPayload)
+        );
         this.lastError = null;
         return { queuedOffline: false };
       }
+
       this.lastError = 'Köposten saknar giltiga avläsningsdata.';
       this.emit();
       return null;
