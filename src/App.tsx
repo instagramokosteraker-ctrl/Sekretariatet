@@ -3402,20 +3402,72 @@ export default function App() {
                       };
                       throw new Error(errorBody.error ?? 'Kunde inte importera banfil.');
                     }
-                    const importedClasses = payload.classes.map((cls) => ({
-                      ...cls,
-                      freeStart: payload.defaultFreeStart ?? cls.freeStart,
-                    }));
+                    const makeImportId = (prefix: string, index: number) =>
+                      `${prefix}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
+                    const normalizeName = (name: string) => name.trim().toLocaleLowerCase();
+                    const importedCourses: Course[] = payload.courses.map((course, index) => {
+                      const previous = courses.find(
+                        (existing) =>
+                          normalizeName(existing.name) === normalizeName(course.name)
+                      );
+                      return {
+                        id: previous?.id || makeImportId('crs', index),
+                        name: course.name,
+                        lengthMeters: course.lengthMeters,
+                        climbMeters: course.climbMeters,
+                        controls: course.controls,
+                      };
+                    });
                     const nextCourses = payload.replaceExisting
-                      ? payload.courses
+                      ? importedCourses
                       : Array.from(
                           new Map(
-                            [...courses, ...payload.courses].map((course) => [
+                            [...courses, ...importedCourses].map((course) => [
                               course.id,
                               course,
                             ])
                           ).values()
                         );
+                    const importedClasses: CompClass[] = payload.classes.map((cls, index) => {
+                      const previous = classes.find(
+                        (existing) => normalizeName(existing.name) === normalizeName(cls.name)
+                      );
+                      const forkCourseIds = (cls.forkCourseNames || [])
+                        .map(
+                          (name) =>
+                            nextCourses.find(
+                              (course) =>
+                                normalizeName(course.name) === normalizeName(name)
+                            )?.id
+                        )
+                        .filter((id): id is string => Boolean(id))
+                        .slice(0, 32);
+                      const linkedCourse = cls.courseName
+                        ? nextCourses.find(
+                            (course) =>
+                              normalizeName(course.name) === normalizeName(cls.courseName!)
+                          )
+                        : undefined;
+                      const isForked = cls.classFormat === 'FORKED' && forkCourseIds.length > 0;
+                      const freeStart = payload.defaultFreeStart ?? cls.freeStart ?? true;
+                      return {
+                        id: previous?.id || makeImportId('cls', index),
+                        name: cls.name,
+                        courseId: isForked
+                          ? forkCourseIds[0]
+                          : linkedCourse?.id || previous?.courseId || nextCourses[0]?.id || null,
+                        classFormat: isForked ? 'FORKED' : 'STANDARD',
+                        forkCourseIds: isForked ? forkCourseIds : [],
+                        rogainingMaxTimeSec: null,
+                        rogainingPenaltyPerMin: null,
+                        allowDirectEntry: previous?.allowDirectEntry ?? true,
+                        freeStart,
+                        autoMatchCourse: isForked
+                          ? true
+                          : cls.autoMatchCourse ?? previous?.autoMatchCourse ?? freeStart,
+                        feeSek: previous?.feeSek ?? 100,
+                      };
+                    });
                     const nextClasses = payload.replaceExisting
                       ? importedClasses
                       : Array.from(
