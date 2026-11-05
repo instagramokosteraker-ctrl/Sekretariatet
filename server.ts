@@ -6,6 +6,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import {
+  calculateSeriesStandings,
+  normalizeSeriesScoringSettings,
+} from './src/services/seriesStandings';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,6 +64,14 @@ interface ClubSettings {
   customBgColor?: string;
   customTextColor?: string;
   customAccentColor?: string;
+  seriesScoringSettings?: Record<
+    string,
+    {
+      model: 'PLACEMENT' | 'PARTICIPATION';
+      placementPoints: number[];
+      participationPoints: number;
+    }
+  >;
 }
 
 interface CompetitionMeta {
@@ -1492,6 +1504,7 @@ function buildDefaultClubSettings(): ClubSettings {
     customBgColor: '',
     customTextColor: '',
     customAccentColor: '',
+    seriesScoringSettings: {},
   };
 }
 
@@ -1520,6 +1533,7 @@ function ensureClubSettings(seasonDb: SeasonDatabase): ClubSettings {
     customBgColor: sanitizeServerHexColor(c.customBgColor),
     customTextColor: sanitizeServerHexColor(c.customTextColor),
     customAccentColor: sanitizeServerHexColor(c.customAccentColor),
+    seriesScoringSettings: normalizeSeriesScoringSettings(c.seriesScoringSettings),
   };
   return seasonDb.clubSettings;
 }
@@ -3354,119 +3368,19 @@ function loadSeasonDatabase(): SeasonDatabase {
   return fresh;
 }
 
-const OTID_SERIES_POINTS = [25, 20, 16, 13, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
-
 function computeSeasonSeriesStandings(seasonDb: SeasonDatabase): SeriesStandingsBundle[] {
-  const bySeries = new Map<string, SingleEventRecord[]>();
-  for (const ev of Object.values(seasonDb.eventsMap)) {
-    const sName = (ev.competition.seriesName || '').trim();
-    if (!sName) continue;
-    const arr = bySeries.get(sName) ?? [];
-    arr.push(ev);
-    bySeries.set(sName, arr);
-  }
-
-  const bundles: SeriesStandingsBundle[] = [];
-  for (const [seriesName, rawEvents] of bySeries.entries()) {
-    const sortedStages = [...rawEvents].sort((a, b) =>
-      a.competition.date.localeCompare(b.competition.date)
-    );
-    const stagesMeta = sortedStages.map((ev) => ({
-      eventId: ev.competition.id,
-      shortCode: ev.competition.shortCode,
-      name: ev.competition.name,
-      date: ev.competition.date,
-      status: resolveEffectiveCompetitionStatus(ev),
-    }));
-
-    const classMap = new Map<string, Map<string, SeriesStandingRow>>();
-
-    for (const ev of sortedStages) {
-      for (const cls of ev.classes) {
-        const clsName = cls.name.trim();
-        if (!clsName) continue;
-        const okInClass = ev.competitors.filter(
-          (c) => c.classId === cls.id && c.status === 'OK' && c.runningTimeSec !== null
-        );
-        if (okInClass.length === 0) continue;
-
-        const isRogaining = cls.classFormat === 'ROGAINING';
-        const sortedOk = [...okInClass].sort((a, b) => {
-          if (isRogaining) {
-            const pDiff =
-              (b.validation?.rogainingPoints ?? 0) - (a.validation?.rogainingPoints ?? 0);
-            if (pDiff !== 0) return pDiff;
-          }
-          return (a.runningTimeSec ?? 999999) - (b.runningTimeSec ?? 999999);
-        });
-
-        let runnerTable = classMap.get(clsName);
-        if (!runnerTable) {
-          runnerTable = new Map<string, SeriesStandingRow>();
-          classMap.set(clsName, runnerTable);
-        }
-
-        let currentRankIndex = 0;
-        sortedOk.forEach((runner, idx) => {
-          if (idx > 0) {
-            const prev = sortedOk[idx - 1];
-            const tied = isRogaining
-              ? (runner.validation?.rogainingPoints ?? 0) ===
-                  (prev.validation?.rogainingPoints ?? 0) &&
-                runner.runningTimeSec === prev.runningTimeSec
-              : runner.runningTimeSec === prev.runningTimeSec;
-            if (!tied) {
-              currentRankIndex = idx;
-            }
-          }
-          const pts =
-            currentRankIndex < OTID_SERIES_POINTS.length
-              ? OTID_SERIES_POINTS[currentRankIndex]
-              : 1;
-          const runnerKey = `${runner.fullName.trim().toLowerCase()}|${runner.club
-            .trim()
-            .toLowerCase()}`;
-          const existing = runnerTable!.get(runnerKey);
-          if (existing) {
-            existing.totalPoints += pts;
-            existing.participations += 1;
-            if (currentRankIndex === 0) existing.wins += 1;
-            existing.stagePoints[ev.competition.id] = pts;
-          } else {
-            runnerTable!.set(runnerKey, {
-              runnerKey,
-              fullName: runner.fullName,
-              club: runner.club,
-              totalPoints: pts,
-              participations: 1,
-              wins: currentRankIndex === 0 ? 1 : 0,
-              stagePoints: { [ev.competition.id]: pts },
-            });
-          }
-        });
-      }
-    }
-
-    const classes: SeriesStandingClassGroup[] = Array.from(classMap.entries())
-      .map(([className, rowsMap]) => ({
-        className,
-        rows: Array.from(rowsMap.values()).sort((a, b) => {
-          if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
-          if (b.wins !== a.wins) return b.wins - a.wins;
-          if (b.participations !== a.participations) return b.participations - a.participations;
-          return a.fullName.localeCompare(b.fullName, 'sv');
-        }),
-      }))
-      .sort((a, b) => a.className.localeCompare(b.className, 'sv'));
-
-    bundles.push({
-      seriesName,
-      stages: stagesMeta,
-      classes,
-    });
-  }
-
-  return bundles.sort((a, b) => a.seriesName.localeCompare(b.seriesName, 'sv'));
+  const settings = ensureClubSettings(seasonDb);
+  return calculateSeriesStandings(
+    Object.values(seasonDb.eventsMap).map((event) => ({
+      competition: {
+        ...event.competition,
+        status: resolveEffectiveCompetitionStatus(event),
+      },
+      classes: event.classes,
+      competitors: event.competitors,
+    })),
+    settings.seriesScoringSettings
+  );
 }
 
 function listAllRentalCards(seasonDb: SeasonDatabase): RentalCardOverviewItem[] {
@@ -5122,6 +5036,10 @@ async function startServer() {
         body.customAccentColor !== undefined
           ? sanitizeServerHexColor(body.customAccentColor)
           : current.customAccentColor || '',
+      seriesScoringSettings:
+        body.seriesScoringSettings !== undefined
+          ? normalizeSeriesScoringSettings(body.seriesScoringSettings)
+          : current.seriesScoringSettings || {},
     };
     for (const ev of Object.values(seasonDb.eventsMap)) {
       ev.competition.organizer = seasonDb.clubSettings.clubName;

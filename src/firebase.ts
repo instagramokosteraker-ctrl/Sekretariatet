@@ -28,6 +28,10 @@ import {
   type DocumentSnapshot,
 } from 'firebase/firestore';
 import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './utils/readoutValidation';
+import {
+  calculateSeriesStandings,
+  normalizeSeriesScoringSettings,
+} from './services/seriesStandings';
 import firebaseConfig from '../firebase-applet-config.json';
 import type {
   CardPunch,
@@ -229,6 +233,16 @@ function isTransientOfflineFirestoreError(error: unknown): boolean {
     msg.includes('the client is offline') ||
     msg.includes('fetching auth token failed') ||
     msg.includes('could not reach cloud firestore backend')
+  );
+}
+
+function isPermissionDeniedFirestoreError(error: unknown): boolean {
+  const code = String((error as { code?: string })?.code || '').toLowerCase();
+  const message = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  return (
+    code.includes('permission-denied') ||
+    message.includes('permission-denied') ||
+    message.includes('missing or insufficient permissions')
   );
 }
 
@@ -838,9 +852,7 @@ async function commitQueuedBatchOps(ops: QueuedBatchOp[]): Promise<void> {
 }
 
 /**
- * Deletes a competition and all of its child courses, classes, and competitors from Firestore.
- * Deletes child subcollection documents first while the parent competition document still exists
- * so Master Gate checks pass deterministically.
+ * Deletes all competition child documents before deleting the parent document.
  */
 export async function deleteCompetitionFromFirestore(rawCompetitionId: string): Promise<void> {
   const current = await ensureValidFirestoreUser();
@@ -886,7 +898,14 @@ export async function deleteCompetitionFromFirestore(rawCompetitionId: string): 
   }
 
   const deleteOps: QueuedBatchOp[] = [];
-  for (const subName of ['courses', 'classes', 'competitors', 'stations'] as const) {
+  for (const subName of [
+    'courses',
+    'classes',
+    'competitors',
+    'stations',
+    'stationPunches',
+    'readoutReceipts',
+  ] as const) {
     const subPath = `competitions/${competitionId}/${subName}`;
     try {
       const subCollection = collection(db, 'competitions', competitionId, subName);
@@ -914,6 +933,30 @@ export async function deleteCompetitionFromFirestore(rawCompetitionId: string): 
     await deleteDoc(doc(db, 'competitions', competitionId));
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.DELETE, compPath);
+  }
+
+  const clubRef = doc(db, 'clubSettings', 'default');
+  const clubSnap = await getDoc(clubRef);
+  if (clubSnap.exists()) {
+    const clubData = clubSnap.data() as {
+      activeEventId?: unknown;
+      competitionIds?: unknown;
+    };
+    const remainingIds = Array.isArray(clubData.competitionIds)
+      ? clubData.competitionIds.filter(
+          (id): id is string => typeof id === 'string' && id !== competitionId
+        )
+      : [];
+    await updateDoc(clubRef, {
+      activeEventId:
+        clubData.activeEventId === competitionId
+          ? remainingIds[0] ?? ''
+          : typeof clubData.activeEventId === 'string'
+            ? clubData.activeEventId
+            : '',
+      competitionIds: remainingIds,
+      updatedAt: serverTimestamp(),
+    });
   }
 }
 
@@ -1538,6 +1581,7 @@ export async function loadFullSeasonFromFirestore(options?: {
     customBgColor?: string;
     customTextColor?: string;
     customAccentColor?: string;
+    seriesScoringSettings?: unknown;
     activeEventId?: string;
     demoCleared?: boolean;
     competitionIds?: string[];
@@ -1574,6 +1618,7 @@ export async function loadFullSeasonFromFirestore(options?: {
     customBgColor: sanitizeCloudHexColor(clubData?.customBgColor),
     customTextColor: sanitizeCloudHexColor(clubData?.customTextColor),
     customAccentColor: sanitizeCloudHexColor(clubData?.customAccentColor),
+    seriesScoringSettings: normalizeSeriesScoringSettings(clubData?.seriesScoringSettings),
   };
 
   let targetIds = options?.competitionId
@@ -1699,12 +1744,29 @@ export async function loadFullSeasonFromFirestore(options?: {
       handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/classes`);
     }
 
-    const stationSnapshots = await getDocs(
-      collection(db, 'competitions', competitionId, 'stations')
-    );
+    let stationDocs: DocumentSnapshot[] = [];
+    try {
+      const stationSnapshots = await getDocs(
+        collection(db, 'competitions', competitionId, 'stations')
+      );
+      stationDocs = stationSnapshots.docs;
+    } catch (err) {
+      if (isTransientOfflineFirestoreError(err)) {
+        return null;
+      }
+      if (isPermissionDeniedFirestoreError(err)) {
+        console.error(
+          `Behörighet saknas för stationsinställningar i competitions/${competitionId}/stations:`,
+          err
+        );
+      } else {
+        handleFirestoreError(err, OperationType.LIST, `competitions/${competitionId}/stations`);
+      }
+    }
     const stationFunctions = new Map<number, StationFunction>();
-    for (const stationDoc of stationSnapshots.docs) {
+    for (const stationDoc of stationDocs) {
       const station = stationDoc.data();
+      if (!station) continue;
       const code = Number(station.stationCode);
       const stationFunction = station.stationFunction as StationFunction;
       if (Number.isInteger(code) && code >= 1 && code <= 999) {
@@ -1804,11 +1866,32 @@ export async function loadFullSeasonFromFirestore(options?: {
           validation,
         });
       }
-      const stationPunchSnap = await getDocs(
-        collection(db, 'competitions', competitionId, 'stationPunches')
-      );
-      for (const punchDoc of stationPunchSnap.docs) {
+      let stationPunchDocs: DocumentSnapshot[] = [];
+      try {
+        const stationPunchSnap = await getDocs(
+          collection(db, 'competitions', competitionId, 'stationPunches')
+        );
+        stationPunchDocs = stationPunchSnap.docs;
+      } catch (err) {
+        if (isTransientOfflineFirestoreError(err)) {
+          return null;
+        }
+        if (isPermissionDeniedFirestoreError(err)) {
+          console.error(
+            `Behörighet saknas för radiostämplingar i competitions/${competitionId}/stationPunches:`,
+            err
+          );
+        } else {
+          handleFirestoreError(
+            err,
+            OperationType.LIST,
+            `competitions/${competitionId}/stationPunches`
+          );
+        }
+      }
+      for (const punchDoc of stationPunchDocs) {
         const punch = punchDoc.data();
+        if (!punch) continue;
         const stationFunction =
           stationFunctions.get(Number(punch.stationCode)) ?? 'RADIO';
         if (
@@ -1850,8 +1933,9 @@ export async function loadFullSeasonFromFirestore(options?: {
       statusRaw === 'LIVE' || statusRaw === 'UPCOMING' || statusRaw === 'COMPLETED'
         ? statusRaw
         : 'LIVE';
-    const stations: SIStation[] = stationSnapshots.docs.map((stationDoc) => {
+    const stations: SIStation[] = stationDocs.flatMap((stationDoc) => {
       const station = stationDoc.data();
+      if (!station) return [];
       const hardwareModels: SIStation['hardwareModel'][] = [
         'BSM8-USB',
         'BSM7-USB',
@@ -1868,7 +1952,7 @@ export async function loadFullSeasonFromFirestore(options?: {
         'FINISH',
         'READOUT',
       ];
-      return {
+      return [{
         id: station.stationId || stationDoc.id,
         stationCode: Number(station.stationCode || 42),
         name: String(station.name || `Station ${station.stationCode || 42}`),
@@ -1886,7 +1970,7 @@ export async function loadFullSeasonFromFirestore(options?: {
           ? station.lastSeenAt
           : null,
         active: station.active !== false,
-      };
+      }];
     });
 
     events.push({
@@ -1925,6 +2009,14 @@ export async function loadFullSeasonFromFirestore(options?: {
     demoCleared: Boolean(clubData?.demoCleared),
     clubSettings,
     events,
+    seriesStandings: calculateSeriesStandings(
+      events.map((event) => ({
+        competition: event.competition,
+        classes: event.classes,
+        competitors: event.competitors,
+      })),
+      clubSettings.seriesScoringSettings
+    ),
     runnerDb: options?.includeRunnerDb === false ? [] : await loadRunnerDbFromFirestore(),
   };
 }
@@ -3579,7 +3671,7 @@ export async function loadPublicRaceFromFirestore(
     },
     competitionsList,
     clubSettings,
-    seriesStandings: [],
+    seriesStandings: season.seriesStandings ?? [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -3819,6 +3911,7 @@ export const DEFAULT_CLUB_SETTINGS: ClubSettings = {
   customBgColor: '',
   customTextColor: '',
   customAccentColor: '',
+  seriesScoringSettings: {},
 };
 
 /**
@@ -3849,6 +3942,7 @@ export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
       customBgColor: sanitizeCloudHexColor(data.customBgColor),
       customTextColor: sanitizeCloudHexColor(data.customTextColor),
       customAccentColor: sanitizeCloudHexColor(data.customAccentColor),
+      seriesScoringSettings: normalizeSeriesScoringSettings(data.seriesScoringSettings),
     };
   } catch (err: unknown) {
     const msg = (err instanceof Error ? err.message : String(err || '')).toLowerCase();
@@ -4115,6 +4209,10 @@ export async function saveClubSettingsToFirestore(
   const customBgColor = sanitizeCloudHexColor(settings.customBgColor);
   const customTextColor = sanitizeCloudHexColor(settings.customTextColor);
   const customAccentColor = sanitizeCloudHexColor(settings.customAccentColor);
+  const seriesScoringSettings =
+    settings.seriesScoringSettings === undefined
+      ? undefined
+      : normalizeSeriesScoringSettings(settings.seriesScoringSettings);
 
   if (clubSnap.exists()) {
     await updateDoc(clubRef, {
@@ -4130,6 +4228,7 @@ export async function saveClubSettingsToFirestore(
       customBgColor,
       customTextColor,
       customAccentColor,
+      ...(seriesScoringSettings === undefined ? {} : { seriesScoringSettings }),
       updatedAt: serverTimestamp(),
     });
   } else {
@@ -4147,6 +4246,7 @@ export async function saveClubSettingsToFirestore(
       customBgColor,
       customTextColor,
       customAccentColor,
+      seriesScoringSettings: seriesScoringSettings ?? {},
       activeEventId: '',
       demoCleared: false,
       competitionIds: [] as string[],

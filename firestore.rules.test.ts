@@ -323,6 +323,33 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
+    // Per-series scoring settings are accepted by the club settings document
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('clubSettings/default').set({
+        settingId: 'default',
+        clubName: 'OK Linné',
+        eventorOrgId: '',
+        swishNumber: '',
+        swishRecipientName: 'OK Linné',
+        defaultDirectEntryFeeSek: 100,
+        rentalCardFeeSek: 30,
+        missingRentalFeeSek: 650,
+        seriesScoringSettings: {
+          'Vårserien': {
+            model: 'PLACEMENT',
+            placementPoints: [10, 8, 6, 5, 4, 3, 2, 1],
+            participationPoints: 1,
+          },
+        },
+        activeEventId: 'evt_live',
+        demoCleared: false,
+        competitionIds: [],
+        ownerUid: 'race_admin_1',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+
     // Positive sanity check: Valid owner read succeeds
     await assertSucceeds(raceAdminCtx.firestore().doc('competitions/evt_live').get());
 
@@ -397,6 +424,15 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .doc('competitions/evt_live/readoutReceipts/ro_test_1')
         .update({ status: 'UNKNOWN' })
     );
+    await assertSucceeds(
+      raceAdminCtx.firestore().collection('competitions/evt_live/readoutReceipts').get()
+    );
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/readoutReceipts/ro_test_1')
+        .delete()
+    );
 
     const station = {
       stationId: 'st_42',
@@ -417,6 +453,12 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     };
     await assertSucceeds(
       raceAdminCtx.firestore().doc('competitions/evt_live/stations/st_42').set(station)
+    );
+    await assertSucceeds(
+      raceAdminCtx.firestore().collection('competitions/evt_live/stations').get()
+    );
+    await assertFails(
+      attackerCtx.firestore().collection('competitions/evt_live/stations').get()
     );
     await assertFails(
       attackerCtx.firestore().doc('competitions/evt_live/stations/st_43').set({
@@ -448,6 +490,9 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .doc('competitions/evt_live/stationPunches/op_test_1')
         .set(stationPunch)
     );
+    await assertSucceeds(
+      raceAdminCtx.firestore().collection('competitions/evt_live/stationPunches').get()
+    );
     await assertFails(
       attackerCtx
         .firestore()
@@ -464,6 +509,12 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .firestore()
         .doc('competitions/evt_live/stationPunches/op_test_1')
         .update({ stationCode: 43 })
+    );
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/stationPunches/op_test_1')
+        .delete()
     );
   } finally {
     await testEnv.cleanup();

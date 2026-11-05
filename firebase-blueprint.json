@@ -421,6 +421,36 @@
           "maxLength": 7,
           "pattern": "^$|^#[0-9a-fA-F]{6}$"
         },
+        "seriesScoringSettings": {
+          "type": "object",
+          "description": "Per-series point model, placement scale, and participation points.",
+          "maxProperties": 50,
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "enum": ["PLACEMENT", "PARTICIPATION"]
+              },
+              "placementPoints": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "maxItems": 100
+              },
+              "participationPoints": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              }
+            },
+            "required": ["model", "placementPoints", "participationPoints"],
+            "additionalProperties": false
+          }
+        },
         "activeEventId": {
           "type": "string",
           "description": "Currently active competition ID or empty string when season has zero events.",

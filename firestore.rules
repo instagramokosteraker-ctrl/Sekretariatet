@@ -146,6 +146,7 @@ service cloud.firestore {
           'customBgColor',
           'customTextColor',
           'customAccentColor',
+          'seriesScoringSettings',
           'activeEventId',
           'demoCleared',
           'competitionIds',
@@ -166,6 +167,8 @@ service cloud.firestore {
         (!('customBgColor' in data) || isValidHexColorField(data.customBgColor)) &&
         (!('customTextColor' in data) || isValidHexColorField(data.customTextColor)) &&
         (!('customAccentColor' in data) || isValidHexColorField(data.customAccentColor)) &&
+        (!('seriesScoringSettings' in data) ||
+          (data.seriesScoringSettings is map && data.seriesScoringSettings.size() <= 50)) &&
         isValidOptionalId(data.activeEventId) &&
         data.demoCleared is bool &&
         data.competitionIds is list && data.competitionIds.size() <= 100 &&
@@ -678,6 +681,7 @@ service cloud.firestore {
               'customBgColor',
               'customTextColor',
               'customAccentColor',
+              'seriesScoringSettings',
               'activeEventId',
               'demoCleared',
               'competitionIds',
@@ -701,6 +705,7 @@ service cloud.firestore {
               'customBgColor',
               'customTextColor',
               'customAccentColor',
+              'seriesScoringSettings',
               'activeEventId',
               'demoCleared',
               'competitionIds',
@@ -1216,7 +1221,14 @@ service cloud.firestore {
           parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
           isAdmin();
 
-        allow list: if false;
+        allow list: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+            isSuperAdmin()
+          ) &&
+          isAdmin();
 
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1232,7 +1244,21 @@ service cloud.firestore {
           parentCompetitionData(competitionId).status != 'COMPLETED' &&
           isAdmin();
 
-        allow update, delete: if false;
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(receiptId) &&
+          resource != null &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
       }
 
       match /stations/{stationId} {
@@ -1466,7 +1492,21 @@ service cloud.firestore {
             isSuperAdmin()
           );
 
-        allow update, delete: if false;
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(punchId) &&
+          resource != null &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              existing().ownerUid == request.auth.uid &&
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              isAdmin()
+            ) ||
+            isSuperAdmin()
+          );
       }
     }
   }

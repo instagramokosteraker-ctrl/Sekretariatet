@@ -601,6 +601,7 @@ export default function App() {
         setCompetitors(selectedEvent.competitors);
         setRunnerDb(cloudSnap.runnerDb ?? []);
         setClubSettings(cloudSnap.clubSettings);
+        setSeriesStandings(cloudSnap.seriesStandings ?? []);
         setDemoCleared(cloudSnap.demoCleared);
         setIsEmptySeason(false);
       })
@@ -907,7 +908,7 @@ export default function App() {
             isFreshColdStart: false,
             demoCleared: cloudSnap.demoCleared,
             clubSettings: cloudSnap.clubSettings,
-            seriesStandings: [],
+            seriesStandings: cloudSnap.seriesStandings ?? [],
             competition: activeEvt.competition,
             courses: activeEvt.courses,
             classes: activeEvt.classes,
@@ -3686,6 +3687,10 @@ export default function App() {
                     setCreateEventModalOpen(true);
                   }}
                   onOpenPublicEvent={(code) => navigatePublicPortal(code)}
+                  onApplySeriesScoringUpdate={(settings, standings) => {
+                    setClubSettings(settings);
+                    setSeriesStandings(standings);
+                  }}
                 />
               )}
 

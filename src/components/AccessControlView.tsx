@@ -36,9 +36,13 @@ import type {
   OfficialPinRole,
   RentalCardOverviewItem,
   RolePinMap,
+  SeriesScoringConfig,
   SeriesStandingsBundle,
 } from '../types/sportident';
 import { formatSiNumber } from '../services/sportidentProtocol';
+import {
+  DEFAULT_SERIES_SCORING_CONFIG,
+} from '../services/seriesStandings';
 import { apiFetch } from '../services/authClient';
 import {
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
@@ -96,6 +100,10 @@ interface AccessControlViewProps {
   ) => Promise<void>;
   onOpenCreateCompetition: () => void;
   onOpenPublicEvent: (shortCode: string | null) => void;
+  onApplySeriesScoringUpdate: (
+    settings: ClubSettings,
+    standings: SeriesStandingsBundle[]
+  ) => void;
 }
 
 type AdminWorkspaceTab = 'events' | 'admins' | 'club' | 'rentals_series';
@@ -168,6 +176,7 @@ export function AccessControlView({
   onApplyStateSnapshot,
   onOpenCreateCompetition,
   onOpenPublicEvent,
+  onApplySeriesScoringUpdate,
 }: AccessControlViewProps) {
   const [subTab, setSubTab] = useState<AdminWorkspaceTab>(
     view === 'events' ? 'events' : 'admins'
@@ -249,6 +258,19 @@ export function AccessControlView({
   const [rentalBusyKey, setRentalBusyKey] = useState<string | null>(null);
   const [selectedSeriesName, setSelectedSeriesName] = useState<string>('');
   const [selectedSeriesClass, setSelectedSeriesClass] = useState<string>('');
+  const [seriesScoringModel, setSeriesScoringModel] =
+    useState<SeriesScoringConfig['model']>('PLACEMENT');
+  const [seriesPlacementScale, setSeriesPlacementScale] = useState<string>(
+    DEFAULT_SERIES_SCORING_CONFIG.placementPoints.join(',')
+  );
+  const [seriesParticipationPoints, setSeriesParticipationPoints] = useState<string>(
+    String(DEFAULT_SERIES_SCORING_CONFIG.participationPoints)
+  );
+  const [seriesScoringBusy, setSeriesScoringBusy] = useState<boolean>(false);
+  const [seriesScoringNotice, setSeriesScoringNotice] = useState<{
+    ok: boolean;
+    msg: string;
+  } | null>(null);
 
   const isSuperAdmin = currentUser.adminTier === 'SUPER_ADMIN';
   const anyEventHasFees = Boolean(enableFeesAndSwish);
@@ -1575,6 +1597,118 @@ export function AccessControlView({
       null,
     [activeSeriesBundle, selectedSeriesClass]
   );
+  const activeSeriesScoringConfig =
+    (activeSeriesBundle &&
+      clubSettings.seriesScoringSettings?.[activeSeriesBundle.seriesName]) ??
+    DEFAULT_SERIES_SCORING_CONFIG;
+
+  useEffect(() => {
+    if (!activeSeriesBundle) return;
+    const config =
+      clubSettings.seriesScoringSettings?.[activeSeriesBundle.seriesName] ??
+      DEFAULT_SERIES_SCORING_CONFIG;
+    setSeriesScoringModel(config.model);
+    setSeriesPlacementScale(config.placementPoints.join(','));
+    setSeriesParticipationPoints(String(config.participationPoints));
+    setSeriesScoringNotice(null);
+  }, [activeSeriesBundle?.seriesName, clubSettings.seriesScoringSettings]);
+
+  const handleSaveSeriesScoring = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeSeriesBundle) return;
+
+    const placementTokens = seriesPlacementScale
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const placementPoints = placementTokens.map(Number);
+    const participationPoints = Number(seriesParticipationPoints);
+    if (
+      placementPoints.length === 0 ||
+      placementPoints.some(
+        (points) => !Number.isInteger(points) || points < 0 || points > 10000
+      )
+    ) {
+      setSeriesScoringNotice({
+        ok: false,
+        msg: 'Ange placeringspoäng som heltal separerade med kommatecken.',
+      });
+      return;
+    }
+    if (
+      !Number.isInteger(participationPoints) ||
+      participationPoints < 0 ||
+      participationPoints > 10000
+    ) {
+      setSeriesScoringNotice({
+        ok: false,
+        msg: 'Ange deltagandepoäng som ett heltal mellan 0 och 10 000.',
+      });
+      return;
+    }
+
+    const nextConfig: SeriesScoringConfig = {
+      model: seriesScoringModel,
+      placementPoints,
+      participationPoints,
+    };
+    const nextSettings: ClubSettings = {
+      ...clubSettings,
+      seriesScoringSettings: {
+        ...clubSettings.seriesScoringSettings,
+        [activeSeriesBundle.seriesName]: nextConfig,
+      },
+    };
+    setSeriesScoringBusy(true);
+    setSeriesScoringNotice(null);
+    try {
+      let savedToServer = false;
+      try {
+        const response = await apiFetch('/api/club-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(nextSettings),
+        });
+        if (response.ok) {
+          savedToServer = true;
+          const stateResponse = await apiFetch('/api/state');
+          if (stateResponse.ok) {
+            onApplyStateSnapshot((await stateResponse.json()) as MeosAppState);
+          }
+        }
+      } catch {
+        // Use Firestore directly when the Express API is unavailable.
+      }
+
+      if (auth.currentUser) {
+        await saveClubSettingsToFirestore(nextSettings, isSuperAdmin);
+        const cloudSnapshot = await loadFullSeasonFromFirestore();
+        if (cloudSnapshot) {
+          onApplySeriesScoringUpdate(
+            cloudSnapshot.clubSettings,
+            cloudSnapshot.seriesStandings ?? []
+          );
+        }
+      } else if (!savedToServer) {
+        throw new Error('Logga in för att spara poängmodellen för serien.');
+      }
+
+      setSeriesScoringNotice({
+        ok: true,
+        msg: 'Poängmodellen är sparad och serietabellen har uppdaterats.',
+      });
+    } catch (error) {
+      setSeriesScoringNotice({
+        ok: false,
+        msg:
+          error instanceof Error
+            ? error.message
+            : 'Kunde inte spara poängmodellen för serien.',
+      });
+    } finally {
+      setSeriesScoringBusy(false);
+    }
+  };
 
   useEffect(() => {
     setSubTab(view === 'events' ? 'events' : 'admins');
@@ -3112,7 +3246,9 @@ export function AccessControlView({
                   <span>Klubbserie & Etappsammanställning</span>
                 </h2>
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Poängskala: 25 · 20 · 16 · 13 · 11 · 10 ... 1 p
+                  {activeSeriesScoringConfig.model === 'PLACEMENT'
+                    ? `Placeringspoäng: ${activeSeriesScoringConfig.placementPoints.join(' · ')} · Övriga ${activeSeriesScoringConfig.participationPoints} p`
+                    : `${activeSeriesScoringConfig.participationPoints} p per startande`}
                 </div>
               </div>
 
@@ -3134,12 +3270,94 @@ export function AccessControlView({
 
             {!activeSeriesBundle ? (
               <div className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Ingen klubbserie aktiv ännu. Ange ett gemensamt serienamn (t.ex.{' '}
-                <strong className="text-slate-800 dark:text-slate-200">Klubbserien 2026</strong>)
-                under <em>Tävlingar & Säsong</em> så räknas poäng automatiskt.
+                Ingen klubbserie finns ännu. Ange ett gemensamt serienamn på tävlingarna under{' '}
+                <em>Tävlingar & Säsong</em>. Därefter kan du välja poängmodell för serien här.
               </div>
             ) : (
               <div className="p-3.5 space-y-2.5">
+                <form
+                  onSubmit={handleSaveSeriesScoring}
+                  className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-3 space-y-2.5"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                      Poängmodell · {activeSeriesBundle.seriesName}
+                    </h3>
+                    <select
+                      value={seriesScoringModel}
+                      onChange={(event) =>
+                        setSeriesScoringModel(
+                          event.target.value === 'PARTICIPATION'
+                            ? 'PARTICIPATION'
+                            : 'PLACEMENT'
+                        )
+                      }
+                      aria-label="Poängmodell för serie"
+                      className="px-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg"
+                    >
+                      <option value="PLACEMENT">Placeringspoäng (Modell A)</option>
+                      <option value="PARTICIPATION">Fast deltagandepoäng</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {seriesScoringModel === 'PLACEMENT' && (
+                      <label className="block text-[11px] text-slate-600 dark:text-slate-400">
+                        Placeringsskala (poäng, separerade med kommatecken)
+                        <input
+                          type="text"
+                          value={seriesPlacementScale}
+                          onChange={(event) => setSeriesPlacementScale(event.target.value)}
+                          placeholder="10,8,6,5,4,3,2,1"
+                          className="mt-1 w-full px-2.5 py-1.5 text-xs border border-slate-200 dark:border-slate-700 rounded-lg"
+                        />
+                      </label>
+                    )}
+                    <label className="block text-[11px] text-slate-600 dark:text-slate-400">
+                      {seriesScoringModel === 'PLACEMENT'
+                        ? 'Deltagandepoäng för övriga startande'
+                        : 'Poäng per startande/fullföljande deltagare'}
+                      <input
+                        type="number"
+                        min="0"
+                        max="10000"
+                        step="1"
+                        value={seriesParticipationPoints}
+                        onChange={(event) =>
+                          setSeriesParticipationPoints(event.target.value)
+                        }
+                        className="mt-1 w-full px-2.5 py-1.5 text-xs border border-slate-200 dark:border-slate-700 rounded-lg"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      Gäller alla etapper med detta serienamn. Deltagandepoäng ges till startande
+                      som inte får placeringspoäng, eller till alla startande i fast modell.
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={seriesScoringBusy}
+                      className="px-3 py-1.5 text-xs font-semibold club-accent-btn disabled:opacity-50 rounded-lg whitespace-nowrap"
+                    >
+                      {seriesScoringBusy ? 'Sparar...' : 'Spara poängmodell'}
+                    </button>
+                  </div>
+                  {seriesScoringNotice && (
+                    <p
+                      role="status"
+                      className={`text-xs ${
+                        seriesScoringNotice.ok
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-red-700 dark:text-red-400'
+                      }`}
+                    >
+                      {seriesScoringNotice.msg}
+                    </p>
+                  )}
+                </form>
+
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs text-slate-600 dark:text-slate-400 min-w-0">
                     <strong className="text-slate-900 dark:text-slate-100">

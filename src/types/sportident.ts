@@ -37,6 +37,12 @@ export type EventLifecycleStatus = 'LIVE' | 'UPCOMING' | 'COMPLETED';
 
 export type ClassCompetitionFormat = 'STANDARD' | 'FORKED' | 'ROGAINING';
 
+export interface SeriesScoringConfig {
+  model: 'PLACEMENT' | 'PARTICIPATION';
+  placementPoints: number[];
+  participationPoints: number;
+}
+
 export type OfficialRoleMode =
   | 'ALL'
   | 'READOUT'
@@ -57,6 +63,7 @@ export interface ClubSettings {
   customBgColor?: string;
   customTextColor?: string;
   customAccentColor?: string;
+  seriesScoringSettings?: Record<string, SeriesScoringConfig>;
 }
 
 export interface CompetitionMeta {
@@ -529,5 +536,6 @@ export interface CloudSeasonSnapshot {
   demoCleared: boolean;
   clubSettings: ClubSettings;
   events: CloudEventExportItem[];
+  seriesStandings?: SeriesStandingsBundle[];
   runnerDb?: RunnerDbEntry[];
 }

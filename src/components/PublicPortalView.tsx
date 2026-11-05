@@ -36,6 +36,7 @@ import { RunnerStatusIndicator } from './StatusLabels';
 import { PWAInstallButton } from './PWAInstallButton';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
 import {
+  loadFullSeasonFromFirestore,
   loadPublicRaceFromFirestore,
   subscribePublicCompetitionSummaries,
 } from '../firebase';
@@ -130,18 +131,62 @@ export function PublicPortalView({
   const loadData = useCallback(async () => {
     try {
       if (!shortCode) {
-        const res = await fetch('/api/public/season');
-        if (res.ok) {
-          const overview = (await res.json()) as PublicSeasonOverviewPayload;
+        let overview: PublicSeasonOverviewPayload | null = null;
+        try {
+          const res = await fetch('/api/public/season');
+          if (res.ok) overview = (await res.json()) as PublicSeasonOverviewPayload;
+        } catch {
+          // Use Firestore when the optional Express API is unavailable.
+        }
+        if (overview) {
           setApiCompetitionsList(overview.competitions);
           setSeasonClubSettings(overview.clubSettings);
           setSeasonSeriesStandings(overview.seriesStandings ?? []);
           setError(null);
         } else {
-          const fallback = await fetch('/api/public/competitions');
-          if (fallback.ok) {
-            setApiCompetitionsList((await fallback.json()) as CompetitionSummary[]);
+          let fallbackCompetitions: CompetitionSummary[] | null = null;
+          try {
+            const fallback = await fetch('/api/public/competitions');
+            if (fallback.ok) {
+              fallbackCompetitions = (await fallback.json()) as CompetitionSummary[];
+            }
+          } catch {
+            // Fall through to the direct Firestore season read.
+          }
+          if (fallbackCompetitions) {
+            setApiCompetitionsList(fallbackCompetitions);
             setError(null);
+          } else {
+            const cloudSeason = await loadFullSeasonFromFirestore({
+              includeRunnerDb: false,
+            });
+            if (cloudSeason) {
+              setApiCompetitionsList(
+                cloudSeason.events.map((event) => ({
+                  id: event.competition.id,
+                  competitionId: event.competition.id,
+                  shortCode: event.competition.shortCode,
+                  status: event.competition.status,
+                  name: event.competition.name,
+                  organizer: event.competition.organizer,
+                  date: event.competition.date,
+                  zeroTimeStr: event.competition.zeroTimeStr,
+                  arenaInfo: event.competition.arenaInfo,
+                  seriesName: event.competition.seriesName,
+                  allowSelfRegistration: event.competition.allowSelfRegistration,
+                  enableFeesAndSwish: event.competition.enableFeesAndSwish,
+                  competitorCount: event.competitors.length,
+                  finishedCount: event.competitors.filter(
+                    (competitor) =>
+                      competitor.status === 'OK' || competitor.status === 'MP'
+                  ).length,
+                  classCount: event.classes.length,
+                }))
+              );
+              setSeasonClubSettings(cloudSeason.clubSettings);
+              setSeasonSeriesStandings(cloudSeason.seriesStandings ?? []);
+              setError(null);
+            }
           }
         }
       } else {
