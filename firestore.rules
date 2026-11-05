@@ -190,7 +190,6 @@ service cloud.firestore {
           'zeroTimeSec',
           'arenaInfo',
           'seriesName',
-          'allowSelfRegistration',
           'enableFeesAndSwish',
           'competitorCount',
           'finishedCount',
@@ -215,7 +214,6 @@ service cloud.firestore {
           'zeroTimeSec',
           'arenaInfo',
           'seriesName',
-          'allowSelfRegistration',
           'enableFeesAndSwish',
           'competitorCount',
           'finishedCount',
@@ -241,7 +239,10 @@ service cloud.firestore {
         data.zeroTimeSec is int && data.zeroTimeSec >= 0 && data.zeroTimeSec <= 86400 &&
         data.arenaInfo is string && data.arenaInfo.size() <= 500 &&
         data.seriesName is string && data.seriesName.size() <= 80 &&
-        data.allowSelfRegistration is bool &&
+        (
+          !data.keys().hasAny(['allowSelfRegistration']) ||
+          data.allowSelfRegistration is bool
+        ) &&
         data.enableFeesAndSwish is bool &&
         data.competitorCount is int && data.competitorCount >= 0 && data.competitorCount <= 50000 &&
         data.finishedCount is int && data.finishedCount >= 0 && data.finishedCount <= 50000 &&
@@ -366,7 +367,6 @@ service cloud.firestore {
           'cardSeries',
           'isRentalCard',
           'rentalReturned',
-          'isSelfRegistered',
           'feePaid',
           'status',
           'allocatedStartSec',
@@ -419,7 +419,10 @@ service cloud.firestore {
         data.cardSeries is string && data.cardSeries.size() >= 1 && data.cardSeries.size() <= 24 &&
         data.isRentalCard is bool &&
         data.rentalReturned is bool &&
-        data.isSelfRegistered is bool &&
+        (
+          !data.keys().hasAny(['isSelfRegistered']) ||
+          data.isSelfRegistered is bool
+        ) &&
         data.feePaid is bool &&
         data.status is string && data.status.size() >= 2 && data.status.size() <= 15 &&
         (
@@ -810,7 +813,6 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
-              'allowSelfRegistration',
               'enableFeesAndSwish',
               'competitorCount',
               'finishedCount',
@@ -838,7 +840,6 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
-              'allowSelfRegistration',
               'enableFeesAndSwish',
               'competitorCount',
               'finishedCount',
@@ -1096,7 +1097,6 @@ service cloud.firestore {
                 'cardSeries',
                 'isRentalCard',
                 'rentalReturned',
-                'isSelfRegistered',
                 'feePaid',
                 'status',
                 'allocatedStartSec',
@@ -1123,7 +1123,6 @@ service cloud.firestore {
                 'cardSeries',
                 'isRentalCard',
                 'rentalReturned',
-                'isSelfRegistered',
                 'feePaid',
                 'status',
                 'allocatedStartSec',

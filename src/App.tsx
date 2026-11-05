@@ -390,7 +390,6 @@ export default function App() {
   const [newEvtZeroTime, setNewEvtZeroTime] = useState('18:00:00');
   const [newEvtArena, setNewEvtArena] = useState('');
   const [newEvtSeriesName, setNewEvtSeriesName] = useState('');
-  const [newEvtSelfReg, setNewEvtSelfReg] = useState(true);
   const [newEvtFeesAndSwish, setNewEvtFeesAndSwish] = useState(false);
   const [newEvtCopyCourses, setNewEvtCopyCourses] = useState(true);
   const [newEvtCourseParsed, setNewEvtCourseParsed] = useState<ParsedIofDocument | null>(null);
@@ -565,7 +564,6 @@ export default function App() {
     date: getStockholmTodayIso(),
     zeroTimeStr: '18:00:00',
     zeroTimeSec: 18 * 3600,
-    allowSelfRegistration: false,
   });
   const [courses, setCourses] = useState<Course[]>([]);
   const [classes, setClasses] = useState<CompClass[]>([]);
@@ -898,7 +896,6 @@ export default function App() {
               zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
               arenaInfo: e.competition.arenaInfo || '',
               seriesName: e.competition.seriesName,
-              allowSelfRegistration: e.competition.allowSelfRegistration !== false,
               enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
               competitorCount: e.competitors.length,
               finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
@@ -955,7 +952,6 @@ export default function App() {
             date: getStockholmTodayIso(),
             zeroTimeStr: '18:00:00',
             zeroTimeSec: 18 * 3600,
-            allowSelfRegistration: false,
           });
           setCourses([]);
           setClasses([]);
@@ -1091,7 +1087,7 @@ export default function App() {
             `${c.id}:${c.name}:${c.status}:${c.date}:${c.seriesName || ''}:${String(c.enableFeesAndSwish)}:${c.competitorCount}:${c.finishedCount}`
         )
         .join('|'),
-      `${competition.id}:${competition.zeroTimeStr}:${competition.arenaInfo || ''}:${String(competition.allowSelfRegistration)}:${String(competition.enableFeesAndSwish)}`,
+      `${competition.id}:${competition.zeroTimeStr}:${competition.arenaInfo || ''}:${String(competition.enableFeesAndSwish)}`,
       courses
         .map((cr) => `${cr.id}:${cr.name}:${cr.lengthMeters}:${cr.climbMeters}:${cr.controls.join(',')}`)
         .join('|'),
@@ -1277,7 +1273,6 @@ export default function App() {
         zeroTimeSec: competition.zeroTimeSec,
         arenaInfo: competition.arenaInfo,
         seriesName: competition.seriesName,
-        allowSelfRegistration: competition.allowSelfRegistration,
         enableFeesAndSwish: competition.enableFeesAndSwish,
         courses,
         classes,
@@ -1330,7 +1325,6 @@ export default function App() {
             zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
             arenaInfo: newEvtArena.trim(),
             seriesName: newEvtSeriesName.trim(),
-            allowSelfRegistration: newEvtSelfReg,
             enableFeesAndSwish: newEvtFeesAndSwish,
             copyCoursesFromActive:
               !effectiveCourseImport && !isEmptySeason && newEvtCopyCourses,
@@ -1390,7 +1384,6 @@ export default function App() {
           zeroTimeSec: parseTimeToSec(newEvtZeroTime),
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
-          allowSelfRegistration: newEvtSelfReg,
           enableFeesAndSwish: newEvtFeesAndSwish,
           courses: snap ? snap.courses : importedCourses,
           classes: snap ? snap.classes : importedClasses,
@@ -1411,7 +1404,6 @@ export default function App() {
           zeroTimeSec: parseTimeToSec(newEvtZeroTime),
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
-          allowSelfRegistration: newEvtSelfReg,
           enableFeesAndSwish: newEvtFeesAndSwish,
         };
         setCompetition(newComp);
@@ -1431,7 +1423,6 @@ export default function App() {
             zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
             arenaInfo: newEvtArena.trim(),
             seriesName: newEvtSeriesName.trim(),
-            allowSelfRegistration: newEvtSelfReg,
             enableFeesAndSwish: newEvtFeesAndSwish,
             competitorCount: 0,
             finishedCount: 0,
@@ -1627,7 +1618,7 @@ export default function App() {
     });
   };
 
-  // 1. Public Spectator & Mobile QR Self-Registration Portal (/t/:shortCode & /publik) — Zero login required
+  // 1. Public spectator portal (/t/:shortCode & /publik) — zero login required
   if (route.mode === 'PUBLIC') {
     return (
       <PublicPortalView
@@ -2386,20 +2377,11 @@ export default function App() {
                     <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={newEvtSelfReg}
-                        onChange={(e) => setNewEvtSelfReg(e.target.checked)}
-                        className="rounded border-slate-300 dark:border-slate-700"
-                      />
-                      <span>Mobil självreg. (/t/kod)</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                      <input
-                        type="checkbox"
                         checked={newEvtFeesAndSwish}
                         onChange={(e) => setNewEvtFeesAndSwish(e.target.checked)}
                         className="rounded border-slate-300 dark:border-slate-700"
                       />
-                      <span>Avgift / Swish-QR</span>
+                      <span>Avgiftsuppföljning</span>
                     </label>
                     {!isEmptySeason && !newEvtCourseParsed && (
                       <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
@@ -2741,7 +2723,6 @@ export default function App() {
                         cardSeries: inferCardSeries(siNumber),
                         isRentalCard: entry.siNumber <= 0,
                         rentalReturned: false,
-                        isSelfRegistered: false,
                         feePaid: false,
                         status: 'REGISTERED',
                         allocatedStartSec: Math.min(86400, competition.zeroTimeSec + bib * 30),

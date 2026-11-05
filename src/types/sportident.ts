@@ -77,7 +77,6 @@ export interface CompetitionMeta {
   zeroTimeSec: number; // seconds since midnight, e.g. 36000
   arenaInfo?: string;
   seriesName?: string;
-  allowSelfRegistration?: boolean;
   enableFeesAndSwish?: boolean;
 }
 
@@ -92,7 +91,6 @@ export interface CompetitionSummary {
   zeroTimeStr: string;
   arenaInfo: string;
   seriesName?: string;
-  allowSelfRegistration: boolean;
   enableFeesAndSwish: boolean;
   competitorCount: number;
   finishedCount: number;
@@ -202,7 +200,6 @@ export interface Competitor {
   isRentalCard: boolean;
   isBorrowedCard?: boolean;
   rentalReturned: boolean;
-  isSelfRegistered?: boolean;
   feePaid?: boolean;
   status: RunnerStatus;
   allocatedStartSec: number | null;
@@ -518,7 +515,6 @@ export interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
-    allowSelfRegistration: boolean;
     enableFeesAndSwish: boolean;
   };
   courses: Course[];

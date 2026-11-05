@@ -712,11 +712,6 @@ export function DrawAndEmergencyView({
                               <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
                                 {r.fullName}
                               </span>
-                              {r.isSelfRegistered && (
-                                <span className="text-[10px] text-sky-700 dark:text-sky-400 shrink-0">
-                                  självreg.
-                                </span>
-                              )}
                               <span className="text-slate-300 dark:text-slate-700 shrink-0" aria-hidden="true">
                                 ·
                               </span>

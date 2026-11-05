@@ -342,7 +342,7 @@
     },
     "ClubSettings": {
       "title": "ClubSettings",
-      "description": "Club-wide configuration including Eventor ID, Swish QR payment settings, rental card fees, and active season state.",
+      "description": "Club-wide configuration including Eventor ID, payment settings, rental card fees, and active season state.",
       "type": "object",
       "properties": {
         "settingId": {
@@ -366,13 +366,13 @@
         },
         "swishNumber": {
           "type": "string",
-          "description": "Club Swish 123-number or phone number for arena self-registration.",
+          "description": "Club Swish 123-number or phone number for direct-entry fee tracking.",
           "minLength": 0,
           "maxLength": 20
         },
         "swishRecipientName": {
           "type": "string",
-          "description": "Recipient label displayed next to the Swish QR code.",
+          "description": "Recipient name for Swish payments.",
           "minLength": 0,
           "maxLength": 100
         },
@@ -568,13 +568,9 @@
           "minLength": 0,
           "maxLength": 80
         },
-        "allowSelfRegistration": {
-          "type": "boolean",
-          "description": "Whether mobile QR self-registration is enabled."
-        },
         "enableFeesAndSwish": {
           "type": "boolean",
-          "description": "Whether entry fees and Swish QR payment are enabled for this competition."
+          "description": "Whether entry fees and payment tracking are enabled for this competition."
         },
         "competitorCount": {
           "type": "integer",
@@ -653,7 +649,6 @@
         "zeroTimeSec",
         "arenaInfo",
         "seriesName",
-        "allowSelfRegistration",
         "enableFeesAndSwish",
         "competitorCount",
         "finishedCount",
@@ -897,10 +892,6 @@
           "type": "boolean",
           "description": "Whether the borrowed rental SI-card has been returned."
         },
-        "isSelfRegistered": {
-          "type": "boolean",
-          "description": "Whether registered via mobile QR self-registration."
-        },
         "feePaid": {
           "type": "boolean",
           "description": "Whether direct entry / Swish fee has been marked paid."
@@ -988,7 +979,6 @@
         "cardSeries",
         "isRentalCard",
         "rentalReturned",
-        "isSelfRegistered",
         "feePaid",
         "status",
         "allocatedStartSec",
@@ -1102,7 +1092,7 @@
     },
     "/clubSettings/{settingId}": {
       "schema": { "$ref": "#/entities/ClubSettings" },
-      "description": "Club-wide configuration for Eventor, Swish QR payments, rental fees, and active season state."
+      "description": "Club-wide configuration for Eventor, payment settings, rental fees, and active season state."
     },
     "/competitions/{competitionId}": {
       "schema": { "$ref": "#/entities/CloudCompetition" },

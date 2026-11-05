@@ -85,7 +85,6 @@ interface CompetitionMeta {
   zeroTimeSec: number;
   arenaInfo: string;
   seriesName?: string;
-  allowSelfRegistration: boolean;
   enableFeesAndSwish?: boolean;
 }
 
@@ -99,7 +98,6 @@ interface CompetitionSummary {
   zeroTimeStr: string;
   arenaInfo: string;
   seriesName?: string;
-  allowSelfRegistration: boolean;
   enableFeesAndSwish: boolean;
   competitorCount: number;
   finishedCount: number;
@@ -211,7 +209,6 @@ interface Competitor {
   isRentalCard: boolean;
   isBorrowedCard?: boolean;
   rentalReturned: boolean;
-  isSelfRegistered?: boolean;
   feePaid?: boolean;
   status: RunnerStatus;
   allocatedStartSec: number | null;
@@ -410,7 +407,6 @@ interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
-    allowSelfRegistration: boolean;
     enableFeesAndSwish: boolean;
   };
   courses: Course[];
@@ -2119,7 +2115,6 @@ function buildSeasonSeed(): SeasonDatabase {
       cardPunches: [],
     }),
 
-    // Mobile Self-Registered runner ("självreg.")
     makeRunnerForEvent(liveClasses, liveCourses, T0, liveEmergency, {
       id: 'cmp-10',
       bib: 105,
@@ -2129,7 +2124,6 @@ function buildSeasonSeed(): SeasonDatabase {
       siNumber: 8652301,
       isRentalCard: false,
       rentalReturned: false,
-      isSelfRegistered: true,
       status: 'REGISTERED',
       allocatedStartSec: T0 + 900,
       checkTimeSec: null,
@@ -2209,10 +2203,8 @@ function buildSeasonSeed(): SeasonDatabase {
       date: todayStr,
       zeroTimeStr: '10:00:00',
       zeroTimeSec: T0,
-      arenaInfo:
-        'Lunsentorpet · Parkering vid Flottsund (400 m snitsel). Självregistrering öppen för Öppen Motion & D/H45.',
+      arenaInfo: 'Lunsentorpet · Parkering vid Flottsund (400 m snitsel).',
       seriesName: 'Klubbserien 2026',
-      allowSelfRegistration: true,
       enableFeesAndSwish: false,
     },
     courses: liveCourses,
@@ -2417,7 +2409,6 @@ function buildSeasonSeed(): SeasonDatabase {
       cardSeries: 'SIAC Air+',
       isRentalCard: false,
       rentalReturned: false,
-      isSelfRegistered: true,
       status: 'REGISTERED',
       allocatedStartSec: null,
       checkTimeSec: null,
@@ -2466,10 +2457,8 @@ function buildSeasonSeed(): SeasonDatabase {
       date: upcomingStr,
       zeroTimeStr: '18:00:00',
       zeroTimeSec: upT0,
-      arenaInfo:
-        'Nyby IP klubbstuga · Första start 18:15. Skanna QR-koden vid kartlådorna för självregistrering.',
+      arenaInfo: 'Nyby IP klubbstuga · Första start 18:15.',
       seriesName: 'Klubbserien 2026',
-      allowSelfRegistration: true,
       enableFeesAndSwish: false,
     },
     courses: upCourses,
@@ -2639,7 +2628,6 @@ function buildSeasonSeed(): SeasonDatabase {
       zeroTimeSec: compT0,
       arenaInfo: 'Håga By · Officiella slutresultat & sträcktider.',
       seriesName: 'Klubbserien 2026',
-      allowSelfRegistration: false,
       enableFeesAndSwish: false,
     },
     courses: compCourses,
@@ -3494,7 +3482,6 @@ function buildCompetitionsSummaryList(seasonDb: SeasonDatabase): CompetitionSumm
       zeroTimeStr: ev.competition.zeroTimeStr,
       arenaInfo: ev.competition.arenaInfo || '',
       seriesName: ev.competition.seriesName || '',
-      allowSelfRegistration: ev.competition.allowSelfRegistration !== false,
       enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
       competitorCount: ev.competitors.length,
       finishedCount: ev.competitors.filter(
@@ -3610,7 +3597,7 @@ async function startServer() {
         zeroTimeSec: 36000,
         arenaInfo: '',
         seriesName: '',
-        allowSelfRegistration: false,
+
         enableFeesAndSwish: false,
       },
       courses: [],
@@ -4185,141 +4172,6 @@ async function startServer() {
       return;
     }
     res.json(buildPublicRacePayload(ev));
-  });
-
-  app.get('/api/public/events/:shortCode/lookup-si/:siNumber', (req, res) => {
-    const ev = findEventByIdOrShortCode(req.params.shortCode);
-    if (!ev) {
-      res.status(404).json({ error: 'Tävlingen hittades inte.' });
-      return;
-    }
-    const si = Number(String(req.params.siNumber).replace(/\D/g, ''));
-    if (!Number.isFinite(si) || si <= 0) {
-      res.json({ runnerDbMatch: null, alreadyEntered: null });
-      return;
-    }
-    const alreadyEntered = ev.competitors.find((c) => c.siNumber === si) ?? null;
-    const runnerDbMatch = seasonDb.runnerDb.find((r) => r.siNumber === si) ?? null;
-    res.json({
-      runnerDbMatch,
-      alreadyEntered: alreadyEntered
-        ? {
-            id: alreadyEntered.id,
-            bib: alreadyEntered.bib,
-            fullName: alreadyEntered.fullName,
-            club: alreadyEntered.club,
-            classId: alreadyEntered.classId,
-          }
-        : null,
-    });
-  });
-
-  app.post('/api/public/events/:shortCode/self-register', (req, res) => {
-    const ev = findEventByIdOrShortCode(req.params.shortCode);
-    if (!ev) {
-      res.status(404).json({ error: 'Tävlingen hittades inte.' });
-      return;
-    }
-    if (ev.competition.allowSelfRegistration === false) {
-      res.status(403).json({
-        error: 'Självregistrering på mobilen är stängd för denna tävling.',
-      });
-      return;
-    }
-    if (resolveEffectiveCompetitionStatus(ev) === 'COMPLETED') {
-      res.status(403).json({
-        error: 'Tävlingen är avslutad — självregistrering är stängd.',
-      });
-      return;
-    }
-
-    const body = req.body as {
-      siNumber?: number;
-      fullName?: string;
-      club?: string;
-      classId?: string;
-      isRentalCard?: boolean;
-    };
-
-    const siNumber = Number(String(body.siNumber ?? '').replace(/\D/g, ''));
-    if (!Number.isFinite(siNumber) || siNumber <= 0 || !body.fullName?.trim()) {
-      res.status(400).json({ error: 'Ange giltigt SI-bricknummer och för-/efternamn.' });
-      return;
-    }
-    if (ev.competitors.some((c) => c.siNumber === siNumber)) {
-      res.status(409).json({
-        error: `SI-bricka ${siNumber} är redan anmäld i ${ev.competition.name}.`,
-      });
-      return;
-    }
-
-    const targetClass =
-      ev.classes.find((c) => c.id === body.classId && c.allowDirectEntry) ??
-      ev.classes.find((c) => c.allowDirectEntry) ??
-      ev.classes[0];
-
-    if (!targetClass) {
-      res.status(400).json({ error: 'Ingen öppen klass finns tillgänglig.' });
-      return;
-    }
-
-    const maxBib = ev.competitors.reduce((m, c) => Math.max(m, c.bib), 400);
-    const created: Competitor = {
-      id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      bib: maxBib + 1,
-      fullName: body.fullName.trim(),
-      club: body.club?.trim() || 'Klubblös',
-      classId: targetClass.id,
-      siNumber,
-      cardSeries: inferSeries(siNumber),
-      isRentalCard: Boolean(body.isRentalCard),
-      rentalReturned: false,
-      isSelfRegistered: true,
-      status: 'REGISTERED',
-      allocatedStartSec: null,
-      checkTimeSec: null,
-      startTimeSec: null,
-      finishTimeSec: null,
-      runningTimeSec: null,
-      lastSeenControl: null,
-      lastSeenTimeSec: null,
-      readoutAt: null,
-      radioSplits: [],
-      cardPunches: [],
-      validation: null,
-    };
-
-    ev.competitors.unshift(created);
-    if (!created.isRentalCard) {
-      upsertRunnerInSeasonDb(seasonDb, {
-        siNumber: created.siNumber,
-        fullName: created.fullName,
-        club: created.club,
-        defaultClassName: targetClass.name,
-        source: 'LEARNED_ENTRY',
-      });
-    }
-
-    const now = new Date();
-    ev.events.unshift({
-      id: `ev-${Date.now()}`,
-      timestamp: now.toISOString(),
-      clock24h: secToClock(getStockholmClockSec(now)),
-      eventType: 'DIRECT_ENTRY',
-      siNumber: created.siNumber,
-      competitorId: created.id,
-      competitorName: created.fullName,
-      club: created.club,
-      className: targetClass.name,
-      stationCode: 0,
-      stationName: 'Mobil självregistrering (QR)',
-      runningTimeSec: null,
-      message: `Självregistrerad via mobilen i ${targetClass.name} (startnr #${created.bib})`,
-    });
-
-    persistUserMutation();
-    broadcastFullState(ev.competition.shortCode);
-    res.status(201).json(created);
   });
 
   app.get('/api/public/events/:shortCode/iof-results', (req, res) => {
@@ -5091,7 +4943,6 @@ async function startServer() {
         zeroTimeSec: ev.competition.zeroTimeSec,
         arenaInfo: ev.competition.arenaInfo || '',
         seriesName: ev.competition.seriesName || '',
-        allowSelfRegistration: ev.competition.allowSelfRegistration !== false,
         enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
       },
       courses: ev.courses,
@@ -5150,7 +5001,6 @@ async function startServer() {
           zeroTimeSec: zeroSec,
           arenaInfo: item.competition.arenaInfo || '',
           seriesName: item.competition.seriesName || '',
-          allowSelfRegistration: item.competition.allowSelfRegistration !== false,
           enableFeesAndSwish: Boolean(item.competition.enableFeesAndSwish),
         },
         courses: Array.isArray(item.courses) ? item.courses : [],
@@ -5232,7 +5082,6 @@ async function startServer() {
       status?: EventLifecycleStatus;
       arenaInfo?: string;
       seriesName?: string;
-      allowSelfRegistration?: boolean;
       enableFeesAndSwish?: boolean;
       copyCoursesFromActive?: boolean;
       importedCourses?: {
@@ -5411,7 +5260,6 @@ async function startServer() {
         zeroTimeSec: zeroSec,
         arenaInfo: body.arenaInfo?.trim() || '',
         seriesName: body.seriesName?.trim() || '',
-        allowSelfRegistration: body.allowSelfRegistration !== false,
         enableFeesAndSwish: Boolean(body.enableFeesAndSwish),
       },
       courses,
@@ -5476,9 +5324,6 @@ async function startServer() {
     if (body.seriesName !== undefined) {
       target.competition.seriesName = body.seriesName.trim();
     }
-    if (body.allowSelfRegistration !== undefined) {
-      target.competition.allowSelfRegistration = Boolean(body.allowSelfRegistration);
-    }
     if (body.enableFeesAndSwish !== undefined) {
       target.competition.enableFeesAndSwish = Boolean(body.enableFeesAndSwish);
     }
@@ -5540,7 +5385,6 @@ async function startServer() {
         zeroTimeSec: src.competition.zeroTimeSec,
         arenaInfo: src.competition.arenaInfo || '',
         seriesName: src.competition.seriesName || '',
-        allowSelfRegistration: src.competition.allowSelfRegistration !== false,
         enableFeesAndSwish: Boolean(src.competition.enableFeesAndSwish),
       },
       courses: clonedCourses,
@@ -6244,7 +6088,6 @@ async function startServer() {
       isRentalCard: Boolean(body.isRentalCard),
       isBorrowedCard: Boolean(body.isBorrowedCard),
       rentalReturned: false,
-      isSelfRegistered: Boolean(body.isSelfRegistered),
       feePaid: Boolean(body.feePaid),
       status: body.status ?? 'REGISTERED',
       allocatedStartSec:
@@ -7244,9 +7087,6 @@ async function startServer() {
     }
     if (body.arenaInfo !== undefined) db.competition.arenaInfo = body.arenaInfo.trim();
     if (body.seriesName !== undefined) db.competition.seriesName = body.seriesName.trim();
-    if (body.allowSelfRegistration !== undefined) {
-      db.competition.allowSelfRegistration = Boolean(body.allowSelfRegistration);
-    }
     if (body.enableFeesAndSwish !== undefined) {
       db.competition.enableFeesAndSwish = Boolean(body.enableFeesAndSwish);
     }

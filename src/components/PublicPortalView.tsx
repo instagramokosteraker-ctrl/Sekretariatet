@@ -11,8 +11,6 @@ import {
   Share2,
   Sun,
   Trophy,
-  UserCheck,
-  UserPlus,
   Wrench,
   X,
 } from 'lucide-react';
@@ -22,7 +20,6 @@ import type {
   Competitor,
   PublicRacePayload,
   PublicSeasonOverviewPayload,
-  RunnerDbEntry,
   SeriesStandingsBundle,
 } from '../types/sportident';
 import {
@@ -50,14 +47,7 @@ interface PublicPortalViewProps {
   onSwitchToSecretariat: () => void;
 }
 
-type PublicEventTab = 'RESULTS' | 'STARTLIST' | 'SELF_REG';
-
-function buildSwishQrPayload(swishNumber: string, amountSek: number, message: string): string {
-  const digits = swishNumber.replace(/\D/g, '');
-  const cleanMsg = message.replace(/;/g, ' ').trim().slice(0, 50);
-  const cleanAmount = Math.max(0, Math.round(amountSek));
-  return `C${digits};${cleanAmount};${cleanMsg};0`;
-}
+type PublicEventTab = 'RESULTS' | 'STARTLIST';
 
 export function PublicPortalView({
   shortCode,
@@ -91,22 +81,6 @@ export function PublicPortalView({
   const [qrModalOpen, setQrModalOpen] = useState<boolean>(false);
   const [qrSvgMarkup, setQrSvgMarkup] = useState<string>('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-
-  // Mobile Self-Registration form state
-  const [selfSiInput, setSelfSiInput] = useState<string>('');
-  const [selfFullName, setSelfFullName] = useState<string>('');
-  const [selfClub, setSelfClub] = useState<string>('');
-  const [selfClassId, setSelfClassId] = useState<string>('');
-  const [selfIsRental, setSelfIsRental] = useState<boolean>(false);
-  const [selfLookupMatch, setSelfLookupMatch] = useState<RunnerDbEntry | null>(null);
-  const [selfAlreadyEntered, setSelfAlreadyEntered] = useState<{
-    bib: number;
-    fullName: string;
-    club: string;
-  } | null>(null);
-  const [selfBusy, setSelfBusy] = useState<boolean>(false);
-  const [selfNotice, setSelfNotice] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [swishQrSvg, setSwishQrSvg] = useState<string>('');
 
   const competitionsList = useMemo(() => {
     const firestoreById = new Map(
@@ -173,7 +147,6 @@ export function PublicPortalView({
                   zeroTimeStr: event.competition.zeroTimeStr,
                   arenaInfo: event.competition.arenaInfo,
                   seriesName: event.competition.seriesName,
-                  allowSelfRegistration: event.competition.allowSelfRegistration,
                   enableFeesAndSwish: event.competition.enableFeesAndSwish,
                   competitorCount: event.competitors.length,
                   finishedCount: event.competitors.filter(
@@ -323,62 +296,6 @@ export function PublicPortalView({
     };
   }, [publicEventUrl]);
 
-  // Instant SI-card lookup when runner types SI number on mobile Self-Registration
-  useEffect(() => {
-    if (!shortCode) return;
-    const digits = selfSiInput.replace(/\D/g, '');
-    if (digits.length < 4) {
-      setSelfLookupMatch(null);
-      setSelfAlreadyEntered(null);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/public/events/${encodeURIComponent(shortCode)}/lookup-si/${digits}`
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as {
-          runnerDbMatch: RunnerDbEntry | null;
-          alreadyEntered: { bib: number; fullName: string; club: string } | null;
-        };
-        setSelfAlreadyEntered(data.alreadyEntered);
-        setSelfLookupMatch(data.runnerDbMatch);
-
-        if (data.runnerDbMatch && !data.alreadyEntered) {
-          setSelfFullName(data.runnerDbMatch.fullName);
-          setSelfClub(data.runnerDbMatch.club);
-          if (data.runnerDbMatch.defaultClassName && raceData) {
-            const cls = raceData.classes.find(
-              (c) =>
-                c.allowDirectEntry &&
-                c.name.toLowerCase() === data.runnerDbMatch!.defaultClassName!.toLowerCase()
-            );
-            if (cls) setSelfClassId(cls.id);
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }, 180);
-
-    return () => clearTimeout(timer);
-  }, [selfSiInput, shortCode, raceData]);
-
-  const openDirectClasses = useMemo(
-    () => (raceData ? raceData.classes.filter((c) => c.allowDirectEntry) : []),
-    [raceData]
-  );
-
-  const selectedSelfClass = useMemo(() => {
-    if (openDirectClasses.length === 0) return null;
-    return (
-      openDirectClasses.find((c) => c.id === selfClassId) ?? openDirectClasses[0] ?? null
-    );
-  }, [openDirectClasses, selfClassId]);
-
-  const feesEnabled = Boolean(raceData?.competition.enableFeesAndSwish);
   const effectiveClubSettings = raceData?.clubSettings ?? seasonClubSettings;
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
 
@@ -389,44 +306,6 @@ export function PublicPortalView({
   useEffect(() => {
     applyClubThemeToDocument(effectiveClubSettings, darkMode);
   }, [effectiveClubSettings, darkMode]);
-
-  const baseClassFeeSek =
-    selectedSelfClass?.feeSek ?? effectiveClubSettings?.defaultDirectEntryFeeSek ?? 0;
-  const rentalExtraSek = selfIsRental ? effectiveClubSettings?.rentalCardFeeSek ?? 30 : 0;
-  const totalSelfFeeSek = baseClassFeeSek + rentalExtraSek;
-  const swishMessage = `${shortCode || 'PasserSI'} ${selfFullName.trim() || 'Direktanmalan'}`
-    .trim()
-    .slice(0, 50);
-
-  // Generate Swish QR SVG dynamically for Mobile Self-Registration
-  useEffect(() => {
-    const swishNum = effectiveClubSettings?.swishNumber ?? '';
-    const digits = swishNum.replace(/\D/g, '');
-    if (!feesEnabled || activeTab !== 'SELF_REG' || digits.length < 6 || totalSelfFeeSek <= 0) {
-      setSwishQrSvg('');
-      return;
-    }
-    let mounted = true;
-    const payload = buildSwishQrPayload(digits, totalSelfFeeSek, swishMessage);
-    QRCode.toString(payload, {
-      type: 'svg',
-      margin: 1,
-      width: 164,
-      color: {
-        dark: '#0f172a',
-        light: '#ffffff',
-      },
-    })
-      .then((svg) => {
-        if (mounted) setSwishQrSvg(svg);
-      })
-      .catch(() => {
-        if (mounted) setSwishQrSvg('');
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [feesEnabled, activeTab, effectiveClubSettings?.swishNumber, totalSelfFeeSek, swishMessage]);
 
   const copyText = async (key: string, text: string) => {
     try {
@@ -453,50 +332,6 @@ export function PublicPortalView({
       ? raceData.competitors.filter((competitor) => competitor.club.trim() === selectedClubName)
       : raceData.competitors;
   }, [raceData, selectedClubName]);
-
-  const handleSelfRegisterSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!shortCode) return;
-    setSelfBusy(true);
-    setSelfNotice(null);
-    try {
-      const targetClassId = selfClassId || openDirectClasses[0]?.id || '';
-      const res = await fetch(
-        `/api/public/events/${encodeURIComponent(shortCode)}/self-register`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            siNumber: Number(selfSiInput.replace(/\D/g, '')),
-            fullName: selfFullName.trim(),
-            club: selfClub.trim() || 'Klubblös',
-            classId: targetClassId,
-            isRentalCard: selfIsRental,
-          }),
-        }
-      );
-      const data = (await res.json()) as Competitor & { error?: string };
-      if (!res.ok) {
-        setSelfNotice({
-          ok: false,
-          msg: data.error ?? 'Kunde inte genomföra självregistreringen.',
-        });
-      } else {
-        setSelfNotice({
-          ok: true,
-          msg: `Klart! ${data.fullName} är nu anmäld med startnr #${data.bib} (SI ${formatSiNumber(
-            data.siNumber
-          )}). Lycka till i skogen!`,
-        });
-        setSelfSiInput('');
-        setSelfFullName('');
-        setSelfClub('');
-        void loadData();
-      }
-    } finally {
-      setSelfBusy(false);
-    }
-  };
 
   // ============================================================================
   // VIEW A: SEASON OVERVIEW (/publik)
@@ -548,14 +383,6 @@ export function PublicPortalView({
                   <span>
                     {ev.finishedCount}/{ev.competitorCount} i mål
                   </span>
-                  {ev.allowSelfRegistration && ev.status !== 'COMPLETED' && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span className="font-sans text-emerald-700 dark:text-emerald-400 font-medium">
-                        Självreg
-                      </span>
-                    </>
-                  )}
                   <span aria-hidden="true">·</span>
                   <span className="text-slate-400 dark:text-slate-500">/t/{ev.shortCode}</span>
                 </div>
@@ -583,7 +410,7 @@ export function PublicPortalView({
               {effectiveClubSettings?.portalTitle?.trim() || 'PasserSI Live'}
             </span>
             <span className="text-xs club-muted text-slate-500 dark:text-slate-400 hidden md:inline truncate">
-              Liveresultat, sträcktider & mobil självregistrering
+              Liveresultat & sträcktider
             </span>
           </div>
 
@@ -616,7 +443,7 @@ export function PublicPortalView({
                 : 'Tävlingar & Klubbarrangemang'}
             </h1>
             <p className="text-xs club-muted text-slate-500 dark:text-slate-400">
-              Välj tävling för liveresultat, sträcktider eller självregistrering.
+              Välj tävling för liveresultat och sträcktider.
             </p>
           </div>
 
@@ -890,21 +717,6 @@ export function PublicPortalView({
               Startlista ({raceData.competitors.length})
             </button>
 
-            {raceData.competition.allowSelfRegistration !== false &&
-              raceData.competition.status !== 'COMPLETED' && (
-              <button
-                type="button"
-                onClick={() => setActiveTab('SELF_REG')}
-                className={`inline-flex items-center gap-1 px-2.5 sm:px-3 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap shrink-0 ${
-                  activeTab === 'SELF_REG'
-                    ? 'club-accent-tab-active'
-                    : 'border-transparent text-emerald-700 dark:text-emerald-400 hover:text-emerald-800'
-                }`}
-              >
-                <UserPlus className="w-3.5 h-3.5 shrink-0" />
-                <span>Självregistrering</span>
-              </button>
-            )}
           </div>
         )}
       </header>
@@ -1136,11 +948,6 @@ export function PublicPortalView({
                                       'Klubblös'
                                     )}
                                   </span>
-                                  {r.isSelfRegistered && (
-                                    <span className="ml-1 text-[10px] text-sky-700 dark:text-sky-400">
-                                      · självreg
-                                    </span>
-                                  )}
                                 </div>
                               </div>
                               <span className="font-mono tabular-nums text-[11px] text-slate-500 shrink-0">
@@ -1155,193 +962,6 @@ export function PublicPortalView({
                 </div>
               )}
 
-              {/* TAB 4: MOBILE SELF-REGISTRATION WITH SWISH QR */}
-              {activeTab === 'SELF_REG' && (
-                <section className="max-w-xl mx-auto club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-3">
-                  <div>
-                    <h2 className="text-base font-display font-bold">
-                      Självregistrering på mobilen
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Ange SI-bricknummer. Finns du i löparregistret hämtas namn och klubb direkt.
-                    </p>
-                  </div>
-
-                  {selfLookupMatch && !selfAlreadyEntered && (
-                    <div className="px-3 py-2 bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-900/60 rounded-lg flex items-center gap-2 text-xs text-sky-900 dark:text-sky-200">
-                      <UserCheck className="w-4 h-4 text-sky-700 dark:text-sky-400 shrink-0" />
-                      <span className="min-w-0 truncate">
-                        Hittad: <strong>{selfLookupMatch.fullName}</strong> ({selfLookupMatch.club})
-                      </span>
-                    </div>
-                  )}
-
-                  {selfAlreadyEntered && (
-                    <div className="px-3 py-2 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-lg text-xs text-amber-800 dark:text-amber-300">
-                      SI-brickan är redan anmäld på <strong>{selfAlreadyEntered.fullName}</strong> (
-                      #{selfAlreadyEntered.bib}).
-                    </div>
-                  )}
-
-                  {selfNotice && (
-                    <div
-                      className={`px-3 py-2 text-xs font-medium rounded-lg border ${
-                        selfNotice.ok
-                          ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/60'
-                          : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60'
-                      }`}
-                    >
-                      {selfNotice.msg}
-                    </div>
-                  )}
-
-                  <form onSubmit={handleSelfRegisterSubmit} className="space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div>
-                        <label className="block text-xs font-medium mb-1">
-                          SI-bricknummer
-                        </label>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={selfSiInput}
-                          onChange={(e) => setSelfSiInput(e.target.value)}
-                          placeholder="t.ex. 8540219"
-                          className="w-full px-3 py-1.5 text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium mb-1">Klass / bana</label>
-                        <select
-                          value={selfClassId || openDirectClasses[0]?.id || ''}
-                          onChange={(e) => setSelfClassId(e.target.value)}
-                          className="w-full px-3 py-1.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
-                        >
-                          {openDirectClasses.map((cls) => (
-                            <option key={cls.id} value={cls.id}>
-                              {cls.name}
-                              {feesEnabled ? ` (${cls.feeSek} kr)` : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium mb-1">För- och efternamn</label>
-                        <input
-                          type="text"
-                          value={selfFullName}
-                          onChange={(e) => setSelfFullName(e.target.value)}
-                          placeholder="Förnamn Efternamn"
-                          className="w-full px-3 py-1.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium mb-1">Klubb</label>
-                        <input
-                          type="text"
-                          value={selfClub}
-                          onChange={(e) => setSelfClub(e.target.value)}
-                          placeholder="t.ex. OK Österåker"
-                          className="w-full px-3 py-1.5 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
-                        />
-                      </div>
-                    </div>
-
-                    <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={selfIsRental}
-                        onChange={(e) => setSelfIsRental(e.target.checked)}
-                        className="w-4 h-4 rounded border-slate-300 text-red-600 shrink-0"
-                      />
-                      <span>
-                        Jag har lånat hyrbricka vid start
-                        {feesEnabled
-                          ? ` (+${effectiveClubSettings?.rentalCardFeeSek ?? 30} kr)`
-                          : ''}
-                      </span>
-                    </label>
-
-                    {/* Swish Fee Breakdown & QR Box */}
-                    {feesEnabled && totalSelfFeeSek > 0 && effectiveClubSettings?.swishNumber && (
-                      <div className="p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2.5">
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                          <span className="font-semibold text-slate-900 dark:text-slate-100">
-                            Startavgift via Swish
-                          </span>
-                          <span className="font-mono tabular-nums font-bold text-sm text-slate-900 dark:text-slate-100">
-                            {totalSelfFeeSek} kr
-                          </span>
-                        </div>
-
-                        <div className="flex flex-col sm:flex-row items-center gap-3">
-                          {swishQrSvg && (
-                            <div
-                              className="w-28 h-28 p-1.5 bg-white border border-slate-200 rounded-lg shrink-0"
-                              dangerouslySetInnerHTML={{ __html: swishQrSvg }}
-                            />
-                          )}
-                          <div className="space-y-1 text-xs text-slate-600 dark:text-slate-400 w-full min-w-0">
-                            <div className="truncate">
-                              Mottagare:{' '}
-                              <strong className="text-slate-900 dark:text-slate-100">
-                                {effectiveClubSettings.swishRecipientName ||
-                                  effectiveClubSettings.clubName}
-                              </strong>
-                            </div>
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span>
-                                Swish:{' '}
-                                <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">
-                                  {effectiveClubSettings.swishNumber}
-                                </strong>
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void copyText('swish', effectiveClubSettings.swishNumber)
-                                }
-                                className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-md whitespace-nowrap shrink-0"
-                              >
-                                {copiedKey === 'swish' ? (
-                                  <Check className="w-3 h-3 text-emerald-600" />
-                                ) : (
-                                  <Copy className="w-3 h-3" />
-                                )}
-                                <span>{copiedKey === 'swish' ? 'Kopierat' : 'Kopiera'}</span>
-                              </button>
-                            </div>
-                            <div className="font-mono tabular-nums text-[11px]">
-                              Klass {baseClassFeeSek} kr
-                              {selfIsRental ? ` + Hyrbricka ${rentalExtraSek} kr` : ''}
-                            </div>
-                            {selfIsRental && (
-                              <div className="text-[11px] text-amber-800 dark:text-amber-300">
-                                Återlämna hyrbrickan i mål (saknad bricka:{' '}
-                                {effectiveClubSettings.missingRentalFeeSek} kr).
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    <button
-                      type="submit"
-                      disabled={selfBusy || Boolean(selfAlreadyEntered)}
-                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold club-accent-btn disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                    >
-                      <UserPlus className="w-4 h-4" />
-                      <span>{selfBusy ? 'Registrerar...' : 'Registrera start på mobilen'}</span>
-                    </button>
-                  </form>
-                </section>
-              )}
             </>
           )
         )}
@@ -1377,7 +997,7 @@ export function PublicPortalView({
                       dangerouslySetInnerHTML={{ __html: qrSvgMarkup }}
                     />
                     <span className="mt-1.5 text-[11px] font-mono text-slate-600 text-center">
-                      Skanna på TC för Liveresultat & Självreg
+                      Skanna för Liveresultat
                     </span>
                   </div>
                 )}

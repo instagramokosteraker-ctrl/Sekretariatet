@@ -971,7 +971,6 @@ export async function updateCompetitionMetadataInFirestore(
     zeroTimeSec?: number;
     arenaInfo?: string;
     seriesName?: string;
-    allowSelfRegistration?: boolean;
     enableFeesAndSwish?: boolean;
   }
 ): Promise<void> {
@@ -1000,9 +999,6 @@ export async function updateCompetitionMetadataInFirestore(
   }
   if ('arenaInfo' in patch) mutable.arenaInfo = (patch.arenaInfo || '').trim().slice(0, 500);
   if ('seriesName' in patch) mutable.seriesName = (patch.seriesName || '').trim().slice(0, 80);
-  if ('allowSelfRegistration' in patch) {
-    mutable.allowSelfRegistration = Boolean(patch.allowSelfRegistration);
-  }
   if ('enableFeesAndSwish' in patch) {
     mutable.enableFeesAndSwish = Boolean(patch.enableFeesAndSwish);
   }
@@ -1173,7 +1169,6 @@ export async function syncFullSeasonToFirestore(
       zeroTimeSec: clampInt(ev.competition.zeroTimeSec, 0, 86400, 36000),
       arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
       seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
-      allowSelfRegistration: ev.competition.allowSelfRegistration !== false,
       enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
       competitorCount,
       finishedCount,
@@ -1409,7 +1404,6 @@ export async function syncFullSeasonToFirestore(
         cardSeries: (cmp.cardSeries || 'SI-Card 10').trim().slice(0, 24) || 'SI-Card 10',
         isRentalCard: Boolean(cmp.isRentalCard),
         rentalReturned: Boolean(cmp.rentalReturned),
-        isSelfRegistered: Boolean(cmp.isSelfRegistered),
         feePaid: Boolean(cmp.feePaid),
         status,
         allocatedStartSec: encodeNullableSec(cmp.allocatedStartSec),
@@ -1789,7 +1783,6 @@ export async function loadFullSeasonFromFirestore(options?: {
           cardSeries: SICardSeries;
           isRentalCard: boolean;
           rentalReturned: boolean;
-          isSelfRegistered: boolean;
           feePaid: boolean;
           status: RunnerStatus;
           allocatedStartSec: number;
@@ -1840,7 +1833,6 @@ export async function loadFullSeasonFromFirestore(options?: {
           cardSeries: cmd.cardSeries || 'SI-Card 10',
           isRentalCard: Boolean(cmd.isRentalCard),
           rentalReturned: Boolean(cmd.rentalReturned),
-          isSelfRegistered: Boolean(cmd.isSelfRegistered),
           feePaid: Boolean(cmd.feePaid),
           status: cmd.status || 'REGISTERED',
           allocatedStartSec,
@@ -1985,7 +1977,6 @@ export async function loadFullSeasonFromFirestore(options?: {
         zeroTimeSec: Number(compDocData.zeroTimeSec ?? 36000),
         arenaInfo: String(compDocData.arenaInfo || ''),
         seriesName: String(compDocData.seriesName || ''),
-        allowSelfRegistration: compDocData.allowSelfRegistration !== false,
         enableFeesAndSwish: Boolean(compDocData.enableFeesAndSwish),
       },
       courses,
@@ -2206,7 +2197,6 @@ export async function saveCompetitionImportToFirestore(params: {
       cardSeries: competitor.cardSeries || 'SI-Card 10',
       isRentalCard: Boolean(competitor.isRentalCard),
       rentalReturned: Boolean(competitor.rentalReturned),
-      isSelfRegistered: Boolean(competitor.isSelfRegistered),
       feePaid: Boolean(competitor.feePaid),
       status: competitor.status || 'REGISTERED',
       allocatedStartSec: encodeNullableSec(competitor.allocatedStartSec),
@@ -2632,7 +2622,6 @@ export async function updateCompetitorInFirestore(
     'cardSeries',
     'isRentalCard',
     'rentalReturned',
-    'isSelfRegistered',
     'feePaid',
     'status',
     'allocatedStartSec',
@@ -3475,7 +3464,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     isRentalCard: Boolean(params.payload.isRentalCard),
     isBorrowedCard: Boolean(params.payload.isBorrowedCard),
     rentalReturned: false,
-    isSelfRegistered: Boolean(params.payload.isSelfRegistered),
     feePaid: Boolean(params.payload.feePaid),
     status,
     allocatedStartSec,
@@ -3514,7 +3502,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     cardSeries: competitor.cardSeries,
     isRentalCard: competitor.isRentalCard,
     rentalReturned: false,
-    isSelfRegistered: competitor.isSelfRegistered ?? false,
     feePaid: competitor.feePaid ?? false,
     status: competitor.status,
     allocatedStartSec: encodeNullableSec(allocatedStartSec),
@@ -3635,7 +3622,6 @@ export async function loadPublicRaceFromFirestore(
       zeroTimeStr: event.competition.zeroTimeStr,
       arenaInfo: event.competition.arenaInfo,
       seriesName: event.competition.seriesName,
-      allowSelfRegistration: event.competition.allowSelfRegistration !== false,
       enableFeesAndSwish: Boolean(event.competition.enableFeesAndSwish),
       competitorCount: event.competitors.length,
       finishedCount: event.competitors.filter(
@@ -3866,7 +3852,6 @@ export function subscribePublicCompetitionSummaries(
               zeroTimeStr: data.zeroTimeStr ?? '18:00:00',
               arenaInfo: data.arenaInfo ?? '',
               seriesName: data.seriesName,
-              allowSelfRegistration: data.allowSelfRegistration ?? true,
               enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
               competitorCount: data.competitorCount ?? 0,
               finishedCount: data.finishedCount ?? 0,
@@ -3974,7 +3959,6 @@ export interface CreateCompetitionInFirestoreParams {
   zeroTimeSec?: number;
   arenaInfo?: string;
   seriesName?: string;
-  allowSelfRegistration?: boolean;
   enableFeesAndSwish?: boolean;
   pinStart?: string;
   pinReadout?: string;
@@ -3987,7 +3971,7 @@ export interface CreateCompetitionInFirestoreParams {
 
 /**
  * Atomically writes a new competition to Firestore under Zero-Trust schema rules:
- * - Guarantees all 23 required fields are present with NO undefined values.
+ * - Guarantees all required fields are present with NO undefined values.
  * - Empty string fallback for optional strings and safe defaults for booleans/numbers.
  * - Writes child courses and classes to subcollections.
  * - Updates /clubSettings/default activeEventId and competitionIds.
@@ -4029,7 +4013,6 @@ export async function createCompetitionInFirestore(
 
   const arenaInfo = (params.arenaInfo ?? '').trim().slice(0, 500);
   const seriesName = (params.seriesName ?? '').trim().slice(0, 80);
-  const allowSelfRegistration = Boolean(params.allowSelfRegistration !== false);
   const enableFeesAndSwish = Boolean(params.enableFeesAndSwish);
 
   const pinStart = PIN_REGEX.test(params.pinStart || '') ? params.pinStart! : '1100';
@@ -4038,7 +4021,7 @@ export async function createCompetitionInFirestore(
   const pinSpeaker = PIN_REGEX.test(params.pinSpeaker || '') ? params.pinSpeaker! : '4400';
   const pinsCustomized = Boolean(params.pinsCustomized);
 
-  // Exact 23 required keys per firestore.rules isValidCloudCompetition
+  // Required keys per firestore.rules isValidCloudCompetition.
   const compDocData = {
     competitionId,
     shortCode,
@@ -4050,7 +4033,6 @@ export async function createCompetitionInFirestore(
     zeroTimeSec,
     arenaInfo,
     seriesName,
-    allowSelfRegistration,
     enableFeesAndSwish,
     competitorCount: 0,
     finishedCount: 0,
@@ -4276,7 +4258,6 @@ export async function seedDemoSeasonToFirestore(ownerUidParam?: string): Promise
     zeroTimeSec: 36000,
     arenaInfo: 'Hackstastugan, Åkersberga. Parkering vid Hackstaskolan.',
     seriesName: 'Reflexcupen 26/27',
-    allowSelfRegistration: true,
     enableFeesAndSwish: true,
     courses: [
       {

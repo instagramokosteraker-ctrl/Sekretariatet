@@ -229,6 +229,8 @@ export function SpeakerResultsView({
         competitors={competitors}
         selectedClassId={selectedClassId}
         onSelectClassId={setSelectedClassId}
+        liveUpdates
+        liveUpdateScope={competition.id}
       />
     </div>
   );

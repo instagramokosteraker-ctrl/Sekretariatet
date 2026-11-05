@@ -1,11 +1,24 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownUp, ChevronDown, ChevronUp } from 'lucide-react';
 import type { CompClass, Competitor, Course } from '../types/sportident';
-import { formatDurationMmSs } from '../services/sportidentProtocol';
+import {
+  formatDurationMmSs,
+  formatSecondsAsClock,
+} from '../services/sportidentProtocol';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 
 export type SplitsCellMode = 'LEG_AND_BOM' | 'CUMULATIVE';
+
+function getLiveRunningTimeSec(startTimeSec: number | null, nowMs: number): number | null {
+  if (startTimeSec === null) return null;
+
+  const now = new Date(nowMs);
+  const currentClockSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  const difference = currentClockSec - startTimeSec;
+  const elapsedSec = difference < -12 * 3600 ? difference + 86400 : difference;
+  return elapsedSec >= 0 ? elapsedSec : null;
+}
 
 interface SplitsAnalysisTableProps {
   classes: CompClass[];
@@ -15,6 +28,8 @@ interface SplitsAnalysisTableProps {
   onSelectClassId: (id: string) => void;
   onSelectClub?: (clubName: string) => void;
   onInspectRunner?: (runner: Competitor) => void;
+  liveUpdates?: boolean;
+  liveUpdateScope?: string;
 }
 
 export function SplitsAnalysisTable({
@@ -25,12 +40,58 @@ export function SplitsAnalysisTable({
   onSelectClassId,
   onSelectClub,
   onInspectRunner,
+  liveUpdates = false,
+  liveUpdateScope,
 }: SplitsAnalysisTableProps) {
   const [cellMode, setCellMode] = useState<SplitsCellMode>('LEG_AND_BOM');
   const [showLegMatrix, setShowLegMatrix] = useState<boolean>(false);
   // Sort per class by control order (null = official result order, -1 = sort by total bomtid, >0 = leg order)
   const [sortByLegOrder, setSortByLegOrder] = useState<Record<string, number | null>>({});
   const [expandedRunnerId, setExpandedRunnerId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const previousCompetitorsRef = useRef<Map<string, string>>(new Map());
+  const updatedCompetitorsRef = useRef<Map<string, number>>(new Map());
+  const liveScopeRef = useRef(liveUpdateScope);
+  const hasCompetitorBaselineRef = useRef(false);
+
+  useEffect(() => {
+    if (!liveUpdates) return;
+
+    if (liveScopeRef.current !== liveUpdateScope) {
+      liveScopeRef.current = liveUpdateScope;
+      previousCompetitorsRef.current.clear();
+      updatedCompetitorsRef.current.clear();
+      hasCompetitorBaselineRef.current = false;
+    }
+
+    const currentCompetitors = new Map(
+      competitors.map((competitor) => [competitor.id, JSON.stringify(competitor)])
+    );
+
+    if (hasCompetitorBaselineRef.current) {
+      const updatedAt = Date.now();
+      currentCompetitors.forEach((snapshot, competitorId) => {
+        if (previousCompetitorsRef.current.get(competitorId) !== snapshot) {
+          updatedCompetitorsRef.current.set(competitorId, updatedAt);
+        }
+      });
+      updatedCompetitorsRef.current.forEach((_, competitorId) => {
+        if (!currentCompetitors.has(competitorId)) {
+          updatedCompetitorsRef.current.delete(competitorId);
+        }
+      });
+    } else if (currentCompetitors.size > 0) {
+      hasCompetitorBaselineRef.current = true;
+    }
+
+    previousCompetitorsRef.current = currentCompetitors;
+  }, [competitors, liveUpdateScope, liveUpdates]);
+
+  useEffect(() => {
+    if (!liveUpdates) return;
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [liveUpdates]);
 
   const visibleClasses = useMemo(
     () =>
@@ -141,6 +202,7 @@ export function SplitsAnalysisTable({
           const isForked = cls.classFormat === 'FORKED';
           const course = courses.find((c) => c.id === cls.courseId) ?? null;
           const inClass = competitors.filter((c) => c.classId === cls.id);
+          const hasRadioControls = inClass.some((c) => c.radioSplits.length > 0);
 
           const officialTimed = inClass
             .filter(
@@ -290,13 +352,17 @@ export function SplitsAnalysisTable({
                   Inga deltagare i {cls.name}.
                 </div>
               ) : (
-                <div className={showLegMatrix ? 'overflow-x-auto' : 'w-full'}>
+                <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                         <th className="py-1.5 pl-3 pr-1.5 w-9">Plac</th>
-                        <th className="py-1.5 px-2">Löpare · Klubb</th>
-                        <th className="hidden md:table-cell py-1.5 px-2 text-right">Radio</th>
+                        <th className="py-1.5 px-2">Namn</th>
+                        <th className="py-1.5 px-2">Klubb</th>
+                        <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
+                        {hasRadioControls && (
+                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Radiokontroller</th>
+                        )}
                         {legColumns.map((col) => {
                           const isSorted = activeSortOrder === col.order;
                           return (
@@ -327,17 +393,19 @@ export function SplitsAnalysisTable({
                             </th>
                           );
                         })}
+                        <th className="py-1.5 px-2 text-right">Tid</th>
+                        <th className="hidden sm:table-cell py-1.5 px-2 text-right">Diff</th>
                         {isRogaining ? (
                           <>
-                            <th className="hidden sm:table-cell py-1.5 px-2 text-right whitespace-nowrap">Kontr.</th>
+                            <th className="hidden sm:table-cell py-1.5 px-2 text-right whitespace-nowrap">
+                              Kontr.
+                            </th>
                             <th className="hidden md:table-cell py-1.5 px-2 text-right whitespace-nowrap">Brutto</th>
                             <th className="py-1.5 px-2 text-right whitespace-nowrap">Poäng</th>
                           </>
                         ) : (
                           <th
-                            className={`${
-                              showLegMatrix ? '' : 'hidden sm:table-cell '
-                            }py-1.5 px-2 text-right whitespace-nowrap`}
+                            className="py-1.5 px-2 text-right whitespace-nowrap"
                           >
                             <button
                               type="button"
@@ -353,8 +421,6 @@ export function SplitsAnalysisTable({
                             </button>
                           </th>
                         )}
-                        <th className="py-1.5 px-2 text-right">Tid</th>
-                        <th className="hidden sm:table-cell py-1.5 px-2 text-right">Diff</th>
                         <th className="py-1.5 pl-1.5 pr-3 text-right">Status</th>
                       </tr>
                     </thead>
@@ -362,9 +428,21 @@ export function SplitsAnalysisTable({
                     <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
                       {displayRows.map((r) => {
                         const timedIdx = officialTimed.findIndex((t) => t.id === r.id);
+                        const isRunning =
+                          liveUpdates &&
+                          (r.status === 'IN_FOREST' || r.status === 'CHECKED') &&
+                          r.finishTimeSec === null;
+                        const displayedTimeSec = isRunning
+                          ? getLiveRunningTimeSec(
+                              r.startTimeSec ?? r.allocatedStartSec,
+                              nowMs
+                            )
+                          : r.runningTimeSec;
                         const diff =
-                          timedIdx !== -1 && leaderSec !== null && r.runningTimeSec !== null
-                            ? r.runningTimeSec - leaderSec
+                          (timedIdx !== -1 || isRunning) &&
+                          leaderSec !== null &&
+                          displayedTimeSec !== null
+                            ? displayedTimeSec - leaderSec
                             : null;
                         const ptsDiff =
                           isRogaining &&
@@ -375,13 +453,13 @@ export function SplitsAnalysisTable({
                             ? r.validation.rogainingPoints - leaderPts
                             : null;
 
-                        const latestRadio =
-                          r.radioSplits.length > 0
-                            ? r.radioSplits[r.radioSplits.length - 1]
-                            : null;
-
                         const isExpanded = expandedRunnerId === r.id;
-                        const totalCols = 6 + legColumns.length + (isRogaining ? 3 : 1);
+                        const totalCols =
+                          4 +
+                          (hasRadioControls ? 1 : 0) +
+                          legColumns.length +
+                          (isRogaining ? 3 : 1) +
+                          3;
 
                         return (
                           <React.Fragment key={r.id}>
@@ -391,7 +469,10 @@ export function SplitsAnalysisTable({
                               if (onInspectRunner) onInspectRunner(r);
                             }}
                             className={`cursor-pointer transition-colors ${
-                              isExpanded
+                              liveUpdates &&
+                              nowMs - (updatedCompetitorsRef.current.get(r.id) ?? 0) < 20000
+                                ? 'bg-orange-200/80 hover:bg-orange-200 dark:bg-orange-950/60 dark:hover:bg-orange-950/75'
+                                : isExpanded
                                 ? 'bg-slate-100/80 dark:bg-slate-800/70'
                                 : 'hover:bg-slate-50/90 dark:hover:bg-slate-800/50'
                             }`}
@@ -404,27 +485,13 @@ export function SplitsAnalysisTable({
                                 : '—'}
                             </td>
 
-                            <td className="py-1.5 px-2 max-w-[165px] sm:max-w-none">
+                            <td className="py-1.5 px-2 max-w-[165px] sm:max-w-none whitespace-nowrap">
                               <div className="flex items-center gap-1 min-w-0">
                                 <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
                                   {r.fullName}
                                 </span>
-                                <span className="hidden sm:inline text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                                  · #{r.bib} ·{' '}
-                                  {r.club.trim() ? (
-                                    <button
-                                      type="button"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        onSelectClub?.(r.club.trim());
-                                      }}
-                                      className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
-                                    >
-                                      {r.club}
-                                    </button>
-                                  ) : (
-                                    'Klubblös'
-                                  )}
+                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  #{r.bib}
                                 </span>
                                 {isExpanded ? (
                                   <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
@@ -432,35 +499,41 @@ export function SplitsAnalysisTable({
                                   <ChevronDown className="w-3 h-3 text-slate-400 shrink-0 opacity-60" />
                                 )}
                               </div>
-                              <div className="sm:hidden text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                                #{r.bib} ·{' '}
-                                {r.club.trim() ? (
-                                  <button
-                                    type="button"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      onSelectClub?.(r.club.trim());
-                                    }}
-                                    className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
-                                  >
-                                    {r.club}
-                                  </button>
-                                ) : (
-                                  'Klubblös'
-                                )}
-                              </div>
                             </td>
 
-                            <td className="hidden md:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                              {latestRadio ? (
-                                <span>
-                                  K{latestRadio.controlCode}{' '}
-                                  {formatDurationMmSs(latestRadio.runningTimeSec)}
-                                </span>
+                            <td className="py-1.5 px-2 whitespace-nowrap">
+                              {r.club.trim() ? (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onSelectClub?.(r.club.trim());
+                                  }}
+                                  className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                >
+                                  {r.club}
+                                </button>
                               ) : (
-                                '—'
+                                <span className="text-slate-400">Klubblös</span>
                               )}
                             </td>
+
+                            <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                              {formatSecondsAsClock(r.startTimeSec ?? r.allocatedStartSec)}
+                            </td>
+
+                            {hasRadioControls && (
+                              <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                                {r.radioSplits.length > 0
+                                  ? r.radioSplits
+                                      .map(
+                                        (split) =>
+                                          `K${split.controlCode} ${formatDurationMmSs(split.runningTimeSec)}`
+                                      )
+                                      .join(' · ')
+                                  : '—'}
+                              </td>
+                            )}
 
                             {legColumns.map((col) => {
                               const sp = r.validation?.splits.find(
@@ -556,6 +629,24 @@ export function SplitsAnalysisTable({
                               );
                             })}
 
+                            <td className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                              {formatDurationMmSs(displayedTimeSec)}
+                            </td>
+
+                            <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                              {isRogaining
+                                ? ptsDiff !== null
+                                ? ptsDiff === 0
+                                  ? '0 p'
+                                  : `${ptsDiff} p`
+                                : '—'
+                                : diff !== null
+                                ? diff === 0
+                                  ? '0:00'
+                                  : `${diff > 0 ? '+' : '−'}${formatDurationMmSs(Math.abs(diff))}`
+                                : '—'}
+                            </td>
+
                             {isRogaining ? (
                               <>
                                 <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
@@ -587,17 +678,13 @@ export function SplitsAnalysisTable({
                               </>
                             ) : isForked ? (
                               <td
-                                className={`${
-                                  showLegMatrix ? '' : 'hidden sm:table-cell '
-                                }py-1.5 px-2 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap`}
+                                className="py-1.5 px-2 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap"
                               >
                                 {r.validation?.matchedCourseName ?? '—'}
                               </td>
                             ) : (
                               <td
-                                className={`${
-                                  showLegMatrix ? '' : 'hidden sm:table-cell '
-                                }py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap`}
+                                className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap"
                               >
                                 {r.validation?.totalTimeLossSec !== undefined &&
                                 r.validation?.totalTimeLossSec !== null ? (
@@ -615,24 +702,6 @@ export function SplitsAnalysisTable({
                                 )}
                               </td>
                             )}
-
-                            <td className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                              {formatDurationMmSs(r.runningTimeSec)}
-                            </td>
-
-                            <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                              {isRogaining
-                                ? ptsDiff !== null
-                                  ? ptsDiff === 0
-                                    ? '0 p'
-                                    : `${ptsDiff} p`
-                                  : '—'
-                                : diff !== null
-                                ? diff === 0
-                                  ? '0:00'
-                                  : `+${formatDurationMmSs(diff)}`
-                                : '—'}
-                            </td>
 
                             <td className="py-1.5 pl-1.5 pr-3 text-right whitespace-nowrap">
                               <RunnerStatusIndicator status={r.status} compact />

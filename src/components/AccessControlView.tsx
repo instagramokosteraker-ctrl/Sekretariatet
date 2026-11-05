@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import QRCode from 'qrcode';
 import {
   Check,
   Cloud,
   Copy,
-  CreditCard,
   Download,
   ExternalLink,
   FolderPlus,
@@ -155,13 +153,6 @@ function generateUniqueRandomPins(): RolePinMap {
   };
 }
 
-function buildSwishQrPayload(swishNumber: string, amountSek: number, message: string): string {
-  const digits = swishNumber.replace(/\D/g, '');
-  const cleanMsg = message.replace(/;/g, ' ').trim().slice(0, 50);
-  const cleanAmount = Math.max(0, Math.round(amountSek));
-  return `C${digits};${cleanAmount};${cleanMsg};0`;
-}
-
 export function AccessControlView({
   view = 'admin',
   activeEventId,
@@ -250,7 +241,6 @@ export function AccessControlView({
   const [logoBusy, setLogoBusy] = useState<boolean>(false);
   const [logoPreviewBroken, setLogoPreviewBroken] = useState<boolean>(false);
   const [clubNotice, setClubNotice] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [swishPreviewSvg, setSwishPreviewSvg] = useState<string>('');
 
   // Rental cards & Series state
   const [rentals, setRentals] = useState<RentalCardOverviewItem[]>([]);
@@ -320,48 +310,6 @@ export function AccessControlView({
       setSelectedSeriesClass(activeBundle.classes[0]?.className ?? '');
     }
   }, [seriesStandings, selectedSeriesName, selectedSeriesClass]);
-
-  // Generate live Swish QR preview SVG
-  useEffect(() => {
-    const digits = clubForm.swishNumber.replace(/\D/g, '');
-    if (!anyEventHasFees || digits.length < 6) {
-      setSwishPreviewSvg('');
-      return;
-    }
-    let mounted = true;
-    const sampleAmount =
-      Math.max(0, Number(clubForm.defaultDirectEntryFeeSek) || 0) +
-      Math.max(0, Number(clubForm.rentalCardFeeSek) || 0);
-    const payload = buildSwishQrPayload(
-      digits,
-      sampleAmount > 0 ? sampleAmount : 100,
-      `Direktanmalan ${clubForm.clubName || 'PasserSI'}`
-    );
-    QRCode.toString(payload, {
-      type: 'svg',
-      margin: 1,
-      width: 168,
-      color: {
-        dark: '#0f172a',
-        light: '#ffffff',
-      },
-    })
-      .then((svg) => {
-        if (mounted) setSwishPreviewSvg(svg);
-      })
-      .catch(() => {
-        if (mounted) setSwishPreviewSvg('');
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [
-    anyEventHasFees,
-    clubForm.swishNumber,
-    clubForm.defaultDirectEntryFeeSek,
-    clubForm.rentalCardFeeSek,
-    clubForm.clubName,
-  ]);
 
   const loadManageData = useCallback(async () => {
     setLoading(true);
@@ -637,7 +585,6 @@ export function AccessControlView({
           zeroTimeSec: source.competition.zeroTimeSec,
           arenaInfo: source.competition.arenaInfo,
           seriesName: source.competition.seriesName,
-          allowSelfRegistration: source.competition.allowSelfRegistration,
           enableFeesAndSwish: source.competition.enableFeesAndSwish,
           courses: source.courses,
           classes: source.classes,
@@ -802,7 +749,6 @@ export function AccessControlView({
             zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
             arenaInfo: e.competition.arenaInfo || '',
             seriesName: e.competition.seriesName,
-            allowSelfRegistration: e.competition.allowSelfRegistration !== false,
             enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
             competitorCount: e.competitors.length,
             finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
@@ -1574,13 +1520,13 @@ export function AccessControlView({
       if (c.feePaid) {
         paidCount += 1;
         totalPaidSek += fee;
-      } else if (c.isSelfRegistered || c.isRentalCard) {
+      } else if (enableFeesAndSwish) {
         unpaidCount += 1;
         totalOutstandingSek += fee;
       }
     }
     return { paidCount, unpaidCount, totalPaidSek, totalOutstandingSek };
-  }, [competitors, classes, clubSettings]);
+  }, [competitors, classes, clubSettings, enableFeesAndSwish]);
 
   const activeSeriesBundle = useMemo(
     () =>
@@ -2031,7 +1977,7 @@ export function AccessControlView({
                         />
 
                         <label
-                          title="Aktivera avgifter & Swish-QR för denna tävling"
+                          title="Aktivera avgiftsuppföljning för denna tävling"
                           className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md cursor-pointer select-none whitespace-nowrap"
                         >
                           <input
@@ -2963,16 +2909,16 @@ export function AccessControlView({
             </section>
           </div>
 
-          {/* Optional Fees & Swish QR Card (only when enabled on active competition) */}
+          {/* Optional fee settings and payment status */}
           {anyEventHasFees && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
-              <section className="lg:col-span-7 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3">
+              <section className="lg:col-span-12 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3">
                 <div>
                   <h3 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">
                     Swish-betalning & Hyrbricksavgifter
                   </h3>
                   <p className="text-[11px] club-muted text-slate-500 dark:text-slate-400">
-                    Visas vid direktanmälan i tävlingar som har Avgift / Swish-QR ikryssad.
+                    Används för avgiftsuppföljning vid sekretariatets direktanmälan.
                   </p>
                 </div>
 
@@ -3063,40 +3009,7 @@ export function AccessControlView({
                 </div>
               </section>
 
-              <section className="lg:col-span-5 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">
-                      Swish QR vid självregistrering
-                    </h3>
-                    <CreditCard className="w-4 h-4 text-slate-400 shrink-0" />
-                  </div>
-
-                  {swishPreviewSvg ? (
-                    <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                      <div
-                        className="w-24 h-24 p-1.5 bg-white rounded-lg border border-slate-200 shrink-0"
-                        dangerouslySetInnerHTML={{ __html: swishPreviewSvg }}
-                      />
-                      <div className="space-y-0.5 min-w-0">
-                        <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                          {clubForm.swishRecipientName || clubForm.clubName}
-                        </div>
-                        <div className="text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300">
-                          Swish {clubForm.swishNumber}
-                        </div>
-                        <div className="text-[11px] font-mono tabular-nums text-slate-500">
-                          Exempel {clubForm.defaultDirectEntryFeeSek + clubForm.rentalCardFeeSek} kr
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-3 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl">
-                      Ange Swish-nummer till vänster för automatisk Swish QR-kod.
-                    </div>
-                  )}
-                </div>
-
+              <section className="lg:col-span-12 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
                 {enableFeesAndSwish && (
                   <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800 space-y-1 text-xs">
                     <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">

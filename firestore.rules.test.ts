@@ -66,7 +66,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         zeroTimeSec: 64800,
         arenaInfo: 'Klubbstugan',
         seriesName: 'Torsdagsserien',
-        allowSelfRegistration: true,
         enableFeesAndSwish: false,
         competitorCount: 10,
         finishedCount: 5,
@@ -176,6 +175,34 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
+    // New competitions no longer include the mobile self-registration setting.
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('competitions/evt_new').set({
+        competitionId: 'evt_new',
+        shortCode: 'nw26',
+        name: 'Ny tävling',
+        organizer: 'OK Österåker',
+        date: '2026-06-01',
+        status: 'UPCOMING',
+        zeroTimeStr: '10:00:00',
+        zeroTimeSec: 36000,
+        arenaInfo: '',
+        seriesName: '',
+        enableFeesAndSwish: false,
+        competitorCount: 0,
+        finishedCount: 0,
+        brokenControls: [],
+        pinStart: '1100',
+        pinReadout: '2200',
+        pinForest: '3300',
+        pinSpeaker: '4400',
+        pinsCustomized: false,
+        ownerUid: 'race_admin_1',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+
     // 7. Identity Spoofing (ownerUid) -> DENIED
     await assertFails(
       raceAdminCtx.firestore().doc('competitions/evt_spoof').set({
@@ -189,7 +216,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         zeroTimeSec: 36000,
         arenaInfo: '',
         seriesName: '',
-        allowSelfRegistration: true,
         enableFeesAndSwish: false,
         competitorCount: 0,
         finishedCount: 0,
@@ -267,7 +293,37 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
-    // 11. Mismatched Punch Arrays -> DENIED
+    // 11. Regular entries do not need the removed mobile self-registration marker.
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('competitions/evt_live/competitors/cmp_valid').set({
+        competitorId: 'cmp_valid',
+        competitionId: 'evt_live',
+        bib: 101,
+        fullName: 'Test Löpare',
+        club: 'OK Linné',
+        classId: 'cls_1',
+        siNumber: 8500111,
+        cardSeries: 'SI-Card 10',
+        isRentalCard: false,
+        rentalReturned: false,
+        feePaid: false,
+        status: 'REGISTERED',
+        allocatedStartSec: -1,
+        checkTimeSec: -1,
+        startTimeSec: -1,
+        finishTimeSec: -1,
+        manualFinishTimeSec: -1,
+        runningTimeSec: -1,
+        readoutAtIso: '',
+        punchCodes: [],
+        punchTimes: [],
+        ownerUid: 'race_admin_1',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    // 12. Mismatched Punch Arrays -> DENIED
     await assertFails(
       raceAdminCtx.firestore().doc('competitions/evt_live/competitors/cmp_1').set({
         competitorId: 'cmp_1',
@@ -280,7 +336,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         cardSeries: 'SI-Card 10',
         isRentalCard: false,
         rentalReturned: false,
-        isSelfRegistered: false,
         feePaid: true,
         status: 'OK',
         allocatedStartSec: -1,

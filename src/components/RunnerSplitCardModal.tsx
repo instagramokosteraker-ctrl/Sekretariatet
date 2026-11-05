@@ -134,7 +134,6 @@ export function RunnerSplitCardModal({
             <span className="font-mono tabular-nums">
               #{runner.bib} · SI {formatSiNumber(runner.siNumber)}
             </span>
-            {runner.isSelfRegistered ? ' · självreg' : ''}
           </span>
         </div>
 
