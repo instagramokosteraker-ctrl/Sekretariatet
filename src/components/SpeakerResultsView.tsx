@@ -41,7 +41,7 @@ export function SpeakerResultsView({
   );
   const prewarningLabel =
     prewarningStations.length > 0
-      ? prewarningStations.map((station) => `K${station.stationCode} ${station.name}`).join(', ')
+      ? prewarningStations.map((station) => `(${station.stationCode}) ${station.name}`).join(', ')
       : 'inga förvarningskontroller konfigurerade';
 
   // Incoming runners are identified by configured prewarning stations, not a control code.
@@ -90,7 +90,7 @@ export function SpeakerResultsView({
             Speakerstöd & Sträcktidsanalys (Idealtid & Bomtid)
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Klicka på en löpare för individuellt löparkort och schematisk bankarta, eller växla till Sträckmatris.
+            Klicka på en löpare för individuellt löparkort och schematisk bankarta, eller se sträcktider och bomtid per kontroll.
           </p>
         </div>
 

@@ -873,7 +873,7 @@ function evaluateCardAgainstSingleCourse(
       splits.push({
         order: idx + 1,
         controlCode: reqCode,
-        label: `K${reqCode}`,
+        label: `(${reqCode})`,
         status: 'OK',
         punchTimeSec: pTime,
         cumulativeSec: cum,
@@ -888,7 +888,7 @@ function evaluateCardAgainstSingleCourse(
       splits.push({
         order: idx + 1,
         controlCode: reqCode,
-        label: `K${reqCode}`,
+        label: `(${reqCode})`,
         status: 'BROKEN_CTRL',
         punchTimeSec: null,
         cumulativeSec: null,
@@ -900,7 +900,7 @@ function evaluateCardAgainstSingleCourse(
       splits.push({
         order: idx + 1,
         controlCode: reqCode,
-        label: `K${reqCode}`,
+        label: `(${reqCode})`,
         status: 'MISSING',
         punchTimeSec: null,
         cumulativeSec: null,
@@ -981,7 +981,7 @@ function evaluateRogainingReadout(
     splits.push({
       order: splits.length + 1,
       controlCode: p.code,
-      label: `K${p.code}`,
+      label: `(${p.code})`,
       status: 'OK',
       punchTimeSec: p.timeSec,
       cumulativeSec: cum,
@@ -1379,7 +1379,7 @@ function buildDefaultStations(nowIso: string): SIStation[] {
     {
       id: 'st-r42',
       stationCode: 42,
-      name: 'Radiokontroll K42 — Publikpassering',
+      name: 'Radiokontroll (42) — Publikpassering',
       hardwareModel: 'SRR-USB (Air+)',
       stationFunction: 'RADIO',
       baudRate: 38400,
@@ -1392,7 +1392,7 @@ function buildDefaultStations(nowIso: string): SIStation[] {
     {
       id: 'st-r55',
       stationCode: 55,
-      name: 'Radiokontroll K55 — Högplatån',
+      name: 'Radiokontroll (55) — Högplatån',
       hardwareModel: 'SRR-USB (Air+)',
       stationFunction: 'RADIO',
       baudRate: 38400,
@@ -1405,7 +1405,7 @@ function buildDefaultStations(nowIso: string): SIStation[] {
     {
       id: 'st-pre100',
       stationCode: 100,
-      name: 'Förvarning K100 — Sista kontrollen',
+      name: 'Förvarning (100) — Sista kontrollen',
       hardwareModel: 'SRR-USB (Air+)',
       stationFunction: 'PREWARNING',
       baudRate: 38400,
@@ -1700,14 +1700,14 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: d21Start1 + 765,
           runningTimeSec: 765,
           isPrewarning: false,
         },
         {
           controlCode: 100,
-          stationName: 'Förvarning K100',
+          stationName: 'Förvarning (100)',
           punchTimeSec: d21Start1 + 1738,
           runningTimeSec: 1738,
           isPrewarning: true,
@@ -1744,14 +1744,14 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: d21Start5 + 808,
           runningTimeSec: 808,
           isPrewarning: false,
         },
         {
           controlCode: 100,
-          stationName: 'Förvarning K100',
+          stationName: 'Förvarning (100)',
           punchTimeSec: d21Start5 + 1773,
           runningTimeSec: 1773,
           isPrewarning: true,
@@ -1788,14 +1788,14 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: d21Start2 + 742,
           runningTimeSec: 742,
           isPrewarning: false,
         },
         {
           controlCode: 100,
-          stationName: 'Förvarning K100',
+          stationName: 'Förvarning (100)',
           punchTimeSec: d21Start2 + 1819,
           runningTimeSec: 1819,
           isPrewarning: true,
@@ -1832,14 +1832,14 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: d21Start3 + 748,
           runningTimeSec: 748,
           isPrewarning: false,
         },
         {
           controlCode: 100,
-          stationName: 'Förvarning K100',
+          stationName: 'Förvarning (100)',
           punchTimeSec: d21Start3 + 1715,
           runningTimeSec: 1715,
           isPrewarning: true,
@@ -1897,14 +1897,14 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: T0 + 180 + 688,
           runningTimeSec: 688,
           isPrewarning: false,
         },
         {
           controlCode: 55,
-          stationName: 'Radiokontroll K55',
+          stationName: 'Radiokontroll (55)',
           punchTimeSec: T0 + 180 + 1072,
           runningTimeSec: 1072,
           isPrewarning: false,
@@ -1941,7 +1941,7 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: T0 + 420 + 675,
           runningTimeSec: 675,
           isPrewarning: false,
@@ -2007,14 +2007,14 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: T0 + 300 + 679,
           runningTimeSec: 679,
           isPrewarning: false,
         },
         {
           controlCode: 100,
-          stationName: 'Förvarning K100',
+          stationName: 'Förvarning (100)',
           punchTimeSec: T0 + 300 + 1559,
           runningTimeSec: 1559,
           isPrewarning: true,
@@ -2043,7 +2043,7 @@ function buildSeasonSeed(): SeasonDatabase {
       radioSplits: [
         {
           controlCode: 42,
-          stationName: 'Radiokontroll K42',
+          stationName: 'Radiokontroll (42)',
           punchTimeSec: T0 + 600 + 712,
           runningTimeSec: 712,
           isPrewarning: false,
@@ -2240,9 +2240,9 @@ function buildSeasonSeed(): SeasonDatabase {
         club: 'Tampereen Pyrintö',
         className: 'D21',
         stationCode: 100,
-        stationName: 'Förvarning K100 — Sista kontrollen',
+        stationName: 'Förvarning (100) — Sista kontrollen',
         runningTimeSec: 1715,
-        message: 'Förvarning K100 på 28:35 — på ingång mot upploppet!',
+        message: 'Förvarning (100) på 28:35 — på ingång mot upploppet!',
       },
       {
         id: 'ev-3',
@@ -2272,7 +2272,7 @@ function buildSeasonSeed(): SeasonDatabase {
         stationCode: 1,
         stationName: 'Målavläsning Sekretariat (USB)',
         runningTimeSec: 1690,
-        message: 'Felstämplat (MP) i D21 — saknar kontroll K55',
+        message: 'Felstämplat (MP) i D21 — saknar kontroll (55)',
       },
     ],
     processedClientIds: [],
@@ -3782,8 +3782,8 @@ async function startServer() {
         stationCode: params.stationCode,
         name:
           params.stationCode === 100
-            ? 'Förvarning K100'
-            : `Radiokontroll K${params.stationCode}${
+            ? 'Förvarning (100)'
+            : `Radiokontroll (${params.stationCode})${
                 params.sourcePrefix ? ` (${params.sourcePrefix})` : ''
               }`,
         hardwareModel: 'SRR-USB (Air+)',
@@ -3991,10 +3991,10 @@ async function startServer() {
           stationName: station.name,
           runningTimeSec: runSec,
           message: isPre
-            ? `${srcBadge}Förvarning K${station.stationCode} på ${
+            ? `${srcBadge}Förvarning (${station.stationCode}) på ${
                 runSec !== null ? durToMmSs(runSec) : secToClock(effectiveSec)
               } — på upploppet!`
-            : `${srcBadge}Mellantid K${station.stationCode}: ${
+            : `${srcBadge}Mellantid (${station.stationCode}): ${
                 runSec !== null ? durToMmSs(runSec) : secToClock(effectiveSec)
               }`,
           rawHex: params.rawHex,
@@ -5760,7 +5760,7 @@ async function startServer() {
               runner.runningTimeSec !== null ? durToMmSs(runner.runningTimeSec) : '—'
             }${autoTag}${runner.isRentalCard && !runner.rentalReturned ? ' · OBS: HYRBRICKA!' : ''}`
         : `Felstämplat (MP) i ${cls?.name ?? '-'} — saknar kontroll: ${validation.missingControls
-            .map((k) => `K${k}`)
+            .map((k) => `(${k})`)
             .join(', ')}${autoTag}`,
       rawHex,
     };
@@ -5800,7 +5800,7 @@ async function startServer() {
     const brokenLabel =
       db.emergency.brokenControls.length > 0
         ? `Trasiga kontroller undantagna: ${db.emergency.brokenControls
-            .map((c) => `K${c}`)
+            .map((c) => `(${c})`)
             .join(', ')}`
         : 'Inga trasiga kontroller aktiva';
 

@@ -222,7 +222,7 @@ export function ForestSafetyView({
                         {r.status === 'PRELIMINARY_FIN'
                           ? `Mål (${formatDurationMmSs(r.runningTimeSec)})`
                           : lastRadio
-                          ? `K${lastRadio.controlCode} (${formatDurationMmSs(
+                          ? `(${lastRadio.controlCode}) ${formatDurationMmSs(
                               lastRadio.runningTimeSec
                             )})`
                           : r.lastSeenControl

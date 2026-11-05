@@ -149,7 +149,7 @@ export interface RadioSplit {
 export interface SplitLegResult {
   order: number;
   controlCode: number; // 999 represents Finish leg ("Mål")
-  label: string; // e.g. "K31", "K100", "Mål"
+  label: string; // e.g. "(31)", "(100)", "Mål"
   status: 'OK' | 'MISSING' | 'BROKEN_CTRL';
   punchTimeSec: number | null;
   cumulativeSec: number | null;

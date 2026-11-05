@@ -464,7 +464,7 @@ export function RunnerSplitCardModal({
                       {s.controlCode === 999 ? 'M' : s.order}
                     </td>
                     <td className="py-1 px-2 font-sans font-medium text-slate-900 dark:text-slate-100 truncate max-w-[110px] sm:max-w-none">
-                      {s.label}
+                      {s.controlCode === 999 ? s.label : `(${s.controlCode})`}
                       {s.status === 'MISSING' && (
                         <span className="ml-1.5 text-red-600 dark:text-red-400 font-semibold">
                           Saknas
@@ -544,7 +544,7 @@ export function RunnerSplitCardModal({
               <div className="mt-1.5 font-mono text-slate-800 dark:text-slate-200">
                 Radio:{' '}
                 {runner.radioSplits
-                  .map((r) => `K${r.controlCode}: ${formatDurationMmSs(r.runningTimeSec)}`)
+                  .map((r) => `(${r.controlCode}): ${formatDurationMmSs(r.runningTimeSec)}`)
                   .join(' · ')}
               </div>
             )}

@@ -735,7 +735,7 @@ export function PublicPortalView({
               {raceData.emergency.brokenControls.length > 0 && (
                 <div className="px-3 py-2 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-lg text-xs text-amber-800 dark:text-amber-300">
                   <strong>Tävlingsinfo:</strong> Kontroll{' '}
-                  {raceData.emergency.brokenControls.map((c) => `K${c}`).join(', ')} är ur
+                  {raceData.emergency.brokenControls.map((c) => `(${c})`).join(', ')} är ur
                   funktion och har undantagits.
                 </div>
               )}

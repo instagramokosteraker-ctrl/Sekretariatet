@@ -780,7 +780,7 @@ export function CoursesClassesView({
                   />
                 </div>
                 <p className="text-[11px] text-slate-500">
-                  Kontrollpoäng beräknas ur kontrollens tiotal (t.ex. K31 = 30 p, K55 = 50 p, K100 =
+                  Kontrollpoäng beräknas ur kontrollens tiotal (t.ex. (31) = 30 p, (55) = 50 p, (100) =
                   100 p).
                 </p>
               </div>
@@ -998,7 +998,7 @@ export function CoursesClassesView({
             >
               <div className="flex items-baseline justify-between gap-1">
                 <span className="font-mono tabular-nums text-xs font-semibold text-slate-900 dark:text-slate-100">
-                  K{item.code}
+                  ({item.code})
                 </span>
                 <span className="text-[10px] text-slate-400 font-mono">{item.courseCount}b</span>
               </div>

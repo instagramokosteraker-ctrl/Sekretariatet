@@ -193,8 +193,8 @@ export function DrawAndEmergencyView({
       setEmergencyFeedback({
         ok: true,
         msg: current.has(code)
-          ? `K${code} markerad som trasig i skogen — räknade om ${res.recalculatedCount} utlästa brickor (saknad K${code} godkänns nu som OK).`
-          : `K${code} återställd som ordinarie kontroll — räknade om ${res.recalculatedCount} utlästa brickor.`,
+          ? `(${code}) markerad som trasig i skogen — räknade om ${res.recalculatedCount} utlästa brickor (saknad kontroll (${code}) godkänns nu som OK).`
+          : `(${code}) återställd som ordinarie kontroll — räknade om ${res.recalculatedCount} utlästa brickor.`,
       });
     } finally {
       setEmergencyBusy(false);
@@ -222,7 +222,7 @@ export function DrawAndEmergencyView({
       });
       setEmergencyFeedback({
         ok: true,
-        msg: `Tidsjustering för K${ctrl} (${delta > 0 ? `+${delta}` : delta} s) sparad — räknade om ${res.recalculatedCount} avläsningar.`,
+        msg: `Tidsjustering för (${ctrl}) (${delta > 0 ? `+${delta}` : delta} s) sparad — räknade om ${res.recalculatedCount} avläsningar.`,
       });
     } finally {
       setEmergencyBusy(false);
@@ -240,7 +240,7 @@ export function DrawAndEmergencyView({
       });
       setEmergencyFeedback({
         ok: true,
-        msg: `Tog bort tidsjustering för K${codeKey} — räknade om ${res.recalculatedCount} avläsningar.`,
+        msg: `Tog bort tidsjustering för (${codeKey}) — räknade om ${res.recalculatedCount} avläsningar.`,
       });
     } finally {
       setEmergencyBusy(false);
@@ -369,7 +369,7 @@ export function DrawAndEmergencyView({
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
               Om en SI-enhet dött eller försvunnit i skogen: klicka på kontrollkoden nedan så blir
-              löpare som saknar kontrollen godkända (OK). Prova t.ex. <strong>K55</strong> för Sara
+              löpare som saknar kontrollen godkända (OK). Prova t.ex. <strong>(55)</strong> för Sara
               Holm!
             </p>
             <div className="flex flex-wrap gap-1.5">
@@ -387,7 +387,7 @@ export function DrawAndEmergencyView({
                         : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-slate-400'
                     }`}
                   >
-                    K{code} {isBroken ? '(Ur funk.)' : ''}
+                    ({code}) {isBroken ? '(Ur funk.)' : ''}
                   </button>
                 );
               })}
@@ -418,7 +418,7 @@ export function DrawAndEmergencyView({
                 >
                   {allCourseControlCodes.map((c) => (
                     <option key={c} value={String(c)}>
-                      K{c}
+                      ({c})
                     </option>
                   ))}
                 </select>
@@ -452,13 +452,13 @@ export function DrawAndEmergencyView({
                     className="flex items-center justify-between text-xs font-mono bg-white dark:bg-slate-900 px-2.5 py-1 rounded border border-slate-200 dark:border-slate-800"
                   >
                     <span>
-                      K{k}: {sec > 0 ? `+${sec}` : sec} s
+                      ({k}): {sec > 0 ? `+${sec}` : sec} s
                     </span>
                     <button
                       type="button"
                       onClick={() => void handleRemoveOffset(k)}
                       className="text-slate-400 hover:text-red-600"
-                      aria-label={`Ta bort tidsjustering K${k}`}
+                      aria-label={`Ta bort tidsjustering (${k})`}
                     >
                       <Trash2 className="w-3 h-3" />
                     </button>

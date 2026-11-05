@@ -131,7 +131,7 @@ export function ProtocolInspectorView({
               }
               className="px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-lg"
             >
-              Mall: 0xD3 Radiostämpling K42
+              Mall: 0xD3 Radiostämpling (42)
             </button>
 
             <button

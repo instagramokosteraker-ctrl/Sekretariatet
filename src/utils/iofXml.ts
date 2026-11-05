@@ -818,7 +818,7 @@ export function exportForestSafetyCsv(
         c.isRentalCard ? 'Ja' : 'Nej',
         c.status,
         formatSecondsAsClock(c.startTimeSec ?? c.allocatedStartSec),
-        c.lastSeenControl ? `K${c.lastSeenControl}` : '-',
+        c.lastSeenControl ? `(${c.lastSeenControl})` : '-',
         formatSecondsAsClock(c.lastSeenTimeSec),
       ];
     }),
@@ -1062,4 +1062,3 @@ export const SAMPLE_EVENTOR_COMPETITOR_XML = `<?xml version="1.0" encoding="UTF-
     <ControlCard>8509448</ControlCard>
   </Competitor>
 </CompetitorList>`;
-

@@ -1900,7 +1900,7 @@ export async function loadFullSeasonFromFirestore(options?: {
         if (!competitor) continue;
         const split = {
           controlCode: Number(punch.stationCode),
-          stationName: String(punch.stationName || `K${punch.stationCode}`),
+          stationName: String(punch.stationName || `(${punch.stationCode})`),
           punchTimeSec: Number(punch.punchTimeSec),
           runningTimeSec: decodeNullableSec(punch.runningTimeSec),
           isPrewarning: stationFunction === 'PREWARNING',
@@ -2912,7 +2912,7 @@ export async function submitOnlinePunchToFirestore(
   const stationName = (
     configuredStation?.name ||
     punch.stationName ||
-    `Radiokontroll K${punch.stationCode}`
+    `Radiokontroll (${punch.stationCode})`
   )
     .trim()
     .slice(0, 120);

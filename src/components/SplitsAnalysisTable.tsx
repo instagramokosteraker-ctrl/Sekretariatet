@@ -8,8 +8,6 @@ import {
 import { RunnerStatusIndicator } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 
-export type SplitsCellMode = 'LEG_AND_BOM' | 'CUMULATIVE';
-
 function getLiveRunningTimeSec(startTimeSec: number | null, nowMs: number): number | null {
   if (startTimeSec === null) return null;
 
@@ -43,8 +41,6 @@ export function SplitsAnalysisTable({
   liveUpdates = false,
   liveUpdateScope,
 }: SplitsAnalysisTableProps) {
-  const [cellMode, setCellMode] = useState<SplitsCellMode>('LEG_AND_BOM');
-  const [showLegMatrix, setShowLegMatrix] = useState<boolean>(false);
   // Sort per class by control order (null = official result order, -1 = sort by total bomtid, >0 = leg order)
   const [sortByLegOrder, setSortByLegOrder] = useState<Record<string, number | null>>({});
   const [expandedRunnerId, setExpandedRunnerId] = useState<string | null>(null);
@@ -139,60 +135,6 @@ export function SplitsAnalysisTable({
             </button>
           ))}
         </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          <div className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-lg">
-            <button
-              type="button"
-              onClick={() => setShowLegMatrix(false)}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                !showLegMatrix
-                  ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              Kompakt resultatvy
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowLegMatrix(true)}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                showLegMatrix
-                  ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              Sträckmatris (WinSplits)
-            </button>
-          </div>
-
-          {showLegMatrix && (
-            <div className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setCellMode('LEG_AND_BOM')}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  cellMode === 'LEG_AND_BOM'
-                    ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Sträcka & Bom
-              </button>
-              <button
-                type="button"
-                onClick={() => setCellMode('CUMULATIVE')}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  cellMode === 'CUMULATIVE'
-                    ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Total vid kontroll
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Per-Class Split Tables */}
@@ -231,9 +173,9 @@ export function SplitsAnalysisTable({
 
           const activeSortOrder = sortByLegOrder[cls.id] ?? null;
 
-          // Build leg columns only when Sträckmatris is toggled on
+          // Build leg columns for every class with a fixed course.
           const legColumns: { order: number; code: number; label: string; bestLegSec: number | null }[] =
-            showLegMatrix && course && !isRogaining && !isForked
+            course && !isRogaining && !isForked
               ? [
                   ...course.controls.map((ctrl, idx) => {
                     const order = idx + 1;
@@ -246,7 +188,7 @@ export function SplitsAnalysisTable({
                     return {
                       order,
                       code: ctrl,
-                      label: `K${ctrl}`,
+                      label: `(${ctrl})`,
                       bestLegSec: best,
                     };
                   }),
@@ -276,7 +218,7 @@ export function SplitsAnalysisTable({
                 const bb = b.validation?.totalTimeLossSec ?? 999999;
                 return ba - bb;
               });
-            } else if (showLegMatrix) {
+            } else {
               displayRows = [...displayRows].sort((a, b) => {
                 const la =
                   a.validation?.splits.find((s) => s.order === activeSortOrder)?.legSec ??
@@ -490,9 +432,6 @@ export function SplitsAnalysisTable({
                                 <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
                                   {r.fullName}
                                 </span>
-                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                                  #{r.bib}
-                                </span>
                                 {isExpanded ? (
                                   <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
                                 ) : (
@@ -528,7 +467,7 @@ export function SplitsAnalysisTable({
                                   ? r.radioSplits
                                       .map(
                                         (split) =>
-                                          `K${split.controlCode} ${formatDurationMmSs(split.runningTimeSec)}`
+                                          `(${split.controlCode}) ${formatDurationMmSs(split.runningTimeSec)}`
                                       )
                                       .join(' · ')
                                   : '—'}
@@ -575,25 +514,6 @@ export function SplitsAnalysisTable({
                               const hasBom = (sp.timeLossSec ?? 0) >= 12;
                               const isWin = sp.legRank === 1;
 
-                              if (cellMode === 'CUMULATIVE') {
-                                return (
-                                  <td
-                                    key={col.order}
-                                    className="py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap"
-                                  >
-                                    <div className="text-slate-900 dark:text-slate-100">
-                                      {formatDurationMmSs(sp.cumulativeSec)}
-                                    </div>
-                                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                      {sp.cumulativeRank ? `#${sp.cumulativeRank}` : ''}
-                                      {sp.cumulativeBehindSec && sp.cumulativeBehindSec > 0
-                                        ? ` +${formatDurationMmSs(sp.cumulativeBehindSec)}`
-                                        : ''}
-                                    </div>
-                                  </td>
-                                );
-                              }
-
                               return (
                                 <td
                                   key={col.order}
@@ -616,15 +536,14 @@ export function SplitsAnalysisTable({
                                     {formatDurationMmSs(sp.legSec)}
                                     {sp.legRank ? ` (${sp.legRank})` : ''}
                                   </div>
-                                  {hasBom ? (
-                                    <div className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
-                                      +{formatDurationMmSs(sp.timeLossSec ?? 0)} bom
-                                    </div>
-                                  ) : (
-                                    <div className="text-[10px] text-slate-400 dark:text-slate-500">
-                                      {formatDurationMmSs(sp.cumulativeSec)}
-                                    </div>
-                                  )}
+                                  <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                    {formatDurationMmSs(sp.cumulativeSec)}
+                                    {hasBom && (
+                                      <span className="ml-1 font-semibold text-amber-700 dark:text-amber-400">
+                                        +{formatDurationMmSs(sp.timeLossSec ?? 0)} bom
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
                               );
                             })}

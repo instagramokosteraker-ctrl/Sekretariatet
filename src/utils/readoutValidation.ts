@@ -57,7 +57,7 @@ function evaluateCardAgainstSingleCourse(
       splits.push({
         order: idx + 1,
         controlCode: reqCode,
-        label: `K${reqCode}`,
+        label: `(${reqCode})`,
         status: 'OK',
         punchTimeSec: pTime,
         cumulativeSec: cum,
@@ -70,7 +70,7 @@ function evaluateCardAgainstSingleCourse(
       splits.push({
         order: idx + 1,
         controlCode: reqCode,
-        label: `K${reqCode}`,
+        label: `(${reqCode})`,
         status: 'BROKEN_CTRL',
         punchTimeSec: null,
         cumulativeSec: null,
@@ -82,7 +82,7 @@ function evaluateCardAgainstSingleCourse(
       splits.push({
         order: idx + 1,
         controlCode: reqCode,
-        label: `K${reqCode}`,
+        label: `(${reqCode})`,
         status: 'MISSING',
         punchTimeSec: null,
         cumulativeSec: null,
@@ -157,7 +157,7 @@ function evaluateRogainingReadout(
     splits.push({
       order: splits.length + 1,
       controlCode: p.code,
-      label: `K${p.code}`,
+      label: `(${p.code})`,
       status: 'OK',
       punchTimeSec: p.timeSec,
       cumulativeSec: cum,

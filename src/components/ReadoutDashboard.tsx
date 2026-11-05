@@ -674,7 +674,7 @@ export function ReadoutDashboard({
                 <div className="px-3.5 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-200 dark:border-red-900/60 text-xs text-red-800 dark:text-red-300">
                   <strong>Felstämplat (MP):</strong> Saknar{' '}
                   <span className="font-mono font-semibold">
-                    {inspectedRunner.validation.missingControls.map((c) => `K${c}`).join(', ')}
+                    {inspectedRunner.validation.missingControls.map((c) => `(${c})`).join(', ')}
                   </span>
                   {inspectedRunner.validation.extraControls.length > 0 && (
                     <span>
@@ -682,7 +682,7 @@ export function ReadoutDashboard({
                       (Extra:{' '}
                       <span className="font-mono">
                         {inspectedRunner.validation.extraControls
-                          .map((x) => `K${x.code}`)
+                          .map((x) => `(${x.code})`)
                           .join(', ')}
                       </span>
                       )
@@ -756,7 +756,7 @@ export function ReadoutDashboard({
                                 {s.controlCode === 999 ? 'M' : s.order}
                               </td>
                               <td className="py-1 px-2 font-sans font-medium text-slate-900 dark:text-slate-100 truncate max-w-[110px] sm:max-w-none">
-                                {s.label}
+                                {s.controlCode === 999 ? s.label : `(${s.controlCode})`}
                                 {s.status === 'MISSING' && (
                                   <span className="ml-1.5 text-red-600 dark:text-red-400 font-semibold">
                                     Saknas!
@@ -825,7 +825,7 @@ export function ReadoutDashboard({
                         {inspectedRunner.radioSplits
                           .map(
                             (r) =>
-                              `K${r.controlCode} (${formatDurationMmSs(r.runningTimeSec)})`
+                              `(${r.controlCode}) ${formatDurationMmSs(r.runningTimeSec)}`
                           )
                           .join(' · ')}
                       </strong>
@@ -1134,7 +1134,7 @@ export function ReadoutDashboard({
                 >
                   <div className="flex items-baseline justify-between gap-1">
                     <span className="font-mono tabular-nums text-xs font-semibold text-slate-900 dark:text-slate-100">
-                      K{item.code}
+                      ({item.code})
                     </span>
                     <span className="text-[10px] text-slate-400 font-mono">{item.courseCount}b</span>
                   </div>

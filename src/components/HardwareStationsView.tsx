@@ -658,7 +658,7 @@ export function HardwareStationsView({
                     key={c}
                     className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900 rounded-md"
                   >
-                    <span>K{c}</span>
+                    <span>({c})</span>
                     <button
                       type="button"
                       onClick={() => void handleRemoveBrokenControl(c)}
@@ -711,7 +711,7 @@ export function HardwareStationsView({
                     key={code}
                     className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900 rounded-md"
                   >
-                    <span>K{code}: {off > 0 ? `+${off}` : off}s</span>
+                    <span>({code}): {off > 0 ? `+${off}` : off}s</span>
                     <button
                       type="button"
                       onClick={() => void handleRemoveOffset(code)}
