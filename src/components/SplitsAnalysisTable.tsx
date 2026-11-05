@@ -41,6 +41,7 @@ export function SplitsAnalysisTable({
   liveUpdates = false,
   liveUpdateScope,
 }: SplitsAnalysisTableProps) {
+  const [detailedView, setDetailedView] = useState(false);
   // Sort per class by control order (null = official result order, -1 = sort by total bomtid, >0 = leg order)
   const [sortByLegOrder, setSortByLegOrder] = useState<Record<string, number | null>>({});
   const [expandedRunnerId, setExpandedRunnerId] = useState<string | null>(null);
@@ -104,10 +105,17 @@ export function SplitsAnalysisTable({
     }));
   };
 
+  const viewTabClass = (selected: boolean) =>
+    `px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+      selected
+        ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-xs'
+        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+    }`;
+
   return (
     <div className="space-y-3">
       {/* Filter & Analysis Mode Toolbar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-lg w-fit">
           <button
             type="button"
@@ -134,6 +142,33 @@ export function SplitsAnalysisTable({
               {cls.name}
             </button>
           ))}
+        </div>
+        <div
+          className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-lg w-fit"
+          role="tablist"
+          aria-label="Resultatvy"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!detailedView}
+            onClick={() => {
+              setDetailedView(false);
+              setSortByLegOrder({});
+            }}
+            className={viewTabClass(!detailedView)}
+          >
+            Förenklad vy
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={detailedView}
+            onClick={() => setDetailedView(true)}
+            className={viewTabClass(detailedView)}
+          >
+            Sträcka & bom
+          </button>
         </div>
       </div>
 
@@ -173,9 +208,9 @@ export function SplitsAnalysisTable({
 
           const activeSortOrder = sortByLegOrder[cls.id] ?? null;
 
-          // Build leg columns for every class with a fixed course.
+          // Build leg columns for the detailed view.
           const legColumns: { order: number; code: number; label: string; bestLegSec: number | null }[] =
-            course && !isRogaining && !isForked
+            detailedView && course && !isRogaining && !isForked
               ? [
                   ...course.controls.map((ctrl, idx) => {
                     const order = idx + 1;
@@ -300,12 +335,14 @@ export function SplitsAnalysisTable({
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                         <th className="py-1.5 pl-3 pr-1.5 w-9">Plac</th>
                         <th className="py-1.5 px-2">Namn</th>
-                        <th className="py-1.5 px-2">Klubb</th>
-                        <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
-                        {hasRadioControls && (
+                        <th className={`py-1.5 px-2 ${!detailedView ? 'hidden sm:table-cell' : ''}`}>Klubb</th>
+                        {detailedView && (
+                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
+                        )}
+                        {detailedView && hasRadioControls && (
                           <th className="py-1.5 px-2 text-right whitespace-nowrap">Radiokontroller</th>
                         )}
-                        {legColumns.map((col) => {
+                        {detailedView && legColumns.map((col) => {
                           const isSorted = activeSortOrder === col.order;
                           return (
                             <th
@@ -337,7 +374,7 @@ export function SplitsAnalysisTable({
                         })}
                         <th className="py-1.5 px-2 text-right">Tid</th>
                         <th className="hidden sm:table-cell py-1.5 px-2 text-right">Diff</th>
-                        {isRogaining ? (
+                        {detailedView && isRogaining ? (
                           <>
                             <th className="hidden sm:table-cell py-1.5 px-2 text-right whitespace-nowrap">
                               Kontr.
@@ -345,7 +382,7 @@ export function SplitsAnalysisTable({
                             <th className="hidden md:table-cell py-1.5 px-2 text-right whitespace-nowrap">Brutto</th>
                             <th className="py-1.5 px-2 text-right whitespace-nowrap">Poäng</th>
                           </>
-                        ) : (
+                        ) : detailedView ? (
                           <th
                             className="py-1.5 px-2 text-right whitespace-nowrap"
                           >
@@ -361,6 +398,10 @@ export function SplitsAnalysisTable({
                               <span>{isForked ? 'Gaffel' : 'Bom'}</span>
                               {!isForked && <ArrowDownUp className="w-2.5 h-2.5 opacity-60" />}
                             </button>
+                          </th>
+                        ) : (
+                          <th className="py-1.5 px-2 text-right whitespace-nowrap">
+                            {isRogaining ? 'Poäng' : isForked ? 'Gaffel' : 'Bom'}
                           </th>
                         )}
                         <th className="py-1.5 pl-1.5 pr-3 text-right">Status</th>
@@ -396,12 +437,13 @@ export function SplitsAnalysisTable({
                             : null;
 
                         const isExpanded = expandedRunnerId === r.id;
-                        const totalCols =
-                          4 +
-                          (hasRadioControls ? 1 : 0) +
-                          legColumns.length +
-                          (isRogaining ? 3 : 1) +
-                          3;
+                        const totalCols = detailedView
+                          ? 4 +
+                            (hasRadioControls ? 1 : 0) +
+                            legColumns.length +
+                            (isRogaining ? 3 : 1) +
+                            3
+                          : 7;
 
                         return (
                           <React.Fragment key={r.id}>
@@ -440,7 +482,11 @@ export function SplitsAnalysisTable({
                               </div>
                             </td>
 
-                            <td className="py-1.5 px-2 whitespace-nowrap">
+                            <td
+                              className={`py-1.5 px-2 whitespace-nowrap ${
+                                !detailedView ? 'hidden sm:table-cell' : ''
+                              }`}
+                            >
                               {r.club.trim() ? (
                                 <button
                                   type="button"
@@ -457,11 +503,13 @@ export function SplitsAnalysisTable({
                               )}
                             </td>
 
-                            <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                              {formatSecondsAsClock(r.startTimeSec ?? r.allocatedStartSec)}
-                            </td>
+                            {detailedView && (
+                              <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                                {formatSecondsAsClock(r.startTimeSec ?? r.allocatedStartSec)}
+                              </td>
+                            )}
 
-                            {hasRadioControls && (
+                            {detailedView && hasRadioControls && (
                               <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
                                 {r.radioSplits.length > 0
                                   ? r.radioSplits
@@ -474,7 +522,7 @@ export function SplitsAnalysisTable({
                               </td>
                             )}
 
-                            {legColumns.map((col) => {
+                            {detailedView && legColumns.map((col) => {
                               const sp = r.validation?.splits.find(
                                 (s) => s.order === col.order
                               );
@@ -552,7 +600,7 @@ export function SplitsAnalysisTable({
                               {formatDurationMmSs(displayedTimeSec)}
                             </td>
 
-                            <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                            <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
                               {isRogaining
                                 ? ptsDiff !== null
                                 ? ptsDiff === 0
@@ -566,7 +614,7 @@ export function SplitsAnalysisTable({
                                 : '—'}
                             </td>
 
-                            {isRogaining ? (
+                            {detailedView && isRogaining ? (
                               <>
                                 <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
                                   {r.validation
@@ -595,10 +643,18 @@ export function SplitsAnalysisTable({
                                     : '—'}
                                 </td>
                               </>
-                            ) : isForked ? (
+                            ) : detailedView && isForked ? (
                               <td
                                 className="py-1.5 px-2 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap"
                               >
+                                {r.validation?.matchedCourseName ?? '—'}
+                              </td>
+                            ) : !detailedView && isRogaining ? (
+                              <td className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
+                                {r.validation?.rogainingPoints ?? '—'}
+                              </td>
+                            ) : !detailedView && isForked ? (
+                              <td className="py-1.5 px-2 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap">
                                 {r.validation?.matchedCourseName ?? '—'}
                               </td>
                             ) : (
