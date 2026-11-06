@@ -81,7 +81,7 @@ export function inferCardSeries(siNumber: number): SICardSeries {
 }
 
 export function formatSiNumber(siNumber: number): string {
-  return siNumber.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return String(siNumber);
 }
 
 export function formatSecondsAsClock(sec: number | null | undefined): string {
