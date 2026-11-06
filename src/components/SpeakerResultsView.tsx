@@ -217,6 +217,7 @@ export function SpeakerResultsView({
               classCompetitors={competitors.filter(
                 (c) => c.classId === inspectedRunner.classId
               )}
+              stations={stations}
               onClose={() => setInspectedRunner(null)}
             />
           </div>
@@ -227,6 +228,7 @@ export function SpeakerResultsView({
         classes={classes}
         courses={courses}
         competitors={competitors}
+        stations={stations}
         selectedClassId={selectedClassId}
         onSelectClassId={setSelectedClassId}
         liveUpdates

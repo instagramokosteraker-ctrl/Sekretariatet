@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Award, Clock, Compass, Sparkles, Star, X } from 'lucide-react';
-import type { CompClass, Competitor, Course } from '../types/sportident';
+import type { CompClass, Competitor, Course, SIStation } from '../types/sportident';
 import {
   formatDurationMmSs,
   formatSecondsAsClock,
@@ -8,11 +8,22 @@ import {
 } from '../services/sportidentProtocol';
 import { RunnerStatusIndicator } from './StatusLabels';
 
+function getLiveRunningTimeSec(startTimeSec: number | null, nowMs: number): number | null {
+  if (startTimeSec === null) return null;
+
+  const now = new Date(nowMs);
+  const currentClockSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  const difference = currentClockSec - startTimeSec;
+  const elapsedSec = difference < -12 * 3600 ? difference + 86400 : difference;
+  return elapsedSec >= 0 ? elapsedSec : null;
+}
+
 interface RunnerSplitCardModalProps {
   runner: Competitor | null;
   compClass: CompClass | null;
   course: Course | null;
   classCompetitors: Competitor[];
+  stations?: SIStation[];
   onClose: () => void;
 }
 
@@ -21,9 +32,30 @@ export function RunnerSplitCardModal({
   compClass,
   course,
   classCompetitors,
+  stations,
   onClose,
 }: RunnerSplitCardModalProps) {
   const isRogaining = compClass?.classFormat === 'ROGAINING';
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const radioControlCodes = useMemo(() => {
+    const set = new Set<number>();
+    stations?.forEach((st) => {
+      if (st.active !== false && (st.stationFunction === 'RADIO' || st.stationFunction === 'PREWARNING')) {
+        set.add(st.stationCode);
+      }
+    });
+    classCompetitors.forEach((c) => {
+      c.radioSplits?.forEach((r) => set.add(r.controlCode));
+    });
+    runner?.radioSplits?.forEach((r) => set.add(r.controlCode));
+    return set;
+  }, [stations, classCompetitors, runner]);
 
   const placementInfo = useMemo(() => {
     if (!runner || runner.status !== 'OK' || runner.runningTimeSec === null) return null;
@@ -71,6 +103,7 @@ export function RunnerSplitCardModal({
       code: number;
       x: number;
       y: number;
+      isRadio?: boolean;
       legRank?: number | null;
       timeLossSec?: number | null;
       status?: 'OK' | 'MISSING' | 'BROKEN_CTRL';
@@ -87,6 +120,7 @@ export function RunnerSplitCardModal({
 
     ctrlCodes.forEach((code, idx) => {
       const sp = splits[idx];
+      const isRadio = radioControlCodes.has(code);
       const t = (idx + 1) / (totalPoints - 1);
       const x = Math.round(padX + t * usableW);
       // Natural terrain-loop wave using deterministic control code hash
@@ -95,10 +129,11 @@ export function RunnerSplitCardModal({
 
       pts.push({
         kind: code === 999 ? 'FINISH' : 'CONTROL',
-        label: code === 999 ? 'Mål' : `${idx + 1} (${code})`,
+        label: code === 999 ? 'Mål' : isRadio ? `📡${code}` : `${idx + 1} (${code})`,
         code,
         x,
         y,
+        isRadio,
         legRank: sp?.legRank,
         timeLossSec: sp?.timeLossSec,
         status: sp?.status ?? 'OK',
@@ -107,9 +142,15 @@ export function RunnerSplitCardModal({
     });
 
     return pts;
-  }, [runner, course]);
+  }, [runner, course, radioControlCodes]);
 
   if (!runner) return null;
+
+  const isRunning =
+    (runner.status === 'IN_FOREST' || runner.status === 'CHECKED') &&
+    runner.finishTimeSec === null;
+  const effStart = runner.startTimeSec ?? runner.allocatedStartSec;
+  const liveSec = isRunning ? getLiveRunningTimeSec(effStart, nowMs) : null;
 
   const val = runner.validation;
   const legWinsCount =
@@ -464,7 +505,14 @@ export function RunnerSplitCardModal({
                       {s.controlCode === 999 ? 'M' : s.order}
                     </td>
                     <td className="py-1 px-2 font-sans font-medium text-slate-900 dark:text-slate-100 truncate max-w-[110px] sm:max-w-none">
-                      {s.controlCode === 999 ? s.label : `(${s.controlCode})`}
+                      <span className="inline-flex items-center gap-1">
+                        {radioControlCodes.has(s.controlCode) && (
+                          <span title="Radiokontroll (ROC)" className="text-red-600 dark:text-red-400 font-mono text-[11px]">
+                            📡
+                          </span>
+                        )}
+                        <span>{s.controlCode === 999 ? s.label : `(${s.controlCode})`}</span>
+                      </span>
                       {s.status === 'MISSING' && (
                         <span className="ml-1.5 text-red-600 dark:text-red-400 font-semibold">
                           Saknas
@@ -538,16 +586,97 @@ export function RunnerSplitCardModal({
             </tbody>
           </table>
         ) : (
-          <div className="p-4 text-center text-xs text-slate-500 dark:text-slate-400">
-            SI-brickan är ännu inte utläst vid målet.
-            {runner.radioSplits.length > 0 && (
-              <div className="mt-1.5 font-mono text-slate-800 dark:text-slate-200">
-                Radio:{' '}
-                {runner.radioSplits
-                  .map((r) => `(${r.controlCode}): ${formatDurationMmSs(r.runningTimeSec)}`)
-                  .join(' · ')}
+          <div className="p-3">
+            <div className="mb-2 text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-2">
+              <span>SI-brickan är ännu inte utläst vid målet.</span>
+              {isRunning && liveSec !== null && (
+                <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold inline-flex items-center gap-1">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  </span>
+                  Löptid: {formatDurationMmSs(liveSec)} (live)
+                </span>
+              )}
+            </div>
+
+            {course && course.controls.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="py-1.5 pl-3.5 pr-1.5 w-8">#</th>
+                      <th className="py-1.5 px-2">Kontroll</th>
+                      <th className="py-1.5 px-2 text-right">Passertid / Status</th>
+                      <th className="py-1.5 pl-2 pr-3.5 text-right">Klockslag</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80 font-mono tabular-nums">
+                    {course.controls.map((code, idx) => {
+                      const isRadio = radioControlCodes.has(code);
+                      const passedSplit = runner.radioSplits?.find((s) => s.controlCode === code);
+                      const courseRadioCodes = course.controls.filter((c) => radioControlCodes.has(c));
+                      const nextRadio = courseRadioCodes.find((c) => !runner.radioSplits?.some((s) => s.controlCode === c));
+                      const isNext = code === nextRadio && isRunning && liveSec !== null;
+                      const passedSec =
+                        passedSplit?.runningTimeSec ??
+                        (effStart !== null && passedSplit?.punchTimeSec && passedSplit.punchTimeSec >= effStart
+                          ? passedSplit.punchTimeSec - effStart
+                          : null);
+
+                      return (
+                        <tr
+                          key={idx}
+                          className={
+                            passedSplit
+                              ? 'bg-red-50/30 dark:bg-red-950/20'
+                              : isNext
+                              ? 'bg-amber-50/40 dark:bg-amber-950/20'
+                              : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                          }
+                        >
+                          <td className="py-1 pl-3.5 pr-1.5 text-slate-400">{idx + 1}</td>
+                          <td className="py-1 px-2 font-sans font-medium text-slate-900 dark:text-slate-100">
+                            <span className="inline-flex items-center gap-1">
+                              {isRadio && (
+                                <span title="Radiokontroll (ROC)" className="text-red-600 dark:text-red-400 font-mono text-[11px]">
+                                  📡
+                                </span>
+                              )}
+                              <span>({code})</span>
+                            </span>
+                          </td>
+                          <td className="py-1 px-2 text-right">
+                            {passedSplit ? (
+                              <span className="font-semibold text-red-700 dark:text-red-400 inline-flex items-center gap-1">
+                                <span>📡</span>
+                                <span>{formatDurationMmSs(passedSec)}</span>
+                              </span>
+                            ) : isNext ? (
+                              <span className="font-semibold text-amber-600 dark:text-amber-400 inline-flex items-center gap-1">
+                                <span>{formatDurationMmSs(liveSec)}</span>
+                                <span className="text-[10px] font-bold uppercase">(live)</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-300 dark:text-slate-700">—</span>
+                            )}
+                          </td>
+                          <td className="py-1 pl-2 pr-3.5 text-right text-slate-400 dark:text-slate-500">
+                            {passedSplit ? formatSecondsAsClock(passedSplit.punchTimeSec) : isNext ? 'På väg' : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-1 pl-3.5 pr-1.5 text-slate-400">M</td>
+                      <td className="py-1 px-2 font-sans font-medium text-slate-900 dark:text-slate-100">Mål</td>
+                      <td className="py-1 px-2 text-right text-slate-300 dark:text-slate-700">—</td>
+                      <td className="py-1 pl-2 pr-3.5 text-right text-slate-400 dark:text-slate-500">—</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </div>

@@ -3658,6 +3658,7 @@ export async function loadPublicRaceFromFirestore(
     competitionsList,
     clubSettings,
     seriesStandings: season.seriesStandings ?? [],
+    stations: target.stations ?? [],
     updatedAt: new Date().toISOString(),
   };
 }

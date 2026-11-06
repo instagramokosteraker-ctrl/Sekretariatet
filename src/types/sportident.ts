@@ -409,6 +409,7 @@ export interface PublicRacePayload {
   competitionsList: CompetitionSummary[];
   clubSettings?: ClubSettings;
   seriesStandings?: SeriesStandingsBundle[];
+  stations?: SIStation[];
   updatedAt: string;
 }
 

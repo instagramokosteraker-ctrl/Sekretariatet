@@ -2451,6 +2451,7 @@ async function startServer() {
       competitionsList: buildCompetitionsSummaryList(seasonDb),
       clubSettings: publicClub,
       seriesStandings: computeSeasonSeriesStandings(seasonDb),
+      stations: ev.stations,
       updatedAt: new Date().toISOString(),
     };
   }

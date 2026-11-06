@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownUp, ChevronDown, ChevronUp } from 'lucide-react';
-import type { CompClass, Competitor, Course } from '../types/sportident';
+import type { CompClass, Competitor, Course, SIStation } from '../types/sportident';
 import {
   formatDurationMmSs,
   formatSecondsAsClock,
@@ -22,6 +22,7 @@ interface SplitsAnalysisTableProps {
   classes: CompClass[];
   courses: Course[];
   competitors: Competitor[];
+  stations?: SIStation[];
   selectedClassId: string;
   onSelectClassId: (id: string) => void;
   onSelectClub?: (clubName: string) => void;
@@ -34,11 +35,12 @@ export function SplitsAnalysisTable({
   classes,
   courses,
   competitors,
+  stations,
   selectedClassId,
   onSelectClassId,
   onSelectClub,
   onInspectRunner,
-  liveUpdates = false,
+  liveUpdates = true,
   liveUpdateScope,
 }: SplitsAnalysisTableProps) {
   const [detailedView, setDetailedView] = useState(false);
@@ -89,6 +91,19 @@ export function SplitsAnalysisTable({
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, [liveUpdates]);
+
+  const radioControlCodes = useMemo(() => {
+    const set = new Set<number>();
+    stations?.forEach((st) => {
+      if (st.active !== false && (st.stationFunction === 'RADIO' || st.stationFunction === 'PREWARNING')) {
+        set.add(st.stationCode);
+      }
+    });
+    competitors.forEach((c) => {
+      c.radioSplits?.forEach((r) => set.add(r.controlCode));
+    });
+    return set;
+  }, [stations, competitors]);
 
   const visibleClasses = useMemo(
     () =>
@@ -179,7 +194,39 @@ export function SplitsAnalysisTable({
           const isForked = cls.classFormat === 'FORKED';
           const course = courses.find((c) => c.id === cls.courseId) ?? null;
           const inClass = competitors.filter((c) => c.classId === cls.id);
-          const hasRadioControls = inClass.some((c) => c.radioSplits.length > 0);
+
+          const courseRadioCodes = course ? course.controls.filter((c) => radioControlCodes.has(c)) : [];
+
+          // Compute rankings at each radio control among class competitors
+          const radioRankingsByCode = new Map<number, Map<string, number>>();
+          if (course) {
+            course.controls.forEach((code) => {
+              if (!radioControlCodes.has(code)) return;
+              const times = inClass
+                .map((c) => {
+                  const valSplit = c.validation?.splits.find(
+                    (s) => s.controlCode === code && s.cumulativeSec !== null && s.cumulativeSec > 0
+                  );
+                  const rSplit = c.radioSplits?.find((s) => s.controlCode === code);
+                  const effStart = c.startTimeSec ?? c.allocatedStartSec;
+                  const time =
+                    valSplit?.cumulativeSec ??
+                    rSplit?.runningTimeSec ??
+                    (effStart !== null && rSplit?.punchTimeSec && rSplit.punchTimeSec >= effStart
+                      ? rSplit.punchTimeSec - effStart
+                      : null);
+                  return { runnerId: c.id, time };
+                })
+                .filter((item): item is { runnerId: string; time: number } => item.time !== null && item.time > 0)
+                .sort((a, b) => a.time - b.time);
+
+              const rankMap = new Map<string, number>();
+              times.forEach((item, idx) => {
+                rankMap.set(item.runnerId, idx + 1);
+              });
+              radioRankingsByCode.set(code, rankMap);
+            });
+          }
 
           const officialTimed = inClass
             .filter(
@@ -208,12 +255,19 @@ export function SplitsAnalysisTable({
 
           const activeSortOrder = sortByLegOrder[cls.id] ?? null;
 
-          // Build leg columns for the detailed view.
-          const legColumns: { order: number; code: number; label: string; bestLegSec: number | null }[] =
+          // Build leg columns for the detailed view with radio control flag
+          const legColumns: {
+            order: number;
+            code: number;
+            label: string;
+            isRadio: boolean;
+            bestLegSec: number | null;
+          }[] =
             detailedView && course && !isRogaining && !isForked
               ? [
                   ...course.controls.map((ctrl, idx) => {
                     const order = idx + 1;
+                    const isRadio = radioControlCodes.has(ctrl);
                     const best =
                       officialTimed
                         .map((r) =>
@@ -223,7 +277,8 @@ export function SplitsAnalysisTable({
                     return {
                       order,
                       code: ctrl,
-                      label: `(${ctrl})`,
+                      label: isRadio ? `📡${ctrl}` : `(${ctrl})`,
+                      isRadio,
                       bestLegSec: best,
                     };
                   }),
@@ -231,6 +286,7 @@ export function SplitsAnalysisTable({
                     order: course.controls.length + 1,
                     code: 999,
                     label: 'Spurt',
+                    isRadio: false,
                     bestLegSec:
                       officialTimed
                         .map((r) =>
@@ -254,15 +310,37 @@ export function SplitsAnalysisTable({
                 return ba - bb;
               });
             } else {
-              displayRows = [...displayRows].sort((a, b) => {
-                const la =
-                  a.validation?.splits.find((s) => s.order === activeSortOrder)?.legSec ??
-                  999999;
-                const lb =
-                  b.validation?.splits.find((s) => s.order === activeSortOrder)?.legSec ??
-                  999999;
-                return la - lb;
-              });
+              const targetCol = legColumns.find((c) => c.order === activeSortOrder);
+              const isRadioCol = Boolean(targetCol?.isRadio);
+              const targetCode = targetCol?.code;
+
+              const getRunnerColScore = (runner: Competitor) => {
+                const sp = runner.validation?.splits.find((s) => s.order === activeSortOrder);
+                if (sp && sp.legSec !== null && sp.legSec > 0) {
+                  return sp.legSec;
+                }
+                if (isRadioCol && targetCode) {
+                  const rSplit = runner.radioSplits?.find((s) => s.controlCode === targetCode);
+                  if (rSplit && rSplit.runningTimeSec !== null) {
+                    return rSplit.runningTimeSec;
+                  }
+                  const effStart = runner.startTimeSec ?? runner.allocatedStartSec;
+                  if (rSplit && effStart !== null && rSplit.punchTimeSec >= effStart) {
+                    return rSplit.punchTimeSec - effStart;
+                  }
+                  // If en route (next radio)
+                  const nextR = courseRadioCodes.find(
+                    (c) => !runner.radioSplits?.some((s) => s.controlCode === c)
+                  );
+                  if (nextR === targetCode && (runner.status === 'IN_FOREST' || runner.status === 'CHECKED')) {
+                    const liveSec = getLiveRunningTimeSec(effStart, nowMs);
+                    if (liveSec !== null) return 100000 + liveSec;
+                  }
+                }
+                return 999999;
+              };
+
+              displayRows = [...displayRows].sort((a, b) => getRunnerColScore(a) - getRunnerColScore(b));
             }
           }
 
@@ -324,6 +402,39 @@ export function SplitsAnalysisTable({
                 </div>
               </div>
 
+              {/* Visuell kontrollföljd för banan med ROC-radiomarkering */}
+              {course && course.controls.length > 0 && (
+                <div className="px-3.5 py-1.5 border-b border-slate-200/70 dark:border-slate-800/70 bg-slate-50/40 dark:bg-slate-950/30 flex items-center gap-1.5 text-xs overflow-x-auto">
+                  <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    Bana:
+                  </span>
+                  <div className="flex items-center gap-1 font-mono text-[11px] whitespace-nowrap">
+                    {course.controls.map((code, idx) => {
+                      const isRadio = radioControlCodes.has(code);
+                      return (
+                        <React.Fragment key={idx}>
+                          <span
+                            className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] ${
+                              isRadio
+                                ? 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300 font-semibold border border-red-200/70 dark:border-red-900/50'
+                                : 'bg-slate-100 text-slate-700 dark:bg-slate-800/80 dark:text-slate-300'
+                            }`}
+                            title={isRadio ? `Kontroll ${code} (ROC Radiokontroll)` : `Kontroll ${code}`}
+                          >
+                            {isRadio && <span className="text-red-500 text-[10px]">📡</span>}
+                            <span>{code}</span>
+                          </span>
+                          <span className="text-slate-300 dark:text-slate-600">→</span>
+                        </React.Fragment>
+                      );
+                    })}
+                    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 dark:bg-slate-800/80 dark:text-slate-300 font-semibold text-[11px]">
+                      Mål
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {displayRows.length === 0 ? (
                 <div className="p-4 text-center text-xs text-slate-500">
                   Inga deltagare i {cls.name}.
@@ -339,15 +450,15 @@ export function SplitsAnalysisTable({
                         {detailedView && (
                           <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
                         )}
-                        {detailedView && hasRadioControls && (
-                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Radiokontroller</th>
-                        )}
+                        {/* Notera: Separat sektion/rubrik 'Radiokontroller' har tagits bort helt. ROC visas integrerat i banans kontrollföljd. */}
                         {detailedView && legColumns.map((col) => {
                           const isSorted = activeSortOrder === col.order;
                           return (
                             <th
                               key={col.order}
-                              className="py-1.5 px-2 text-right font-mono whitespace-nowrap"
+                              className={`py-1.5 px-2 text-right font-mono whitespace-nowrap ${
+                                col.isRadio ? 'bg-red-50/60 dark:bg-red-950/25' : ''
+                              }`}
                             >
                               <button
                                 type="button"
@@ -357,10 +468,15 @@ export function SplitsAnalysisTable({
                                     ? 'text-red-600 dark:text-red-400 font-semibold'
                                     : ''
                                 }`}
-                                title={`Sortera ${cls.name} efter sträcktid till ${col.label}`}
+                                title={`Sortera ${cls.name} efter tid till ${col.label}${col.isRadio ? ' (Radiokontroll ROC)' : ''}`}
                               >
                                 <span className="inline-flex items-center gap-1">
-                                  <span>{col.label}</span>
+                                  {col.isRadio && (
+                                    <span className="text-[11px] text-red-600 dark:text-red-400 font-mono" title="Radiokontroll (ROC)">
+                                      📡
+                                    </span>
+                                  )}
+                                  <span>{col.code === 999 ? col.label : `(${col.code})`}</span>
                                   <ArrowDownUp className="w-2.5 h-2.5 opacity-60" />
                                 </span>
                                 {col.bestLegSec !== null && (
@@ -383,9 +499,7 @@ export function SplitsAnalysisTable({
                             <th className="py-1.5 px-2 text-right whitespace-nowrap">Poäng</th>
                           </>
                         ) : detailedView ? (
-                          <th
-                            className="py-1.5 px-2 text-right whitespace-nowrap"
-                          >
+                          <th className="py-1.5 px-2 text-right whitespace-nowrap">
                             <button
                               type="button"
                               onClick={() => toggleClassSort(cls.id, -1)}
@@ -439,11 +553,17 @@ export function SplitsAnalysisTable({
                         const isExpanded = expandedRunnerId === r.id;
                         const totalCols = detailedView
                           ? 4 +
-                            (hasRadioControls ? 1 : 0) +
                             legColumns.length +
                             (isRogaining ? 3 : 1) +
                             3
                           : 7;
+
+                        const hasFullReadout = Boolean(
+                          r.validation &&
+                          r.validation.splits &&
+                          r.validation.splits.length > 0 &&
+                          (r.status === 'OK' || r.status === 'MP' || r.status === 'DNF' || Boolean(r.readoutAt))
+                        );
 
                         return (
                           <React.Fragment key={r.id}>
@@ -509,89 +629,156 @@ export function SplitsAnalysisTable({
                               </td>
                             )}
 
-                            {detailedView && hasRadioControls && (
-                              <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                                {r.radioSplits.length > 0
-                                  ? r.radioSplits
-                                      .map(
-                                        (split) =>
-                                          `(${split.controlCode}) ${formatDurationMmSs(split.runningTimeSec)}`
-                                      )
-                                      .join(' · ')
-                                  : '—'}
-                              </td>
-                            )}
-
+                            {/* Separata radiokontrollceller har ersatts med integrerad presentation i legColumns */}
                             {detailedView && legColumns.map((col) => {
-                              const sp = r.validation?.splits.find(
-                                (s) => s.order === col.order
-                              );
-                              if (!sp) {
+                              if (hasFullReadout) {
+                                const sp = r.validation?.splits.find(
+                                  (s) => s.order === col.order
+                                );
+                                if (!sp) {
+                                  return (
+                                    <td
+                                      key={col.order}
+                                      className="py-2.5 px-2 text-right font-mono text-slate-300 dark:text-slate-700"
+                                    >
+                                      —
+                                    </td>
+                                  );
+                                }
+
+                                if (sp.status === 'MISSING') {
+                                  return (
+                                    <td
+                                      key={col.order}
+                                      className="py-2.5 px-2 text-right font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
+                                    >
+                                      Saknas
+                                    </td>
+                                  );
+                                }
+
+                                if (sp.status === 'BROKEN_CTRL') {
+                                  return (
+                                    <td
+                                      key={col.order}
+                                      className="py-2.5 px-2 text-right text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap"
+                                    >
+                                      Ur funk.
+                                    </td>
+                                  );
+                                }
+
+                                const hasBom = (sp.timeLossSec ?? 0) >= 12;
+                                const isWin = sp.legRank === 1;
+
                                 return (
                                   <td
                                     key={col.order}
-                                    className="py-2.5 px-2 text-right font-mono text-slate-300 dark:text-slate-700"
+                                    className={`py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap ${
+                                      hasBom
+                                        ? 'bg-amber-50/70 dark:bg-amber-950/25'
+                                        : isWin
+                                        ? 'bg-emerald-50/50 dark:bg-emerald-950/20'
+                                        : col.isRadio
+                                        ? 'bg-red-50/25 dark:bg-red-950/15'
+                                        : ''
+                                    }`}
                                   >
-                                    —
+                                    <div
+                                      className={
+                                        isWin
+                                          ? 'font-semibold text-emerald-700 dark:text-emerald-400'
+                                          : 'text-slate-800 dark:text-slate-200'
+                                      }
+                                    >
+                                      {isWin ? '★ ' : ''}
+                                      {formatDurationMmSs(sp.legSec)}
+                                      {sp.legRank ? ` (${sp.legRank})` : ''}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                      {formatDurationMmSs(sp.cumulativeSec)}
+                                      {hasBom && (
+                                        <span className="ml-1 font-semibold text-amber-700 dark:text-amber-400">
+                                          +{formatDurationMmSs(sp.timeLossSec ?? 0)} bom
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                 );
                               }
 
-                              if (sp.status === 'MISSING') {
-                                return (
-                                  <td
-                                    key={col.order}
-                                    className="py-2.5 px-2 text-right font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
-                                  >
-                                    Saknas
-                                  </td>
+                              // Löparen är ute i skogen / brickan är ännu inte utläst vid målet
+                              if (col.isRadio && col.code !== 999) {
+                                const radioSplit = r.radioSplits?.find((s) => s.controlCode === col.code);
+                                if (radioSplit) {
+                                  const effStart = r.startTimeSec ?? r.allocatedStartSec;
+                                  const passedTimeSec =
+                                    radioSplit.runningTimeSec ??
+                                    (effStart !== null && radioSplit.punchTimeSec >= effStart
+                                      ? radioSplit.punchTimeSec - effStart
+                                      : null);
+                                  const radioRank =
+                                    passedTimeSec !== null
+                                      ? radioRankingsByCode.get(col.code)?.get(r.id) ?? null
+                                      : null;
+
+                                  return (
+                                    <td
+                                      key={col.order}
+                                      className="py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap bg-red-50/35 dark:bg-red-950/20"
+                                    >
+                                      <div className="font-semibold text-red-700 dark:text-red-400 inline-flex items-center justify-end gap-1">
+                                        <span className="text-[11px]" title="ROC Radiostämpling">📡</span>
+                                        <span>{formatDurationMmSs(passedTimeSec)}</span>
+                                        {radioRank && (
+                                          <span className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                                            ({radioRank})
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[10px] text-slate-400 dark:text-slate-500">
+                                        Passerad
+                                      </div>
+                                    </td>
+                                  );
+                                }
+
+                                // Om löparen inte har passerat denna ROC-kontroll: kontrollera om det är NÄSTA radiokontroll på banan
+                                const nextRadioCode = courseRadioCodes.find(
+                                  (code) => !r.radioSplits?.some((s) => s.controlCode === code)
                                 );
+
+                                if (col.code === nextRadioCode && isRunning && displayedTimeSec !== null) {
+                                  return (
+                                    <td
+                                      key={col.order}
+                                      className="py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap bg-amber-50/60 dark:bg-amber-950/30"
+                                    >
+                                      <div className="font-semibold text-amber-700 dark:text-amber-400 inline-flex items-center justify-end gap-1">
+                                        <span className="relative flex h-1.5 w-1.5">
+                                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
+                                        </span>
+                                        <span>{formatDurationMmSs(displayedTimeSec)}</span>
+                                        <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                                          (live)
+                                        </span>
+                                      </div>
+                                      <div className="text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                                        På väg
+                                      </div>
+                                    </td>
+                                  );
+                                }
                               }
 
-                              if (sp.status === 'BROKEN_CTRL') {
-                                return (
-                                  <td
-                                    key={col.order}
-                                    className="py-2.5 px-2 text-right text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap"
-                                  >
-                                    Ur funk.
-                                  </td>
-                                );
-                              }
-
-                              const hasBom = (sp.timeLossSec ?? 0) >= 12;
-                              const isWin = sp.legRank === 1;
-
+                              // Övriga kontroller (ej radio, eller radio längre fram i banan) visar —
                               return (
                                 <td
                                   key={col.order}
-                                  className={`py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap ${
-                                    hasBom
-                                      ? 'bg-amber-50/70 dark:bg-amber-950/25'
-                                      : isWin
-                                      ? 'bg-emerald-50/50 dark:bg-emerald-950/20'
-                                      : ''
-                                  }`}
+                                  className="py-2.5 px-2 text-right font-mono text-slate-300 dark:text-slate-700"
                                 >
-                                  <div
-                                    className={
-                                      isWin
-                                        ? 'font-semibold text-emerald-700 dark:text-emerald-400'
-                                        : 'text-slate-800 dark:text-slate-200'
-                                    }
-                                  >
-                                    {isWin ? '★ ' : ''}
-                                    {formatDurationMmSs(sp.legSec)}
-                                    {sp.legRank ? ` (${sp.legRank})` : ''}
-                                  </div>
-                                  <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                    {formatDurationMmSs(sp.cumulativeSec)}
-                                    {hasBom && (
-                                      <span className="ml-1 font-semibold text-amber-700 dark:text-amber-400">
-                                        +{formatDurationMmSs(sp.timeLossSec ?? 0)} bom
-                                      </span>
-                                    )}
-                                  </div>
+                                  —
                                 </td>
                               );
                             })}
@@ -694,6 +881,7 @@ export function SplitsAnalysisTable({
                                     ) ?? course
                                   }
                                   classCompetitors={inClass}
+                                  stations={stations}
                                   onClose={() => setExpandedRunnerId(null)}
                                 />
                               </td>

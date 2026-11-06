@@ -800,9 +800,12 @@ export function PublicPortalView({
                     }
                     courses={raceData.courses}
                     competitors={filteredCompetitors}
+                    stations={raceData.stations}
                     selectedClassId={selectedClassId}
                     onSelectClassId={setSelectedClassId}
                     onSelectClub={setSelectedClubName}
+                    liveUpdates
+                    liveUpdateScope={raceData?.competition.id ?? shortCode ?? undefined}
                   />
                 ) : (
                   <div className="space-y-2.5">
