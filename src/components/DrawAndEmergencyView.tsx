@@ -690,36 +690,33 @@ export function DrawAndEmergencyView({
                   <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500">
-                        <th className="py-1.5 pl-3.5 pr-2">Starttid</th>
-                        <th className="py-1.5 px-2">Löpare & Klubb</th>
-                        <th className="hidden sm:table-cell py-1.5 px-2">SI-bricka</th>
+                        <th className="py-1.5 pl-3.5 pr-2 w-14 font-mono">Nummerlapp</th>
+                        <th className="py-1.5 px-2 w-24 font-mono">Bricknummer</th>
+                        <th className="py-1.5 px-2">Namn</th>
+                        <th className="py-1.5 px-2">Klubb</th>
+                        <th className="py-1.5 px-2 font-mono w-20">Starttid</th>
                         <th className="py-1.5 pl-2 pr-3.5 text-right">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
                       {inCls.map((r) => (
                         <tr key={r.id}>
-                          <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                          <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums text-slate-500">
+                            {r.bib ?? '—'}
+                          </td>
+                          <td className="py-1.5 px-2 font-mono tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {formatSiNumber(r.siNumber)}
+                          </td>
+                          <td className="py-1.5 px-2 font-medium text-slate-900 dark:text-slate-100">
+                            {r.fullName}
+                          </td>
+                          <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400 truncate max-w-[140px]">
+                            {r.club}
+                          </td>
+                          <td className="py-1.5 px-2 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
                             {r.allocatedStartSec !== null
                               ? formatSecondsAsClock(r.allocatedStartSec)
                               : 'Fri'}
-                          </td>
-                          <td className="py-1.5 px-2 max-w-[155px] sm:max-w-[230px]">
-                            <div className="flex items-baseline gap-1.5 min-w-0 truncate">
-                              <span className="font-mono tabular-nums text-[11px] text-slate-400 shrink-0">
-                                #{r.bib}
-                              </span>
-                              <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                                {r.fullName}
-                              </span>
-                              <span className="text-slate-300 dark:text-slate-700 shrink-0" aria-hidden="true">
-                                ·
-                              </span>
-                              <span className="text-[11px] text-slate-500 truncate">{r.club}</span>
-                            </div>
-                          </td>
-                          <td className="hidden sm:table-cell py-1.5 px-2 font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                            {formatSiNumber(r.siNumber)}
                           </td>
                           <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
                             {r.manualFinishTimeSec ? (

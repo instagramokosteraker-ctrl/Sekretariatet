@@ -1621,17 +1621,19 @@ export async function loadFullSeasonFromFirestore(options?: {
       ? clubData.competitionIds
       : [];
   
-  // If targetIds is empty, attempt to list competitions from /competitions directly
-  if (targetIds.length === 0) {
-    try {
+  // Merge targetIds with all reachable competitions from /competitions directly
+  try {
+    const compCol = collection(db, 'competitions');
+    const compListSnap = await getDocs(compCol).catch(async () => {
       const current = auth.currentUser;
-      const compCol = collection(db, 'competitions');
-      const q = current ? query(compCol, where('ownerUid', '==', current.uid)) : compCol;
-      const compListSnap = await getDocs(q);
-      targetIds = compListSnap.docs.map((d) => d.id);
-    } catch {
-      // If collection listing is restricted, fallback to empty
+      return current ? await getDocs(query(compCol, where('ownerUid', '==', current.uid))) : null;
+    });
+    if (compListSnap) {
+      const colIds = compListSnap.docs.map((d) => d.id);
+      targetIds = Array.from(new Set([...targetIds, ...colIds]));
     }
+  } catch {
+    // If collection listing is restricted, keep existing targetIds
   }
 
   if (targetIds.length === 0) {
@@ -3386,11 +3388,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   if (competitionData.status === 'COMPLETED' && !isSuperAdmin) {
     throw new Error('Det går inte att direktanmäla till en avslutad tävling.');
   }
-  if (competitionData.ownerUid !== current.uid && !isSuperAdmin) {
-    throw new Error(
-      'Ditt konto saknar behörighet att anmäla till den här tävlingen. Be tävlingens ägare om hjälp.'
-    );
-  }
 
   const siNumber = Number(params.payload.siNumber);
   const fullName = (params.payload.fullName || '').trim();
@@ -3521,8 +3518,8 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     competitionId,
     ...mutableCompetitor,
     ownerUid,
-    createdAt,
-    updatedAt: createdAt,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
   batch.update(competitionRef, {
     competitorCount: nextCompetitorCount,
@@ -3544,7 +3541,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
 
     if (!existingRunner || sameRunner) {
       const runnerData = {
-        siNumber,
         cardSeries: competitor.cardSeries,
         fullName: fullName.slice(0, 120),
         club: competitor.club.slice(0, 100) || 'Klubblös',
@@ -3569,6 +3565,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       } else {
         batch.set(runnerRef, {
           runnerId,
+          siNumber,
           ...runnerData,
           source: 'LEARNED_ENTRY',
           ownerUid,
@@ -3579,6 +3576,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
 
       runnerDbEntry = {
         id: runnerId,
+        siNumber,
         ...runnerData,
         source: runnerData.source as RunnerDbEntry['source'],
         updatedAt: nowIso,
@@ -3798,6 +3796,58 @@ export function subscribePublicCompetitionSummaries(
     );
   };
 
+  const parseCompDoc = (docId: string, data: Partial<CompetitionSummary>): CompetitionSummary => {
+    const status =
+      data.status === 'LIVE' ||
+      data.status === 'UPCOMING' ||
+      data.status === 'COMPLETED'
+        ? data.status
+        : 'UPCOMING';
+    return {
+      id: docId,
+      competitionId: docId,
+      shortCode: data.shortCode ?? '',
+      status,
+      name: data.name ?? '',
+      organizer: data.organizer ?? '',
+      date: data.date ?? '',
+      zeroTimeStr: data.zeroTimeStr ?? '18:00:00',
+      arenaInfo: data.arenaInfo ?? '',
+      seriesName: data.seriesName,
+      allowSelfRegistration: Boolean((data as { allowSelfRegistration?: boolean }).allowSelfRegistration),
+      enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
+      competitorCount: data.competitorCount ?? 0,
+      finishedCount: data.finishedCount ?? 0,
+      classCount: data.classCount ?? 0,
+    };
+  };
+
+  // 1. Direct collection listener for all competitions
+  let unsubscribeCol: (() => void) | null = null;
+  try {
+    const compCol = collection(db, 'competitions');
+    unsubscribeCol = onSnapshot(
+      compCol,
+      (snapshot) => {
+        for (const change of snapshot.docChanges()) {
+          const docId = change.doc.id;
+          if (change.type === 'removed') {
+            competitionsById.delete(docId);
+          } else {
+            competitionsById.set(docId, parseCompDoc(docId, change.doc.data() as Partial<CompetitionSummary>));
+          }
+        }
+        publish();
+      },
+      () => {
+        // Fallback gracefully if collection listing is restricted for current auth state
+      }
+    );
+  } catch {
+    // Ignore fallback
+  }
+
+  // 2. ClubSettings default listener to discover and listen to individually indexed competition IDs
   const unsubscribeClub = onSnapshot(
     doc(db, 'clubSettings', 'default'),
     (clubSnapshot) => {
@@ -3819,7 +3869,6 @@ export function subscribePublicCompetitionSummaries(
         if (!desiredIds.has(competitionId)) {
           unsubscribe();
           competitionUnsubscribers.delete(competitionId);
-          competitionsById.delete(competitionId);
         }
       }
 
@@ -3829,34 +3878,13 @@ export function subscribePublicCompetitionSummaries(
           doc(db, 'competitions', competitionId),
           (competitionSnapshot) => {
             if (!competitionSnapshot.exists()) {
-              competitionsById.delete(competitionId);
               publish();
               return;
             }
-
-            const data = competitionSnapshot.data() as Partial<CompetitionSummary>;
-            const status =
-              data.status === 'LIVE' ||
-              data.status === 'UPCOMING' ||
-              data.status === 'COMPLETED'
-                ? data.status
-                : 'UPCOMING';
-            competitionsById.set(competitionId, {
-              id: competitionId,
+            competitionsById.set(
               competitionId,
-              shortCode: data.shortCode ?? '',
-              status,
-              name: data.name ?? '',
-              organizer: data.organizer ?? '',
-              date: data.date ?? '',
-              zeroTimeStr: data.zeroTimeStr ?? '18:00:00',
-              arenaInfo: data.arenaInfo ?? '',
-              seriesName: data.seriesName,
-              enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
-              competitorCount: data.competitorCount ?? 0,
-              finishedCount: data.finishedCount ?? 0,
-              classCount: data.classCount ?? 0,
-            });
+              parseCompDoc(competitionId, competitionSnapshot.data() as Partial<CompetitionSummary>)
+            );
             publish();
           },
           (error) => {
@@ -3874,6 +3902,7 @@ export function subscribePublicCompetitionSummaries(
   );
 
   return () => {
+    if (unsubscribeCol) unsubscribeCol();
     unsubscribeClub();
     for (const unsubscribe of competitionUnsubscribers.values()) {
       unsubscribe();
@@ -3948,6 +3977,45 @@ export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
   }
 }
 
+/**
+ * Subscribes to /clubSettings/default in real-time so custom themes, branding, and Swish
+ * updates automatically propagate across all views and open browser tabs.
+ */
+export function subscribeClubSettingsFromFirestore(
+  onUpdate: (settings: ClubSettings) => void
+): () => void {
+  const clubRef = doc(db, 'clubSettings', 'default');
+  const unsubscribe = onSnapshot(
+    clubRef,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate({ ...DEFAULT_CLUB_SETTINGS });
+        return;
+      }
+      const data = snap.data() as Partial<ClubSettings>;
+      onUpdate({
+        clubName: (data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) || DEFAULT_CLUB_SETTINGS.clubName,
+        eventorOrgId: (data.eventorOrgId || '').trim().slice(0, 32),
+        swishNumber: (data.swishNumber || '').trim().slice(0, 20),
+        swishRecipientName: (data.swishRecipientName || data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100),
+        defaultDirectEntryFeeSek: clampInt(data.defaultDirectEntryFeeSek, 0, 10000, DEFAULT_CLUB_SETTINGS.defaultDirectEntryFeeSek),
+        rentalCardFeeSek: clampInt(data.rentalCardFeeSek, 0, 5000, DEFAULT_CLUB_SETTINGS.rentalCardFeeSek),
+        missingRentalFeeSek: clampInt(data.missingRentalFeeSek, 0, 20000, DEFAULT_CLUB_SETTINGS.missingRentalFeeSek),
+        portalTitle: (data.portalTitle || '').trim().slice(0, 80),
+        logoDataUrl: sanitizeCloudLogoDataUrl(data.logoDataUrl),
+        customBgColor: sanitizeCloudHexColor(data.customBgColor),
+        customTextColor: sanitizeCloudHexColor(data.customTextColor),
+        customAccentColor: sanitizeCloudHexColor(data.customAccentColor),
+        seriesScoringSettings: normalizeSeriesScoringSettings(data.seriesScoringSettings),
+      });
+    },
+    (err) => {
+      console.warn('Realtime-lyssnare på clubSettings misslyckades:', err);
+    }
+  );
+  return unsubscribe;
+}
+
 export interface CreateCompetitionInFirestoreParams {
   competitionId: string;
   shortCode?: string;
@@ -3959,6 +4027,7 @@ export interface CreateCompetitionInFirestoreParams {
   zeroTimeSec?: number;
   arenaInfo?: string;
   seriesName?: string;
+  allowSelfRegistration?: boolean;
   enableFeesAndSwish?: boolean;
   pinStart?: string;
   pinReadout?: string;
@@ -4013,6 +4082,7 @@ export async function createCompetitionInFirestore(
 
   const arenaInfo = (params.arenaInfo ?? '').trim().slice(0, 500);
   const seriesName = (params.seriesName ?? '').trim().slice(0, 80);
+  const allowSelfRegistration = Boolean(params.allowSelfRegistration);
   const enableFeesAndSwish = Boolean(params.enableFeesAndSwish);
 
   const pinStart = PIN_REGEX.test(params.pinStart || '') ? params.pinStart! : '1100';
@@ -4033,6 +4103,7 @@ export async function createCompetitionInFirestore(
     zeroTimeSec,
     arenaInfo,
     seriesName,
+    allowSelfRegistration,
     enableFeesAndSwish,
     competitorCount: 0,
     finishedCount: 0,

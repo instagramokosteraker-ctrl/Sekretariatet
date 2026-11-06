@@ -379,12 +379,10 @@ export function PublicPortalView({
                   </span>
                 </div>
 
-                <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-mono tabular-nums club-muted text-slate-600 dark:text-slate-400">
+                <div className="shrink-0 flex items-center text-xs font-mono tabular-nums club-muted text-slate-600 dark:text-slate-400">
                   <span>
                     {ev.finishedCount}/{ev.competitorCount} i mål
                   </span>
-                  <span aria-hidden="true">·</span>
-                  <span className="text-slate-400 dark:text-slate-500">/t/{ev.shortCode}</span>
                 </div>
               </button>
             ))}
@@ -913,49 +911,67 @@ export function PublicPortalView({
                         className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden"
                       >
                         <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/40">
-                          <h3 className="text-xs font-semibold">{cls.name}</h3>
+                          <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">{cls.name}</h3>
                           <span className="text-[11px] font-mono tabular-nums text-slate-500">
                             {inCls.length} anmälda
                           </span>
                         </div>
-                        <div className="divide-y divide-slate-200/80 dark:divide-slate-800/80 text-xs">
-                          {inCls.map((r) => (
-                            <div
-                              key={r.id}
-                              className="px-3.5 py-1.5 flex items-center justify-between gap-2"
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200 w-14 shrink-0">
-                                  {r.allocatedStartSec !== null
-                                    ? formatSecondsAsClock(r.allocatedStartSec)
-                                    : 'Fri'}
-                                </span>
-                                <div className="min-w-0 truncate">
-                                  <span className="font-medium text-slate-900 dark:text-slate-100">
-                                    {r.fullName}
-                                  </span>
-                                  <span className="text-[11px] text-slate-500 ml-1.5">
-                                    #{r.bib} ·{' '}
-                                    {r.club.trim() ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => setSelectedClubName(r.club.trim())}
-                                        className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
-                                      >
-                                        {r.club}
-                                      </button>
-                                    ) : (
-                                      'Klubblös'
-                                    )}
-                                  </span>
-                                </div>
-                              </div>
-                              <span className="font-mono tabular-nums text-[11px] text-slate-500 shrink-0">
-                                {formatSiNumber(r.siNumber)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                        {inCls.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-slate-400">
+                            Inga löpare anmälda i {cls.name}.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead>
+                                <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/40 dark:bg-slate-950/20">
+                                  <th className="py-2 pl-3.5 pr-2 w-14 font-mono">Nummerlapp</th>
+                                  <th className="py-2 px-2 w-24 font-mono">Bricknummer</th>
+                                  <th className="py-2 px-2">Namn</th>
+                                  <th className="py-2 px-2">Klubb</th>
+                                  <th className="py-2 pl-2 pr-3.5 text-right font-mono w-20">Starttid</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                                {inCls.map((r) => {
+                                  const startClock =
+                                    r.allocatedStartSec !== null
+                                      ? formatSecondsAsClock(r.allocatedStartSec)
+                                      : 'Fri';
+                                  return (
+                                    <tr key={r.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                                      <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                                        {r.bib ?? '—'}
+                                      </td>
+                                      <td className="py-1.5 px-2 font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                                        {formatSiNumber(r.siNumber)}
+                                      </td>
+                                      <td className="py-1.5 px-2 font-medium text-slate-900 dark:text-slate-100">
+                                        {r.fullName}
+                                      </td>
+                                      <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400 truncate max-w-[150px]">
+                                        {r.club.trim() ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => setSelectedClubName(r.club.trim())}
+                                            className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100 truncate text-left"
+                                          >
+                                            {r.club}
+                                          </button>
+                                        ) : (
+                                          'Klubblös'
+                                        )}
+                                      </td>
+                                      <td className="py-1.5 pl-2 pr-3.5 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                                        {startClock}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </section>
                     );
                   })}
@@ -1073,8 +1089,8 @@ export function PublicPortalView({
               </button>
             </div>
 
-            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-              PasserSI · /t/{shortCode}
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              {effectiveClubSettings?.portalTitle?.trim() || effectiveClubSettings?.clubName || 'PasserSI'}
             </span>
           </div>
         </div>

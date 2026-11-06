@@ -214,6 +214,7 @@ service cloud.firestore {
           'zeroTimeSec',
           'arenaInfo',
           'seriesName',
+          'allowSelfRegistration',
           'enableFeesAndSwish',
           'competitorCount',
           'finishedCount',
@@ -750,6 +751,8 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly([
+          'runnerId',
+          'siNumber',
           'cardSeries',
           'fullName',
           'club',
@@ -775,10 +778,7 @@ service cloud.firestore {
     match /competitions/{competitionId} {
       allow get: if isValidId(competitionId);
 
-      allow list: if isVerifiedUser() && (
-        resource.data.ownerUid == request.auth.uid ||
-        isBootstrappedAdmin()
-      );
+      allow list: if isVerifiedUser();
 
       allow create: if isVerifiedUser() &&
         isValidId(competitionId) &&
@@ -799,9 +799,12 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
-          // Action 1: Race Admin updates active/upcoming competition (Terminal State Locked once COMPLETED)
+          // Action 1: Club Admin updates active/upcoming competition (Terminal State Locked once COMPLETED)
           (
-            existing().ownerUid == request.auth.uid &&
+            (
+              existing().ownerUid == request.auth.uid ||
+              isAdmin()
+            ) &&
             existing().status != 'COMPLETED' &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'shortCode',
@@ -813,6 +816,7 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
+              'allowSelfRegistration',
               'enableFeesAndSwish',
               'competitorCount',
               'finishedCount',
@@ -840,6 +844,7 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
+              'allowSelfRegistration',
               'enableFeesAndSwish',
               'competitorCount',
               'finishedCount',
@@ -860,7 +865,7 @@ service cloud.firestore {
         isValidId(competitionId) &&
         resource != null &&
         (
-          (existing().ownerUid == request.auth.uid && existing().status != 'COMPLETED' && isAdmin()) ||
+          ((existing().ownerUid == request.auth.uid || isAdmin()) && existing().status != 'COMPLETED' && isAdmin()) ||
           isSuperAdmin()
         );
 
@@ -887,7 +892,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
             ) ||
@@ -908,7 +913,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'name',
@@ -938,7 +943,7 @@ service cloud.firestore {
           resource != null &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionExists(competitionId) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
@@ -970,7 +975,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
             ) ||
@@ -991,7 +996,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'name',
@@ -1033,7 +1038,7 @@ service cloud.firestore {
           resource != null &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionExists(competitionId) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
@@ -1065,7 +1070,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
             ) ||
@@ -1086,7 +1091,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'bib',
@@ -1146,7 +1151,7 @@ service cloud.firestore {
           resource != null &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionExists(competitionId) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
@@ -1217,7 +1222,7 @@ service cloud.firestore {
           isValidId(competitionId) &&
           isValidId(receiptId) &&
           parentCompetitionExists(competitionId) &&
-          parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+          (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
           isAdmin();
 
         allow list: if isVerifiedUser() &&
@@ -1225,6 +1230,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+            isAdmin() ||
             isSuperAdmin()
           ) &&
           isAdmin();
@@ -1239,7 +1245,7 @@ service cloud.firestore {
           incoming().clientReadoutId == receiptId &&
           incoming().createdAt == request.time &&
           parentCompetitionExists(competitionId) &&
-          parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+          (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
           parentCompetitionData(competitionId).status != 'COMPLETED' &&
           isAdmin();
 
@@ -1252,8 +1258,8 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
-              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
+              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
               isAdmin()
             ) ||
             isSuperAdmin()
@@ -1332,6 +1338,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+            isAdmin() ||
             isSuperAdmin()
           ) &&
           isAdmin();
@@ -1349,7 +1356,7 @@ service cloud.firestore {
           parentCompetitionData(competitionId).status != 'COMPLETED' &&
           (
             (
-              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
               isAdmin()
             ) ||
             isSuperAdmin()
@@ -1381,7 +1388,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
             ) ||
@@ -1395,7 +1402,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
               isAdmin()
             ) ||
@@ -1468,6 +1475,7 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+            isAdmin() ||
             isSuperAdmin()
           ) &&
           isAdmin();
@@ -1485,7 +1493,7 @@ service cloud.firestore {
           parentCompetitionData(competitionId).status != 'COMPLETED' &&
           (
             (
-              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
               isAdmin()
             ) ||
             isSuperAdmin()
@@ -1500,8 +1508,8 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           (
             (
-              existing().ownerUid == request.auth.uid &&
-              parentCompetitionData(competitionId).ownerUid == request.auth.uid &&
+              (existing().ownerUid == request.auth.uid || isAdmin()) &&
+              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
               isAdmin()
             ) ||
             isSuperAdmin()

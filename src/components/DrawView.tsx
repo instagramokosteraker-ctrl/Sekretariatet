@@ -336,12 +336,12 @@ export function DrawView({
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
                 <tr>
-                  <th className="px-3 py-2">Startnr</th>
-                  <th className="px-3 py-2">Starttid</th>
+                  <th className="px-3 py-2 w-20">Nummerlapp</th>
+                  <th className="px-3 py-2 w-28">Bricknummer</th>
                   <th className="px-3 py-2">Namn</th>
                   <th className="px-3 py-2">Klubb</th>
-                  <th className="px-3 py-2">SI-bricka</th>
-                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2 w-24">Starttid</th>
+                  <th className="px-3 py-2 w-20">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
@@ -361,9 +361,9 @@ export function DrawView({
                         : '—';
                     return (
                       <tr key={runner.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                        <td className="px-3 py-2 text-slate-500">{runner.bib ?? '—'}</td>
-                        <td className="px-3 py-2 font-semibold text-slate-900 dark:text-slate-100">
-                          {startClock}
+                        <td className="px-3 py-2 text-slate-500 tabular-nums">{runner.bib ?? '—'}</td>
+                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300 tabular-nums">
+                          {formatSiNumber(runner.siNumber)}
                         </td>
                         <td className="px-3 py-2 font-sans font-medium text-slate-900 dark:text-slate-100">
                           {runner.fullName}
@@ -371,8 +371,8 @@ export function DrawView({
                         <td className="px-3 py-2 font-sans text-slate-600 dark:text-slate-400">
                           {runner.club}
                         </td>
-                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
-                          {formatSiNumber(runner.siNumber)}
+                        <td className="px-3 py-2 font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                          {startClock}
                         </td>
                         <td className="px-3 py-2 font-sans">
                           <RunnerStatusIndicator status={runner.status} />

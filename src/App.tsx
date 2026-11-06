@@ -113,6 +113,7 @@ import {
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
   subscribePublicCompetitionSummaries,
   loadClubSettingsFromFirestore,
+  subscribeClubSettingsFromFirestore,
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
@@ -390,6 +391,7 @@ export default function App() {
   const [newEvtZeroTime, setNewEvtZeroTime] = useState('18:00:00');
   const [newEvtArena, setNewEvtArena] = useState('');
   const [newEvtSeriesName, setNewEvtSeriesName] = useState('');
+  const [newEvtSelfReg, setNewEvtSelfReg] = useState(true);
   const [newEvtFeesAndSwish, setNewEvtFeesAndSwish] = useState(false);
   const [newEvtCopyCourses, setNewEvtCopyCourses] = useState(true);
   const [newEvtCourseParsed, setNewEvtCourseParsed] = useState<ParsedIofDocument | null>(null);
@@ -533,16 +535,11 @@ export default function App() {
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
 
   useEffect(() => {
-    let active = true;
-    void loadClubSettingsFromFirestore()
-      .then((settings) => {
-        if (active) setClubSettings(settings);
-      })
-      .catch((error) => {
-        console.error('Kunde inte läsa klubbinställningar vid appstart:', error);
-      });
+    const unsubscribe = subscribeClubSettingsFromFirestore((settings) => {
+      setClubSettings(settings);
+    });
     return () => {
-      active = false;
+      unsubscribe();
     };
   }, []);
 
@@ -573,8 +570,7 @@ export default function App() {
   useEffect(() => {
     if (
       !firebaseUserUid ||
-      competitionsList.length === 0 ||
-      (!isEmptySeason && competitionsList.some((item) => item.id === activeEventId)) ||
+      (!isEmptySeason && activeEventId && competitionsList.some((item) => item.id === activeEventId)) ||
       hydratingCompetitionListRef.current
     ) {
       return;
@@ -584,6 +580,10 @@ export default function App() {
     void loadFullSeasonFromFirestore()
       .then((cloudSnap) => {
         if (!cloudSnap) return;
+        if (cloudSnap.events.length === 0) {
+          setIsEmptySeason(true);
+          return;
+        }
         const selectedEvent =
           cloudSnap.events.find((event) => event.competition.id === activeEventId) ??
           cloudSnap.events.find(
@@ -1384,6 +1384,7 @@ export default function App() {
           zeroTimeSec: parseTimeToSec(newEvtZeroTime),
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
+          allowSelfRegistration: newEvtSelfReg,
           enableFeesAndSwish: newEvtFeesAndSwish,
           courses: snap ? snap.courses : importedCourses,
           classes: snap ? snap.classes : importedClasses,
@@ -1404,6 +1405,7 @@ export default function App() {
           zeroTimeSec: parseTimeToSec(newEvtZeroTime),
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
+          allowSelfRegistration: newEvtSelfReg,
           enableFeesAndSwish: newEvtFeesAndSwish,
         };
         setCompetition(newComp);
@@ -1718,11 +1720,6 @@ export default function App() {
               {clubSettings.portalTitle?.trim() || 'PasserSI'}
             </span>
           </button>
-          {!isEmptySeason && (
-            <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
-              /t/{activePublicShortCode}
-            </span>
-          )}
         </div>
 
         {/* Competition & Role Context (Admin Multi-Event Switcher vs Locked Official Station) */}
@@ -2377,11 +2374,20 @@ export default function App() {
                     <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                       <input
                         type="checkbox"
+                        checked={newEvtSelfReg}
+                        onChange={(e) => setNewEvtSelfReg(e.target.checked)}
+                        className="rounded border-slate-300 dark:border-slate-700"
+                      />
+                      <span>Mobil självregistrering</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
                         checked={newEvtFeesAndSwish}
                         onChange={(e) => setNewEvtFeesAndSwish(e.target.checked)}
                         className="rounded border-slate-300 dark:border-slate-700"
                       />
-                      <span>Avgiftsuppföljning</span>
+                      <span>Avgift / Swish-QR</span>
                     </label>
                     {!isEmptySeason && !newEvtCourseParsed && (
                       <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
@@ -3737,6 +3743,9 @@ export default function App() {
                   onApplySeriesScoringUpdate={(settings, standings) => {
                     setClubSettings(settings);
                     setSeriesStandings(standings);
+                  }}
+                  onUpdateClubSettings={(settings) => {
+                    setClubSettings(settings);
                   }}
                 />
               )}
