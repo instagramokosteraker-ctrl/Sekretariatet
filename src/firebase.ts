@@ -1602,11 +1602,11 @@ export async function loadFullSeasonFromFirestore(options?: {
   const clubSettings: ClubSettings = {
     clubName: (clubData?.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
     eventorOrgId: clubData?.eventorOrgId || '',
-    swishNumber: clubData?.swishNumber || '123 481 92 04',
-    swishRecipientName: clubData?.swishRecipientName || clubData?.clubName || 'OK Österåker Tävlingskassa',
-    defaultDirectEntryFeeSek: Number(clubData?.defaultDirectEntryFeeSek ?? 100),
-    rentalCardFeeSek: Number(clubData?.rentalCardFeeSek ?? 30),
-    missingRentalFeeSek: Number(clubData?.missingRentalFeeSek ?? 650),
+    swishNumber: clubData?.swishNumber || '',
+    swishRecipientName: clubData?.swishRecipientName || '',
+    defaultDirectEntryFeeSek: Number(clubData?.defaultDirectEntryFeeSek ?? 0),
+    rentalCardFeeSek: Number(clubData?.rentalCardFeeSek ?? 0),
+    missingRentalFeeSek: Number(clubData?.missingRentalFeeSek ?? 0),
     portalTitle: (clubData?.portalTitle || '').trim().slice(0, 80),
     logoDataUrl: sanitizeCloudLogoDataUrl(clubData?.logoDataUrl),
     customBgColor: sanitizeCloudHexColor(clubData?.customBgColor),
@@ -2905,7 +2905,7 @@ export async function submitOnlinePunchToFirestore(
   });
   const event = season?.events.find((candidate) => candidate.competition.id === context.competitionId);
   if (!event) throw new Error('Tävlingen hittades inte i Firestore för online-stämplingen.');
-  const configuredStation = event.stations.find(
+  const configuredStation = (event.stations || []).find(
     (station) => station.active && station.stationCode === punch.stationCode
   );
   const stationFunction: StationFunction = configuredStation?.stationFunction ?? 'RADIO';
@@ -3436,7 +3436,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   const validation =
     hasPendingReadout && finishTimeSec !== null
       ? validateCompetitorReadout(
-          targetClass,
+          targetClass ?? undefined,
           params.courses,
           effectiveStart,
           finishTimeSec,
@@ -3885,12 +3885,12 @@ export function subscribePublicCompetitionSummaries(
 
 export const DEFAULT_CLUB_SETTINGS: ClubSettings = {
   clubName: 'OK Österåker',
-  eventorOrgId: '603',
-  swishNumber: '123 481 92 04',
-  swishRecipientName: 'OK Österåker Tävlingskassa',
-  defaultDirectEntryFeeSek: 100,
-  rentalCardFeeSek: 30,
-  missingRentalFeeSek: 650,
+  eventorOrgId: '',
+  swishNumber: '',
+  swishRecipientName: '',
+  defaultDirectEntryFeeSek: 0,
+  rentalCardFeeSek: 0,
+  missingRentalFeeSek: 0,
   portalTitle: '',
   logoDataUrl: '',
   customBgColor: '',
@@ -4139,14 +4139,14 @@ export async function createCompetitionInFirestore(
       await setDoc(clubRef, {
         settingId: 'default',
         clubName: organizer,
-        eventorOrgId: '603',
-        swishNumber: '123 481 92 04',
-        swishRecipientName: `${organizer} Tävlingskassa`,
-        defaultDirectEntryFeeSek: 100,
-        rentalCardFeeSek: 30,
-        missingRentalFeeSek: 650,
+        eventorOrgId: '',
+        swishNumber: '',
+        swishRecipientName: '',
+        defaultDirectEntryFeeSek: 0,
+        rentalCardFeeSek: 0,
+        missingRentalFeeSek: 0,
         activeEventId: competitionId,
-        demoCleared: false,
+        demoCleared: true,
         competitionIds: [competitionId],
         ownerUid,
         createdAt: serverTimestamp(),
@@ -4240,105 +4240,26 @@ export async function saveClubSettingsToFirestore(
 }
 
 /**
- * Seeds demo competitions directly in Firestore when the season is empty or upon user reset.
+ * Clears demo competitions directly in Firestore when the season is reset.
  */
-export async function seedDemoSeasonToFirestore(ownerUidParam?: string): Promise<CloudSeasonSnapshot> {
-  const current = await ensureValidFirestoreUser();
-  const ownerUid = sanitizeFirestoreId(ownerUidParam || current?.uid || 'usr_admin', 'usr');
-
-  const comp1Id = 'evt-live';
-  await createCompetitionInFirestore({
-    competitionId: comp1Id,
-    shortCode: 'oko26a',
-    name: 'Höstsprinten & Natt-KM 2026',
-    organizer: 'OK Österåker',
-    date: getStockholmTodayIso(),
-    status: 'LIVE',
-    zeroTimeStr: '10:00:00',
-    zeroTimeSec: 36000,
-    arenaInfo: 'Hackstastugan, Åkersberga. Parkering vid Hackstaskolan.',
-    seriesName: 'Reflexcupen 26/27',
-    enableFeesAndSwish: true,
-    courses: [
-      {
-        id: 'crs-1',
-        name: 'Bana 1 — Långa (5,4 km)',
-        lengthMeters: 5400,
-        climbMeters: 145,
-        controls: [31, 38, 42, 55, 61, 100],
-      },
-      {
-        id: 'crs-2',
-        name: 'Bana 2 — Mellan (3,8 km)',
-        lengthMeters: 3800,
-        climbMeters: 95,
-        controls: [32, 42, 55, 100],
-      },
-      {
-        id: 'crs-3',
-        name: 'Bana 3 — Korta (2,3 km)',
-        lengthMeters: 2300,
-        climbMeters: 50,
-        controls: [33, 44, 100],
-      },
-    ],
-    classes: [
-      {
-        id: 'cls-1',
-        name: 'Öppen Lång',
-        courseId: 'crs-1',
-        classFormat: 'STANDARD',
-        allowDirectEntry: true,
-        freeStart: true,
-        autoMatchCourse: false,
-        feeSek: 100,
-      },
-      {
-        id: 'cls-2',
-        name: 'Öppen Mellan',
-        courseId: 'crs-2',
-        classFormat: 'STANDARD',
-        allowDirectEntry: true,
-        freeStart: true,
-        autoMatchCourse: false,
-        feeSek: 100,
-      },
-      {
-        id: 'cls-3',
-        name: 'Öppen Kort',
-        courseId: 'crs-3',
-        classFormat: 'STANDARD',
-        allowDirectEntry: true,
-        freeStart: true,
-        autoMatchCourse: false,
-        feeSek: 100,
-      },
-    ],
-    pinStart: '1100',
-    pinReadout: '2200',
-    pinForest: '3300',
-    pinSpeaker: '4400',
-  });
+export async function seedDemoSeasonToFirestore(_ownerUidParam?: string): Promise<CloudSeasonSnapshot> {
+  await ensureValidFirestoreUser();
 
   const clubRef = doc(db, 'clubSettings', 'default');
   const clubSnap = await getDoc(clubRef);
   if (clubSnap.exists()) {
     await updateDoc(clubRef, {
-      activeEventId: comp1Id,
-      competitionIds: [comp1Id],
-      demoCleared: false,
+      activeEventId: '',
+      competitionIds: [],
+      demoCleared: true,
       updatedAt: serverTimestamp(),
     });
   }
 
-  const loaded = await loadFullSeasonFromFirestore();
-  if (!loaded) {
-    return {
-      activeEventId: comp1Id,
-      demoCleared: false,
-      clubSettings: DEFAULT_CLUB_SETTINGS,
-      events: [],
-    };
-  }
-  return loaded;
+  return {
+    activeEventId: '',
+    demoCleared: true,
+    clubSettings: DEFAULT_CLUB_SETTINGS,
+    events: [],
+  };
 }

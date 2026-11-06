@@ -523,12 +523,12 @@ export default function App() {
   const [demoCleared, setDemoCleared] = useState<boolean>(false);
   const [clubSettings, setClubSettings] = useState<ClubSettings>({
     clubName: 'OK Österåker',
-    eventorOrgId: '603',
-    swishNumber: '123 481 92 04',
-    swishRecipientName: 'OK Österåker Tävlingskassa',
-    defaultDirectEntryFeeSek: 100,
-    rentalCardFeeSek: 30,
-    missingRentalFeeSek: 650,
+    eventorOrgId: '',
+    swishNumber: '',
+    swishRecipientName: '',
+    defaultDirectEntryFeeSek: 0,
+    rentalCardFeeSek: 0,
+    missingRentalFeeSek: 0,
   });
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
 
@@ -2547,13 +2547,14 @@ export default function App() {
                     });
                     const contentType = res.headers.get('content-type') || '';
                     const responseBody = await res.text();
-                    let responseData: {
+                    interface ImportBatchResult {
                       error?: string;
                       addedCourses?: number;
                       addedClasses?: number;
                       addedEntries?: number;
                       syncedRunnerDb?: number;
-                    } | null = null;
+                    }
+                    let responseData: ImportBatchResult | null = null;
                     try {
                       const parsedResponse: unknown = JSON.parse(responseBody);
                       if (
@@ -2561,7 +2562,7 @@ export default function App() {
                         typeof parsedResponse === 'object' &&
                         !Array.isArray(parsedResponse)
                       ) {
-                        responseData = parsedResponse as typeof responseData;
+                        responseData = parsedResponse as ImportBatchResult;
                       }
                     } catch {
                       responseData = null;
@@ -3246,7 +3247,20 @@ export default function App() {
                       };
                       throw new Error(errorBody.error ?? 'Kunde inte importera löpardatabasen.');
                     }
-                    const imported = runners.map((runner) => ({ ...runner, source }));
+                    const nowIso = new Date().toISOString();
+                    const imported: RunnerDbEntry[] = runners.map((runner) => ({
+                      id: `rdb_${runner.siNumber}`,
+                      siNumber: runner.siNumber,
+                      cardSeries: inferCardSeries(runner.siNumber),
+                      fullName: runner.fullName,
+                      club: runner.club,
+                      birthYear: runner.birthYear ?? null,
+                      defaultClassName: runner.defaultClassName ?? null,
+                      eventorPersonId: null,
+                      eventorOrgId: null,
+                      source,
+                      updatedAt: nowIso,
+                    }));
                     await saveCompetitionImportToFirestore({
                       competitionId: activeEventId,
                       courses,

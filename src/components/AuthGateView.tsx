@@ -64,38 +64,7 @@ function extractFirebaseErrorCode(err: unknown): string {
   return match ? match[0].toLowerCase() : '';
 }
 
-const DEFAULT_DEMO_COMPETITIONS: GateCompetitionItem[] = [
-  {
-    id: 'evt-live',
-    shortCode: 'oko26a',
-    name: 'Höstsprinten & Natt-KM 2026',
-    organizer: 'OK Österåker',
-    date: '2026-11-02',
-    status: 'LIVE',
-    pinsCustomized: false,
-    demoPinHints: { START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' },
-  },
-  {
-    id: 'evt-upcoming',
-    shortCode: 'oko26b',
-    name: 'Torsdagsträning Lunsen — Nattintervaller',
-    organizer: 'OK Österåker',
-    date: '2026-11-05',
-    status: 'UPCOMING',
-    pinsCustomized: false,
-    demoPinHints: { START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' },
-  },
-  {
-    id: 'evt-completed',
-    shortCode: 'oko26c',
-    name: 'Klubbserien Etapp 1 — Nåsten',
-    organizer: 'OK Österåker',
-    date: '2026-10-21',
-    status: 'COMPLETED',
-    pinsCustomized: false,
-    demoPinHints: { START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' },
-  },
-];
+const DEFAULT_DEMO_COMPETITIONS: GateCompetitionItem[] = [];
 
 export function AuthGateView({
   darkMode,
@@ -107,8 +76,14 @@ export function AuthGateView({
   onOpenPublicPortal,
 }: AuthGateViewProps) {
   const compList = competitions && competitions.length > 0 ? competitions : DEFAULT_DEMO_COMPETITIONS;
-  const [selectedEventId, setSelectedEventId] = useState<string>(() => compList[0]?.id || 'evt-live');
+  const [selectedEventId, setSelectedEventId] = useState<string>(() => compList[0]?.id || '');
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (compList.length > 0 && (!selectedEventId || !compList.some((c) => c.id === selectedEventId))) {
+      setSelectedEventId(compList[0].id);
+    }
+  }, [compList, selectedEventId]);
 
   useEffect(() => {
     setLogoBroken(false);
@@ -320,17 +295,23 @@ export function AuthGateView({
                 <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
                   Välj tävling:
                 </label>
-                <select
-                  value={selectedEventId}
-                  onChange={(e) => setSelectedEventId(e.target.value)}
-                  className="w-full px-3 py-2 text-xs font-medium bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100"
-                >
-                  {compList.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.date})
-                    </option>
-                  ))}
-                </select>
+                {compList.length > 0 ? (
+                  <select
+                    value={selectedEventId}
+                    onChange={(e) => setSelectedEventId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs font-medium bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100"
+                  >
+                    {compList.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.date})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="p-3 bg-slate-100 dark:bg-slate-800/60 rounded-lg text-xs text-slate-600 dark:text-slate-400">
+                    Ingen tävling har lagts till ännu. Logga in som administratör nedan för att skapa eller importera säsongens första tävling.
+                  </div>
+                )}
               </div>
 
               {/* PIN input display */}

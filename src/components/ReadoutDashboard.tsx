@@ -1034,7 +1034,7 @@ export function ReadoutDashboard({
                 type="button"
                 disabled={busy}
                 onClick={() => void runScenarioEventorDbMemberReadout()}
-                title="Hämtar Anton Lindholm (OK Österåker) automatiskt ur Löpardatabasen vid målavläsning."
+                title="Hämtar oanmäld löpare automatiskt ur Löpardatabasen/Eventor vid målavläsning."
                 className="w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-2"
               >
                 <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">

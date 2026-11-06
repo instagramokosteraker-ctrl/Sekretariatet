@@ -165,6 +165,8 @@ export function AccessControlView({
   seriesStandings,
   currentUser,
   onApplyStateSnapshot,
+  onActivateCompetition,
+  onUpdateCompetitionMeta,
   onOpenCreateCompetition,
   onOpenPublicEvent,
   onApplySeriesScoringUpdate,
@@ -1829,13 +1831,6 @@ export function AccessControlView({
                     <FolderPlus className="w-3.5 h-3.5" />
                     <span>Skapa första tävlingen</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleResetDemoSeed()}
-                    className="px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap shrink-0"
-                  >
-                    Återställ demotävlingar
-                  </button>
                 </div>
               </div>
             ) : (
@@ -2205,39 +2200,6 @@ export function AccessControlView({
                     />
                   </label>
                 </div>
-              </div>
-
-              <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs text-slate-500 dark:text-slate-400">
-                  Testa med exempeldata?
-                </span>
-                {confirmResetSeed ? (
-                  <div className="inline-flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      disabled={eventBusyId === 'RESET_SEED'}
-                      onClick={() => void handleResetDemoSeed()}
-                      className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-md whitespace-nowrap shrink-0"
-                    >
-                      Bekräfta
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmResetSeed(false)}
-                      className="px-2 py-1 text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap shrink-0"
-                    >
-                      Avbryt
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmResetSeed(true)}
-                    className="px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap shrink-0"
-                  >
-                    Återställ demotävlingar
-                  </button>
-                )}
               </div>
             </section>
           </div>
