@@ -39,6 +39,10 @@ function getPlacementClass(rank: number | null | undefined): string {
   return 'text-slate-500 dark:text-slate-400';
 }
 
+function getPlacementTimeClass(rank: number | null | undefined): string {
+  return rank === 1 || rank === 2 || rank === 3 ? getPlacementClass(rank) : '';
+}
+
 interface SplitsAnalysisTableProps {
   classes: CompClass[];
   courses: Course[];
@@ -705,8 +709,10 @@ export function SplitsAnalysisTable({
                             )}
 
                             {detailedView && (
-                              <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                                {formatSecondsAsClock(r.startTimeSec ?? r.allocatedStartSec)}
+                              <td className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 text-slate-600 dark:text-slate-400 whitespace-nowrap align-top">
+                                <div className="leading-4">
+                                  {formatSecondsAsClock(r.startTimeSec ?? r.allocatedStartSec)}
+                                </div>
                               </td>
                             )}
 
@@ -730,10 +736,14 @@ export function SplitsAnalysisTable({
                                 return (
                                   <td
                                     key={col.order}
-                                    className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap"
+                                    className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 whitespace-nowrap align-top"
                                   >
-                                    <div>
-                                      {formatDurationMmSs(controlResult?.legSec ?? null)}{' '}
+                                    <div className="leading-4">
+                                      <span
+                                        className={getPlacementTimeClass(controlResult?.legRank)}
+                                      >
+                                        {formatDurationMmSs(controlResult?.legSec ?? null)}
+                                      </span>{' '}
                                       {controlResult?.legRank && (
                                         <span className={getPlacementClass(controlResult.legRank)}>
                                           ({controlResult.legRank})
@@ -741,7 +751,15 @@ export function SplitsAnalysisTable({
                                       )}
                                     </div>
                                     <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                      {formatDurationMmSs(controlResult?.cumulativeSec ?? null)}{' '}
+                                      <span
+                                        className={getPlacementTimeClass(
+                                          controlResult?.cumulativeRank
+                                        )}
+                                      >
+                                        {formatDurationMmSs(
+                                          controlResult?.cumulativeSec ?? null
+                                        )}
+                                      </span>{' '}
                                       {controlResult?.cumulativeRank && (
                                         <span
                                           className={getPlacementClass(
@@ -764,9 +782,11 @@ export function SplitsAnalysisTable({
                                 return (
                                   <td
                                     key={col.order}
-                                    className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
+                                    className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 text-slate-800 dark:text-slate-200 whitespace-nowrap align-top"
                                   >
-                                    {formatDurationMmSs(liveLegTimeSec)}
+                                    <div className="leading-4">
+                                      {formatDurationMmSs(liveLegTimeSec)}
+                                    </div>
                                   </td>
                                 );
                               }
@@ -809,7 +829,7 @@ export function SplitsAnalysisTable({
                               return (
                                 <td
                                   key={col.order}
-                                  className={`py-2 px-2 text-right font-mono tabular-nums whitespace-nowrap ${
+                                  className={`py-1.5 px-2 text-right font-mono tabular-nums leading-4 whitespace-nowrap align-top ${
                                     hasBom
                                       ? 'bg-amber-50/70 dark:bg-amber-950/25'
                                       : isWin
@@ -819,12 +839,22 @@ export function SplitsAnalysisTable({
                                 >
                                   <div
                                     className={
-                                      isWin && !controlResult
-                                        ? 'font-semibold text-emerald-700 dark:text-emerald-400'
-                                        : 'text-slate-800 dark:text-slate-200'
+                                      `leading-4 ${
+                                        isWin && !controlResult
+                                          ? 'font-semibold text-emerald-700 dark:text-emerald-400'
+                                          : 'text-slate-800 dark:text-slate-200'
+                                      }`
                                     }
                                   >
-                                    {formatDurationMmSs(controlResult?.legSec ?? sp.legSec)}{' '}
+                                    <span
+                                      className={getPlacementTimeClass(
+                                        controlResult?.legRank ?? sp.legRank
+                                      )}
+                                    >
+                                      {formatDurationMmSs(
+                                        controlResult?.legSec ?? sp.legSec
+                                      )}
+                                    </span>{' '}
                                     {(controlResult?.legRank ?? sp.legRank) && (
                                       <span
                                         className={getPlacementClass(
@@ -836,9 +866,15 @@ export function SplitsAnalysisTable({
                                     )}
                                   </div>
                                   <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                    {formatDurationMmSs(
-                                      controlResult?.cumulativeSec ?? sp.cumulativeSec
-                                    )}{' '}
+                                    <span
+                                      className={getPlacementTimeClass(
+                                        controlResult?.cumulativeRank ?? sp.cumulativeRank
+                                      )}
+                                    >
+                                      {formatDurationMmSs(
+                                        controlResult?.cumulativeSec ?? sp.cumulativeSec
+                                      )}
+                                    </span>{' '}
                                     {(controlResult?.cumulativeRank ?? sp.cumulativeRank) && (
                                       <span
                                         className={getPlacementClass(
@@ -859,8 +895,10 @@ export function SplitsAnalysisTable({
                               );
                             })}
 
-                            <td className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                              {formatDurationMmSs(displayedTimeSec)}
+                            <td className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap align-top">
+                              <div className="leading-4">
+                                {formatDurationMmSs(displayedTimeSec)}
+                              </div>
                               {!detailedView && liveLegTimeSec !== null && (
                                 <div className="mt-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
                                   {nextRadioControl
