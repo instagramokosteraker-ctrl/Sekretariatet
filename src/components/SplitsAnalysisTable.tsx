@@ -307,7 +307,6 @@ export function SplitsAnalysisTable({
             >
           >();
           for (const col of legColumns) {
-            if (col.code === 999) continue;
             const results = inClass.map((runner) => {
               const split = runner.validation?.splits.find(
                 (item) => item.order === col.order
