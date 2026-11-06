@@ -70,6 +70,7 @@ export interface CompetitionMeta {
   id?: string;
   shortCode?: string;
   status?: EventLifecycleStatus;
+  statusOverride?: boolean;
   name: string;
   organizer: string;
   date: string;
@@ -511,6 +512,7 @@ export interface CloudEventExportItem {
     id: string;
     shortCode: string;
     status: EventLifecycleStatus;
+    statusOverride?: boolean;
     name: string;
     organizer: string;
     date: string;

@@ -258,6 +258,24 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
+    await assertFails(
+      raceAdminCtx.firestore().doc('competitions/evt_done').update({
+        status: 'LIVE',
+        statusOverride: true,
+        competitorCount: 99,
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    // Reopening a completed competition is allowed only as a status-only change.
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('competitions/evt_done').update({
+        status: 'LIVE',
+        statusOverride: true,
+        updatedAt: serverTimestamp(),
+      })
+    );
+
     // 9. Timestamp Forgery -> DENIED
     await assertFails(
       raceAdminCtx.firestore().doc('clubSettings/default').set({

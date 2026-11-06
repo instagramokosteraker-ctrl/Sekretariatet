@@ -210,6 +210,7 @@ service cloud.firestore {
           'organizer',
           'date',
           'status',
+          'statusOverride',
           'zeroTimeStr',
           'zeroTimeSec',
           'arenaInfo',
@@ -243,6 +244,10 @@ service cloud.firestore {
         (
           !data.keys().hasAny(['allowSelfRegistration']) ||
           data.allowSelfRegistration is bool
+        ) &&
+        (
+          !data.keys().hasAny(['statusOverride']) ||
+          data.statusOverride is bool
         ) &&
         data.enableFeesAndSwish is bool &&
         data.competitorCount is int && data.competitorCount >= 0 && data.competitorCount <= 50000 &&
@@ -812,6 +817,7 @@ service cloud.firestore {
               'organizer',
               'date',
               'status',
+              'statusOverride',
               'zeroTimeStr',
               'zeroTimeSec',
               'arenaInfo',
@@ -840,6 +846,7 @@ service cloud.firestore {
               'organizer',
               'date',
               'status',
+              'statusOverride',
               'zeroTimeStr',
               'zeroTimeSec',
               'arenaInfo',
@@ -855,6 +862,18 @@ service cloud.firestore {
               'pinForest',
               'pinSpeaker',
               'pinsCustomized',
+              'updatedAt'
+            ])
+          ) ||
+          // Action 3: Club Admin may reopen a completed competition by changing only its status.
+          (
+            isAdmin() &&
+            existing().status == 'COMPLETED' &&
+            (incoming().status == 'LIVE' || incoming().status == 'UPCOMING') &&
+            incoming().statusOverride == true &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'statusOverride',
               'updatedAt'
             ])
           )

@@ -400,6 +400,7 @@ interface CloudEventExportItem {
     id: string;
     shortCode: string;
     status: EventLifecycleStatus;
+    statusOverride?: boolean;
     name: string;
     organizer: string;
     date: string;
@@ -2147,6 +2148,15 @@ function resolveEffectiveCompetitionStatus(
   ev: SingleEventRecord,
   now = new Date()
 ): EventLifecycleStatus {
+  if (
+    ev.competition.statusOverride &&
+    (ev.competition.status === 'LIVE' ||
+      ev.competition.status === 'UPCOMING' ||
+      ev.competition.status === 'COMPLETED')
+  ) {
+    return ev.competition.status;
+  }
+
   const todayIso = getStockholmDateIso(now);
   const nowSec = getStockholmClockSec(now);
   const eventDate = (ev.competition.date || todayIso).trim();
@@ -3687,6 +3697,7 @@ async function startServer() {
         id: ev.competition.id,
         shortCode: ev.competition.shortCode,
         status: resolveEffectiveCompetitionStatus(ev),
+        statusOverride: Boolean(ev.competition.statusOverride),
         name: ev.competition.name,
         organizer: ev.competition.organizer,
         date: ev.competition.date,
@@ -3745,6 +3756,7 @@ async function startServer() {
           id: item.competition.id,
           shortCode: item.competition.shortCode || 'oko26',
           status: item.competition.status || 'LIVE',
+          statusOverride: Boolean(item.competition.statusOverride),
           name: item.competition.name || 'Tävling',
           organizer: ensureClubSettings(seasonDb).clubName,
           date: item.competition.date || getStockholmDateIso(),
@@ -4042,6 +4054,15 @@ async function startServer() {
       return;
     }
     const body = req.body as Partial<CompetitionMeta>;
+    if (
+      body.status !== undefined &&
+      body.status !== 'LIVE' &&
+      body.status !== 'UPCOMING' &&
+      body.status !== 'COMPLETED'
+    ) {
+      res.status(400).json({ error: 'Ogiltig tävlingsstatus.' });
+      return;
+    }
     if (body.name !== undefined && body.name.trim()) {
       target.competition.name = body.name.trim();
     }
@@ -4058,13 +4079,12 @@ async function startServer() {
         target.competition.zeroTimeStr = body.zeroTimeStr.trim();
       }
     }
-    if (body.status === 'COMPLETED') {
-      target.competition.status = 'COMPLETED';
+    if (body.status !== undefined) {
+      target.competition.status = body.status;
+      target.competition.statusOverride = true;
     } else if (
-      body.status === 'LIVE' ||
-      body.status === 'UPCOMING' ||
-      body.date !== undefined ||
-      body.zeroTimeStr !== undefined
+      !target.competition.statusOverride &&
+      (body.date !== undefined || body.zeroTimeStr !== undefined)
     ) {
       target.competition.status = 'LIVE';
       target.competition.status = resolveEffectiveCompetitionStatus(target);
@@ -5888,6 +5908,15 @@ async function startServer() {
       return;
     }
     const body = req.body as Partial<CompetitionMeta>;
+    if (
+      body.status !== undefined &&
+      body.status !== 'LIVE' &&
+      body.status !== 'UPCOMING' &&
+      body.status !== 'COMPLETED'
+    ) {
+      res.status(400).json({ error: 'Ogiltig tävlingsstatus.' });
+      return;
+    }
     if (body.name?.trim()) db.competition.name = body.name.trim();
     db.competition.organizer = ensureClubSettings(seasonDb).clubName;
     if (body.date?.trim()) db.competition.date = body.date.trim();
@@ -5900,13 +5929,12 @@ async function startServer() {
         db.competition.zeroTimeStr = body.zeroTimeStr.trim();
       }
     }
-    if (body.status === 'COMPLETED') {
-      db.competition.status = 'COMPLETED';
+    if (body.status !== undefined) {
+      db.competition.status = body.status;
+      db.competition.statusOverride = true;
     } else if (
-      body.status === 'LIVE' ||
-      body.status === 'UPCOMING' ||
-      body.date !== undefined ||
-      body.zeroTimeStr !== undefined
+      !db.competition.statusOverride &&
+      (body.date !== undefined || body.zeroTimeStr !== undefined)
     ) {
       db.competition.status = 'LIVE';
       db.competition.status = resolveEffectiveCompetitionStatus(db);

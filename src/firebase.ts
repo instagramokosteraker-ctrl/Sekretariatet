@@ -974,7 +974,10 @@ export async function updateCompetitionMetadataInFirestore(
     enableFeesAndSwish?: boolean;
   }
 ): Promise<void> {
-  const context = await getCompetitionMutationContext(competitionId);
+  const context = await getCompetitionMutationContext(
+    competitionId,
+    patch.status === 'LIVE' || patch.status === 'UPCOMING'
+  );
   const mutable: Record<string, unknown> = {};
   if ('name' in patch) mutable.name = (patch.name || '').trim().slice(0, 140);
   if ('organizer' in patch) mutable.organizer = (patch.organizer || '').trim().slice(0, 100);
@@ -984,7 +987,17 @@ export async function updateCompetitionMetadataInFirestore(
     }
     mutable.date = patch.date;
   }
-  if ('status' in patch) mutable.status = patch.status;
+  if ('status' in patch) {
+    if (
+      patch.status !== 'LIVE' &&
+      patch.status !== 'UPCOMING' &&
+      patch.status !== 'COMPLETED'
+    ) {
+      throw new Error('Ogiltig tävlingsstatus.');
+    }
+    mutable.status = patch.status;
+    mutable.statusOverride = true;
+  }
   if ('zeroTimeStr' in patch) {
     if (!patch.zeroTimeStr || !CLOCK_REGEX.test(patch.zeroTimeStr)) {
       throw new Error('Ogiltig nolltid.');
@@ -1167,6 +1180,7 @@ export async function syncFullSeasonToFirestore(
         ? ev.competition.zeroTimeStr
         : '10:00:00',
       zeroTimeSec: clampInt(ev.competition.zeroTimeSec, 0, 86400, 36000),
+      statusOverride: Boolean(ev.competition.statusOverride),
       arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
       seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
       enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
@@ -1198,7 +1212,10 @@ export async function syncFullSeasonToFirestore(
 
     if (existingComp) {
       const isOwner = existingComp.ownerUid === ownerUid;
-      const lockedTerminal = existingComp.status === 'COMPLETED' && !isSuperAdmin;
+      const isManualReopen =
+        ev.competition.statusOverride === true && targetStatus !== 'COMPLETED';
+      const lockedTerminal =
+        existingComp.status === 'COMPLETED' && !isSuperAdmin && !isManualReopen;
       if ((!isOwner && !isSuperAdmin) || lockedTerminal) {
         continue;
       }
@@ -1972,6 +1989,7 @@ export async function loadFullSeasonFromFirestore(options?: {
         id: competitionId,
         shortCode: String(compDocData.shortCode || 'oko26'),
         status,
+        statusOverride: Boolean(compDocData.statusOverride),
         name: String(compDocData.name || 'Tävling'),
         organizer: String(compDocData.organizer || clubSettings.clubName),
         date: String(compDocData.date || getStockholmTodayIso()),
@@ -2322,7 +2340,8 @@ interface CompetitionMutationContext {
 }
 
 async function getCompetitionMutationContext(
-  rawCompetitionId: string
+  rawCompetitionId: string,
+  allowCompletedStatusUpdate = false
 ): Promise<CompetitionMutationContext> {
   const current = await ensureValidFirestoreUser();
   if (
@@ -2355,7 +2374,11 @@ async function getCompetitionMutationContext(
   if (competition.ownerUid !== current.uid && !isSuperAdmin) {
     throw new Error('Ditt konto saknar behörighet att ändra den här tävlingen.');
   }
-  if (competition.status === 'COMPLETED' && !isSuperAdmin) {
+  if (
+    competition.status === 'COMPLETED' &&
+    !isSuperAdmin &&
+    !allowCompletedStatusUpdate
+  ) {
     throw new Error('Det går inte att ändra en avslutad tävling.');
   }
 
@@ -2405,7 +2428,10 @@ export async function deleteCourseFromFirestore(
   competitionId: string,
   courseId: string
 ): Promise<void> {
-  const context = await getCompetitionMutationContext(competitionId);
+  const context = await getCompetitionMutationContext(
+    competitionId,
+    patch.status === 'LIVE' || patch.status === 'UPCOMING'
+  );
   const id = sanitizeFirestoreId(courseId, 'crs');
   await deleteDoc(doc(db, 'competitions', context.competitionId, 'courses', id));
 }

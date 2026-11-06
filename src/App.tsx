@@ -1249,14 +1249,18 @@ export default function App() {
       },
       'Kunde inte uppdatera tävlingen.'
     );
-    if (useFirestore) {
+    if (useFirestore || (patch.status !== undefined && firebaseUserPresent)) {
       await updateCompetitionMetadataInFirestore(eventId, patch);
     }
+    const savedPatch = {
+      ...patch,
+      ...(patch.status ? { statusOverride: true } : {}),
+    };
     setCompetitionsList((current) =>
       current.map((item) => (item.id === eventId ? { ...item, ...patch } : item))
     );
     if (activeEventId === eventId) {
-      setCompetition((current) => ({ ...current, ...patch }));
+      setCompetition((current) => ({ ...current, ...savedPatch }));
     }
   };
 
@@ -2522,9 +2526,21 @@ export default function App() {
                       },
                       'Kunde inte spara tävlingsinställningarna.'
                     );
-                    if (!useFirestore) return;
-                    await updateCompetitionMetadataInFirestore(activeEventId, patch);
-                    setCompetition((current) => ({ ...current, ...patch }));
+                    if (useFirestore || ('status' in patch && firebaseUserPresent)) {
+                      await updateCompetitionMetadataInFirestore(activeEventId, patch);
+                    }
+                    const savedPatch = {
+                      ...patch,
+                      ...('status' in patch ? { statusOverride: true } : {}),
+                    };
+                    setCompetition((current) => ({ ...current, ...savedPatch }));
+                    setCompetitionsList((current) =>
+                      current.map((item) =>
+                        item.id === activeEventId
+                          ? { ...item, ...(patch.status ? { status: patch.status } : {}) }
+                          : item
+                      )
+                    );
                   }}
                   onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
                   onUpdateEventorSettings={async (patch) => {
