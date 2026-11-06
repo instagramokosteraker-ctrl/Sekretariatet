@@ -1324,16 +1324,18 @@ export function StartCorralView({
           </div>
         </div>
 
-        <div>
+        <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
-                <th className="py-1.5 pl-3.5 pr-2 w-16">Start</th>
-                <th className="py-1.5 px-2">Löpare · Klubb</th>
-                <th className="hidden sm:table-cell py-1.5 px-2">Klass</th>
-                <th className="hidden md:table-cell py-1.5 px-2">SI-bricka</th>
-                <th className="hidden lg:table-cell py-1.5 px-2">Status</th>
-                <th className="py-1.5 pl-2 pr-3.5 text-right">Åtgärd</th>
+                <th className="py-1.5 pl-3.5 pr-2 w-16 whitespace-nowrap">Nummerlapp</th>
+                <th className="py-1.5 px-2 whitespace-nowrap">Bricknummer</th>
+                <th className="py-1.5 px-2 whitespace-nowrap">Namn</th>
+                <th className="py-1.5 px-2 whitespace-nowrap">Klubb</th>
+                <th className="py-1.5 px-2 whitespace-nowrap">Starttid</th>
+                <th className="hidden sm:table-cell py-1.5 px-2 whitespace-nowrap">Klass</th>
+                <th className="hidden lg:table-cell py-1.5 px-2 whitespace-nowrap">Status</th>
+                <th className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">Åtgärd</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
@@ -1343,42 +1345,11 @@ export function StartCorralView({
 
                 return (
                   <tr key={r.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                    <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                      {r.startTimeSec !== null &&
-                      (r.status === 'IN_FOREST' ||
-                        r.status === 'PRELIMINARY_FIN' ||
-                        r.status === 'OK' ||
-                        r.status === 'MP') ? (
-                        <span
-                          className="text-emerald-700 dark:text-emerald-400"
-                          title="Registrerad starttid"
-                        >
-                          {formatSecondsAsClock(r.startTimeSec)}
-                        </span>
-                      ) : r.allocatedStartSec !== null ? (
-                        formatSecondsAsClock(r.allocatedStartSec)
-                      ) : (
-                        <span className="text-slate-500 font-normal">Fri</span>
-                      )}
+                    <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap font-medium">
+                      #{r.bib}
                     </td>
 
-                    <td className="py-1.5 px-2 max-w-[155px] sm:max-w-none">
-                      <div className="flex flex-wrap items-baseline gap-x-1.5 truncate">
-                        <span className="font-mono text-slate-500">#{r.bib}</span>
-                        <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                          {r.fullName}
-                        </span>
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                          · {r.club}
-                        </span>
-                      </div>
-                    </td>
-
-                    <td className="hidden sm:table-cell py-1.5 px-2 font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                      {cls?.name ?? '-'}
-                    </td>
-
-                    <td className="hidden md:table-cell py-1.5 px-2 whitespace-nowrap">
+                    <td className="py-1.5 px-2 whitespace-nowrap">
                       {isSwapping ? (
                         <div className="inline-flex items-center gap-1">
                           <input
@@ -1426,6 +1397,37 @@ export function StartCorralView({
                           </button>
                         </div>
                       )}
+                    </td>
+
+                    <td className="py-1.5 px-2 font-medium text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                      {r.fullName}
+                    </td>
+
+                    <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                      {r.club || '—'}
+                    </td>
+
+                    <td className="py-1.5 px-2 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                      {r.startTimeSec !== null &&
+                      (r.status === 'IN_FOREST' ||
+                        r.status === 'PRELIMINARY_FIN' ||
+                        r.status === 'OK' ||
+                        r.status === 'MP') ? (
+                        <span
+                          className="text-emerald-700 dark:text-emerald-400"
+                          title="Registrerad starttid"
+                        >
+                          {formatSecondsAsClock(r.startTimeSec)}
+                        </span>
+                      ) : r.allocatedStartSec !== null ? (
+                        formatSecondsAsClock(r.allocatedStartSec)
+                      ) : (
+                        <span className="text-slate-500 font-normal">Fri</span>
+                      )}
+                    </td>
+
+                    <td className="hidden sm:table-cell py-1.5 px-2 font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                      {cls?.name ?? '-'}
                     </td>
 
                     <td className="hidden lg:table-cell py-1.5 px-2 whitespace-nowrap">

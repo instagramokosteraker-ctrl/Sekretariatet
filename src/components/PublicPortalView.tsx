@@ -918,43 +918,51 @@ export function PublicPortalView({
                             {inCls.length} anmälda
                           </span>
                         </div>
-                        <div className="divide-y divide-slate-200/80 dark:divide-slate-800/80 text-xs">
-                          {inCls.map((r) => (
-                            <div
-                              key={r.id}
-                              className="px-3.5 py-1.5 flex items-center justify-between gap-2"
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200 w-14 shrink-0">
-                                  {r.allocatedStartSec !== null
-                                    ? formatSecondsAsClock(r.allocatedStartSec)
-                                    : 'Fri'}
-                                </span>
-                                <div className="min-w-0 truncate">
-                                  <span className="font-medium text-slate-900 dark:text-slate-100">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
+                                <th className="py-1.5 pl-3.5 pr-2 w-16 whitespace-nowrap">Nummerlapp</th>
+                                <th className="py-1.5 px-2 whitespace-nowrap">Bricknummer</th>
+                                <th className="py-1.5 px-2 whitespace-nowrap">Namn</th>
+                                <th className="py-1.5 px-2 whitespace-nowrap">Klubb</th>
+                                <th className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">Starttid</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
+                              {inCls.map((r) => (
+                                <tr key={r.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
+                                  <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                                    {r.bib ? `#${r.bib}` : '—'}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                    {formatSiNumber(r.siNumber)}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-medium text-slate-900 dark:text-slate-100 whitespace-nowrap">
                                     {r.fullName}
-                                  </span>
-                                  <span className="text-[11px] text-slate-500 ml-1.5">
-                                    #{r.bib} ·{' '}
+                                  </td>
+                                  <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">
                                     {r.club.trim() ? (
                                       <button
                                         type="button"
                                         onClick={() => setSelectedClubName(r.club.trim())}
-                                        className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                        className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100 text-left"
                                       >
                                         {r.club}
                                       </button>
                                     ) : (
                                       'Klubblös'
                                     )}
-                                  </span>
-                                </div>
-                              </div>
-                              <span className="font-mono tabular-nums text-[11px] text-slate-500 shrink-0">
-                                {formatSiNumber(r.siNumber)}
-                              </span>
-                            </div>
-                          ))}
+                                  </td>
+                                  <td className="py-1.5 pl-2 pr-3.5 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                                    {r.allocatedStartSec !== null
+                                      ? formatSecondsAsClock(r.allocatedStartSec)
+                                      : 'Fri'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       </section>
                     );
