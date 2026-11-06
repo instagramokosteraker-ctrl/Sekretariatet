@@ -2514,6 +2514,7 @@ export default function App() {
                 <CompetitionSettingsView
                   isAdmin={isAdminSession}
                   competition={competition}
+                  availableSeriesNames={availableSeriesNames}
                   eventor={eventor}
                   runnerDbCount={runnerDb.length}
                   onUpdateCompetition={async (patch) => {

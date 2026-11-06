@@ -32,6 +32,7 @@ import {
 interface CompetitionSettingsViewProps {
   isAdmin?: boolean;
   competition: CompetitionMeta;
+  availableSeriesNames: string[];
   eventor: EventorIntegrationStatus;
   runnerDbCount: number;
   onUpdateCompetition: (patch: Partial<CompetitionMeta>) => Promise<void>;
@@ -68,6 +69,7 @@ interface CompetitionSettingsViewProps {
 export function CompetitionSettingsView({
   isAdmin = true,
   competition,
+  availableSeriesNames,
   eventor,
   runnerDbCount,
   onUpdateCompetition,
@@ -326,17 +328,22 @@ export function CompetitionSettingsView({
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Klubbserie / Cup (valfritt)
+                Klubbserie/Cup
               </label>
               <div className="relative">
                 <Trophy className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-                <input
-                  type="text"
+                <select
                   value={compSeries}
                   onChange={(e) => setCompSeries(e.target.value)}
-                  placeholder="t.ex. Klubbserien 2026"
                   className="w-full pl-8 pr-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-red-500"
-                />
+                >
+                  <option value="">Ingen</option>
+                  {availableSeriesNames.map((seriesName) => (
+                    <option key={seriesName} value={seriesName}>
+                      {seriesName}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>

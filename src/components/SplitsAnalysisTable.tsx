@@ -256,9 +256,9 @@ export function SplitsAnalysisTable({
 
           const activeSortOrder = sortByLegOrder[cls.id] ?? null;
 
-          // Build leg columns for the detailed view.
+          // Simplified results keep radio controls and the final leg while omitting ordinary controls.
           const legColumns: { order: number; code: number; label: string; bestLegSec: number | null }[] =
-            detailedView && course && !isRogaining && !isForked
+            course && !isRogaining && !isForked
               ? [
                   ...course.controls.map((ctrl, idx) => {
                     const order = idx + 1;
@@ -288,6 +288,11 @@ export function SplitsAnalysisTable({
                   },
                 ]
               : [];
+          const visibleLegColumns = detailedView
+            ? legColumns
+            : legColumns.filter(
+                (col) => radioControlCodes.has(col.code) || col.code === 999
+              );
 
           let displayRows = [
             ...officialTimed,
@@ -453,25 +458,16 @@ export function SplitsAnalysisTable({
               ) : (
                 <div className="overflow-x-auto">
                   <table
-                    className={`w-full text-left border-collapse text-xs ${
-                      detailedView ? 'table-auto' : 'table-fixed'
-                    }`}
+                    className="w-full table-auto text-left border-collapse text-xs"
                   >
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                         <th className="py-1.5 pl-3 pr-1.5 w-12">Plac</th>
-                        <th className="py-1.5 px-2 w-[36%]">
-                          {detailedView ? 'Namn / Klubb' : 'Namn'}
+                        <th className="py-1.5 px-2 min-w-[140px] max-w-[220px]">
+                          Namn / Klubb
                         </th>
-                        {!detailedView && (
-                          <th className="hidden sm:table-cell py-1.5 px-2 w-[26%]">
-                            Klubb
-                          </th>
-                        )}
-                        {detailedView && (
-                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
-                        )}
-                        {detailedView && legColumns.map((col) => {
+                        <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
+                        {visibleLegColumns.map((col) => {
                           const isSorted = activeSortOrder === col.order;
                           const isRadioControl = radioControlCodes.has(col.code);
                           return (
@@ -547,11 +543,11 @@ export function SplitsAnalysisTable({
                               {!isForked && <ArrowDownUp className="w-2.5 h-2.5 opacity-60" />}
                             </button>
                           </th>
-                        ) : (
-                          <th className="py-1.5 px-2 text-right whitespace-nowrap">
-                            {isRogaining ? 'Poäng' : isForked ? 'Gaffel' : 'Bom'}
-                          </th>
-                        )}
+                        ) : isRogaining ? (
+                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Poäng</th>
+                        ) : isForked ? (
+                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Gaffel</th>
+                        ) : null}
                         <th className="py-1.5 pl-1.5 pr-3 text-right">Status</th>
                       </tr>
                     </thead>
@@ -612,7 +608,9 @@ export function SplitsAnalysisTable({
                         const isExpanded = expandedRunnerId === r.id;
                         const totalCols = detailedView
                           ? 3 + legColumns.length + (isRogaining ? 3 : 1) + 3
-                          : 7;
+                          : 6 +
+                            visibleLegColumns.length +
+                            (isRogaining || isForked ? 1 : 0);
 
                         return (
                           <React.Fragment key={r.id}>
@@ -638,42 +636,8 @@ export function SplitsAnalysisTable({
                                 : '—'}
                             </td>
 
-                            <td
-                              className={`py-1.5 px-2 whitespace-nowrap ${
-                                detailedView ? 'min-w-[140px] max-w-[220px]' : 'max-w-[165px] sm:max-w-none'
-                              }`}
-                            >
-                              {detailedView ? (
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-1 min-w-0">
-                                    <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                                      {r.fullName}
-                                    </span>
-                                    {isExpanded ? (
-                                      <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
-                                    ) : (
-                                      <ChevronDown className="w-3 h-3 text-slate-400 shrink-0 opacity-60" />
-                                    )}
-                                  </div>
-                                  {r.club.trim() ? (
-                                    <button
-                                      type="button"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        onSelectClub?.(r.club.trim());
-                                      }}
-                                      className="block max-w-full truncate text-[11px] text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
-                                      title={r.club}
-                                    >
-                                      {r.club}
-                                    </button>
-                                  ) : (
-                                    <span className="block truncate text-[11px] text-slate-400">
-                                      Klubblös
-                                    </span>
-                                  )}
-                                </div>
-                              ) : (
+                            <td className="py-1.5 px-2 min-w-[140px] max-w-[220px] whitespace-nowrap">
+                              <div className="min-w-0">
                                 <div className="flex items-center gap-1 min-w-0">
                                   <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
                                     {r.fullName}
@@ -684,11 +648,6 @@ export function SplitsAnalysisTable({
                                     <ChevronDown className="w-3 h-3 text-slate-400 shrink-0 opacity-60" />
                                   )}
                                 </div>
-                              )}
-                            </td>
-
-                            {!detailedView && (
-                              <td className="hidden sm:table-cell py-1.5 px-2 overflow-hidden whitespace-nowrap">
                                 {r.club.trim() ? (
                                   <button
                                     type="button"
@@ -696,7 +655,7 @@ export function SplitsAnalysisTable({
                                       event.stopPropagation();
                                       onSelectClub?.(r.club.trim());
                                     }}
-                                    className="inline-block max-w-full truncate align-bottom text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                    className="block max-w-full truncate text-[11px] text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
                                     title={r.club}
                                   >
                                     {r.club}
@@ -704,18 +663,16 @@ export function SplitsAnalysisTable({
                                 ) : (
                                   <span className="block truncate text-slate-400">Klubblös</span>
                                 )}
-                              </td>
-                            )}
+                              </div>
+                            </td>
 
-                            {detailedView && (
-                              <td className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 text-slate-600 dark:text-slate-400 whitespace-nowrap align-top">
-                                <div className="leading-4">
-                                  {formatSecondsAsClock(r.startTimeSec ?? r.allocatedStartSec)}
-                                </div>
-                              </td>
-                            )}
+                            <td className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 text-slate-600 dark:text-slate-400 whitespace-nowrap align-top">
+                              <div className="leading-4">
+                                {formatSecondsAsClock(r.startTimeSec ?? r.allocatedStartSec)}
+                              </div>
+                            </td>
 
-                            {detailedView && legColumns.map((col) => {
+                            {visibleLegColumns.map((col) => {
                               const isRadioControl = radioControlCodes.has(col.code);
                               const radioSplit = isRadioControl
                                 ? passedRadioSplits.find(
@@ -965,7 +922,7 @@ export function SplitsAnalysisTable({
                               <td className="py-1.5 px-2 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap">
                                 {r.validation?.matchedCourseName ?? '—'}
                               </td>
-                            ) : (
+                            ) : detailedView ? (
                               <td
                                 className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap"
                               >
@@ -984,7 +941,7 @@ export function SplitsAnalysisTable({
                                   <span className="text-slate-300 dark:text-slate-700">—</span>
                                 )}
                               </td>
-                            )}
+                            ) : null}
 
                             <td className="py-1.5 pl-1.5 pr-3 text-right whitespace-nowrap">
                               <RunnerStatusIndicator status={r.status} compact />
