@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownUp, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowDownUp, ChevronDown, ChevronUp, Zap } from 'lucide-react';
 import type { CompClass, Competitor, Course, SIStation } from '../types/sportident';
 import {
   formatDurationMmSs,
@@ -211,9 +211,12 @@ export function SplitsAnalysisTable({
                 (course?.controls.indexOf(a.stationCode) ?? 0) -
                 (course?.controls.indexOf(b.stationCode) ?? 0)
             );
-          const hasRadioControls =
-            configuredRadioControls.length > 0 ||
-            inClass.some((competitor) => competitor.radioSplits.length > 0);
+          const radioControlCodes = new Set([
+            ...configuredRadioControls.map((station) => station.stationCode),
+            ...inClass.flatMap((competitor) =>
+              competitor.radioSplits.map((split) => split.controlCode)
+            ),
+          ]);
 
           const officialTimed = inClass
             .filter(
@@ -376,15 +379,15 @@ export function SplitsAnalysisTable({
                         {detailedView && (
                           <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
                         )}
-                        {detailedView && hasRadioControls && (
-                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Radiokontroller</th>
-                        )}
                         {detailedView && legColumns.map((col) => {
                           const isSorted = activeSortOrder === col.order;
+                          const isRadioControl = radioControlCodes.has(col.code);
                           return (
                             <th
                               key={col.order}
-                              className="py-1.5 px-2 text-right font-mono whitespace-nowrap"
+                              className={`py-1.5 px-2 text-right font-mono whitespace-nowrap ${
+                                isRadioControl ? 'text-red-600 dark:text-red-400' : ''
+                              }`}
                             >
                               <button
                                 type="button"
@@ -394,10 +397,20 @@ export function SplitsAnalysisTable({
                                     ? 'text-red-600 dark:text-red-400 font-semibold'
                                     : ''
                                 }`}
-                                title={`Sortera ${cls.name} efter sträcktid till ${col.label}`}
+                                title={
+                                  isRadioControl
+                                    ? `Radiokontroll ${col.label} · sortera ${cls.name} efter sträcktid`
+                                    : `Sortera ${cls.name} efter sträcktid till ${col.label}`
+                                }
                               >
                                 <span className="inline-flex items-center gap-1">
                                   <span>{col.label}</span>
+                                  {isRadioControl && (
+                                    <Zap
+                                      className="w-2.5 h-2.5 fill-current"
+                                      aria-label="Radiokontroll"
+                                    />
+                                  )}
                                   <ArrowDownUp className="w-2.5 h-2.5 opacity-60" />
                                 </span>
                                 {col.bestLegSec !== null && (
@@ -462,20 +475,19 @@ export function SplitsAnalysisTable({
                           (a, b) => a.punchTimeSec - b.punchTimeSec
                         );
                         const lastPassedConfiguredRadioIndex = passedRadioSplits.reduce(
-                          (lastIndex, split) =>
-                            Math.max(
-                              lastIndex,
-                              configuredRadioControls.findIndex(
-                                (station) => station.stationCode === split.controlCode
-                              )
-                            ),
+                          (lastIndex, split) => {
+                            const index = configuredRadioControls.findIndex(
+                              (station) => station.stationCode === split.controlCode
+                            );
+                            return Math.max(lastIndex, index);
+                          },
                           -1
                         );
                         const nextRadioControl = configuredRadioControls.find(
                           (_, index) => index > lastPassedConfiguredRadioIndex
                         );
                         const liveLegTimeSec =
-                          isRunning && hasRadioControls
+                          isRunning && radioControlCodes.size > 0
                             ? getLiveLegTimeSec(
                                 r.startTimeSec ?? r.allocatedStartSec,
                                 passedRadioSplits.length > 0
@@ -501,11 +513,7 @@ export function SplitsAnalysisTable({
 
                         const isExpanded = expandedRunnerId === r.id;
                         const totalCols = detailedView
-                          ? 4 +
-                            (hasRadioControls ? 1 : 0) +
-                            legColumns.length +
-                            (isRogaining ? 3 : 1) +
-                            3
+                          ? 4 + legColumns.length + (isRogaining ? 3 : 1) + 3
                           : 7;
 
                         return (
@@ -573,33 +581,44 @@ export function SplitsAnalysisTable({
                               </td>
                             )}
 
-                            {detailedView && hasRadioControls && (
-                              <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                                <div>
-                                  {passedRadioSplits.length > 0
-                                  ? passedRadioSplits
-                                      .map(
-                                        (split) =>
-                                          `(${split.controlCode}) ${formatDurationMmSs(split.runningTimeSec)}`
-                                      )
-                                      .join(' · ')
-                                  : '—'}
-                                </div>
-                                {liveLegTimeSec !== null && (
-                                  <div className="mt-0.5 font-semibold text-amber-700 dark:text-amber-400">
-                                    {nextRadioControl
-                                      ? `Nästa (${nextRadioControl.stationCode})`
-                                      : 'Mål'}{' '}
-                                    {formatDurationMmSs(liveLegTimeSec)}
-                                  </div>
-                                )}
-                              </td>
-                            )}
-
                             {detailedView && legColumns.map((col) => {
+                              const isRadioControl = radioControlCodes.has(col.code);
+                              const radioSplit = isRadioControl
+                                ? passedRadioSplits.find(
+                                    (split) => split.controlCode === col.code
+                                  )
+                                : undefined;
+                              const isNextRadioControl =
+                                nextRadioControl?.stationCode === col.code;
+                              const isFinishLeg = col.code === 999;
                               const sp = r.validation?.splits.find(
                                 (s) => s.order === col.order
                               );
+                              if (radioSplit) {
+                                return (
+                                  <td
+                                    key={col.order}
+                                    className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
+                                  >
+                                    {formatDurationMmSs(radioSplit.runningTimeSec)}
+                                  </td>
+                                );
+                              }
+                              if (
+                                isRunning &&
+                                liveLegTimeSec !== null &&
+                                (isNextRadioControl ||
+                                  (isFinishLeg && !nextRadioControl))
+                              ) {
+                                return (
+                                  <td
+                                    key={col.order}
+                                    className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
+                                  >
+                                    {formatDurationMmSs(liveLegTimeSec)}
+                                  </td>
+                                );
+                              }
                               if (!sp) {
                                 return (
                                   <td
@@ -675,7 +694,7 @@ export function SplitsAnalysisTable({
                               {!detailedView && liveLegTimeSec !== null && (
                                 <div className="mt-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
                                   {nextRadioControl
-                                    ? `Nästa (${nextRadioControl.stationCode})`
+                                    ? `(${nextRadioControl.stationCode})`
                                     : 'Mål'}{' '}
                                   {formatDurationMmSs(liveLegTimeSec)}
                                 </div>
