@@ -2275,7 +2275,7 @@ export default function App() {
                     </select>
                     {availableSeriesNames.length === 0 && (
                       <p className="mt-1 text-[10px] text-slate-500">
-                        Skapa serier under Hyrbrickor & serier i Klubbadmin.
+                        Skapa serier under Tävlingar och Serier → Serier.
                       </p>
                     )}
                   </div>
