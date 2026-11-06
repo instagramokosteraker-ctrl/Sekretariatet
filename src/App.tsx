@@ -590,7 +590,6 @@ export default function App() {
   const [stations, setStations] = useState<SIStation[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [runnerDb, setRunnerDb] = useState<RunnerDbEntry[]>([]);
-  const [runnerForDirectEntry, setRunnerForDirectEntry] = useState<number | null>(null);
   useEffect(() => {
     if (
       !firebaseUserUid ||
@@ -1324,6 +1323,119 @@ export default function App() {
         emergency,
       });
     }
+  };
+
+  const handleCreateDirectEntry = async (
+    payload: Parameters<typeof saveDirectCompetitionEntryToFirestore>[0]['payload']
+  ): Promise<string | null> => {
+    try {
+      const res = await apiFetch('/api/competitors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) return null;
+      if (res.status !== 404 && res.status !== 405) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        return err.error ?? 'Kunde inte spara anmälan.';
+      }
+    } catch {
+      // Use Firestore when the optional Secretariat API is unavailable.
+    }
+
+    try {
+      const saved = await saveDirectEntryToFirestore(payload);
+      setCompetitors((current) => [saved.competitor, ...current]);
+      const savedIsFinished =
+        saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
+      setCompetitionsList((current) =>
+        current.map((item) =>
+          item.id === activeEventId
+            ? {
+                ...item,
+                competitorCount: item.competitorCount + 1,
+                finishedCount: Math.min(
+                  item.competitorCount + 1,
+                  item.finishedCount + (savedIsFinished ? 1 : 0)
+                ),
+              }
+            : item
+        )
+      );
+      const savedRunner = saved.runnerDbEntry;
+      if (savedRunner) {
+        setRunnerDb((current) => {
+          const existingIndex = current.findIndex(
+            (runner) => runner.siNumber === savedRunner.siNumber
+          );
+          if (existingIndex < 0) return [savedRunner, ...current];
+          return current.map((runner, index) =>
+            index === existingIndex ? savedRunner : runner
+          );
+        });
+      }
+      const now = new Date();
+      const className =
+        classes.find((candidate) => candidate.id === saved.competitor.classId)?.name ?? null;
+      setEvents((current) => [
+        {
+          id: `ev_${Date.now()}`,
+          timestamp: now.toISOString(),
+          clock24h: new Intl.DateTimeFormat('sv-SE', {
+            timeZone: 'Europe/Stockholm',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }).format(now),
+          eventType: 'DIRECT_ENTRY',
+          siNumber: saved.competitor.siNumber,
+          competitorId: saved.competitor.id,
+          competitorName: saved.competitor.fullName,
+          club: saved.competitor.club,
+          className,
+          stationCode: 1,
+          stationName: 'Sekretariat — Direktanmälan',
+          runningTimeSec: saved.competitor.runningTimeSec,
+          message: `Direktanmäld i ${className ?? '-'}${
+            saved.competitor.isRentalCard ? ' (Hyrbricka utlämnad)' : ''
+          }`,
+        },
+        ...current,
+      ]);
+      return null;
+    } catch (error) {
+      console.error('Kunde inte spara direktanmälan till Firestore:', error);
+      return error instanceof Error ? error.message : 'Kunde inte spara anmälan i Firestore.';
+    }
+  };
+
+  const handleBulkRunnerRegistration = async (runners: RunnerDbEntry[]) => {
+    const registeredSiNumbers: number[] = [];
+    const errors: string[] = [];
+    for (const runner of runners) {
+      const classId =
+        classes.find(
+          (candidate) =>
+            candidate.name.toLocaleLowerCase() ===
+            runner.defaultClassName?.toLocaleLowerCase()
+        )?.id ??
+        classes[3]?.id ??
+        classes[0]?.id;
+      const error = await handleCreateDirectEntry({
+        siNumber: runner.siNumber,
+        cardSeries: runner.cardSeries,
+        fullName: runner.fullName,
+        club: runner.club,
+        classId,
+        isRentalCard: false,
+        isBorrowedCard: false,
+        feePaid: false,
+        allocatedStartSec: null,
+      });
+      if (error) errors.push(`${runner.fullName}: ${error}`);
+      else registeredSiNumbers.push(runner.siNumber);
+    }
+    return { registeredSiNumbers, errors };
   };
 
   const handleCreateCompetition = async (e: React.FormEvent) => {
@@ -3168,90 +3280,7 @@ export default function App() {
                     }
                     if (soundEnabledRef.current) playMeosFeedbackTone('registration');
                   }}
-                  onCreateCompetitor={async (payload) => {
-                    try {
-                      const res = await apiFetch('/api/competitors', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                      });
-                      if (res.ok) return null;
-                      if (res.status !== 404 && res.status !== 405) {
-                        const err = (await res.json().catch(() => ({}))) as { error?: string };
-                        return err.error ?? 'Kunde inte spara anmälan.';
-                      }
-                    } catch {
-                      // Use Firestore when the optional Secretariat API is unavailable.
-                    }
-
-                    try {
-                      const saved = await saveDirectEntryToFirestore(payload);
-                      setCompetitors((current) => [saved.competitor, ...current]);
-                      const savedIsFinished =
-                        saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
-                      setCompetitionsList((current) =>
-                        current.map((item) =>
-                          item.id === activeEventId
-                            ? {
-                                ...item,
-                                competitorCount: item.competitorCount + 1,
-                                finishedCount: Math.min(
-                                  item.competitorCount + 1,
-                                  item.finishedCount + (savedIsFinished ? 1 : 0)
-                                ),
-                              }
-                            : item
-                        )
-                      );
-                      const savedRunner = saved.runnerDbEntry;
-                      if (savedRunner) {
-                        setRunnerDb((current) => {
-                          const existingIndex = current.findIndex(
-                            (runner) => runner.siNumber === savedRunner.siNumber
-                          );
-                          if (existingIndex < 0) return [savedRunner, ...current];
-                          return current.map((runner, index) =>
-                            index === existingIndex ? savedRunner : runner
-                          );
-                        });
-                      }
-                      const now = new Date();
-                      const className =
-                        classes.find((candidate) => candidate.id === saved.competitor.classId)
-                          ?.name ?? null;
-                      setEvents((current) => [
-                        {
-                          id: `ev_${Date.now()}`,
-                          timestamp: now.toISOString(),
-                          clock24h: new Intl.DateTimeFormat('sv-SE', {
-                            timeZone: 'Europe/Stockholm',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                          }).format(now),
-                          eventType: 'DIRECT_ENTRY',
-                          siNumber: saved.competitor.siNumber,
-                          competitorId: saved.competitor.id,
-                          competitorName: saved.competitor.fullName,
-                          club: saved.competitor.club,
-                          className,
-                          stationCode: 1,
-                          stationName: 'Sekretariat — Direktanmälan',
-                          runningTimeSec: saved.competitor.runningTimeSec,
-                          message: `Direktanmäld i ${className ?? '-'}${
-                            saved.competitor.isRentalCard ? ' (Hyrbricka utlämnad)' : ''
-                          }`,
-                        },
-                        ...current,
-                      ]);
-                      return null;
-                    } catch (error) {
-                      console.error('Kunde inte spara direktanmälan till Firestore:', error);
-                      return error instanceof Error
-                        ? error.message
-                        : 'Kunde inte spara anmälan i Firestore.';
-                    }
-                  }}
+                  onCreateCompetitor={handleCreateDirectEntry}
                   onUpdateCompetitor={async (id, patch) => {
                     const useFirestore = await apiRequestUnavailable(
                       `/api/competitors/${id}`,
@@ -3282,8 +3311,6 @@ export default function App() {
                       current.filter((competitor) => competitor.id !== id)
                     );
                   }}
-                  initialSiNumber={runnerForDirectEntry}
-                  onInitialSiNumberConsumed={() => setRunnerForDirectEntry(null)}
                 />
               )}
 
@@ -3292,10 +3319,7 @@ export default function App() {
                   runnerDb={runnerDb}
                   enteredSiNumbers={competitors.map((competitor) => competitor.siNumber)}
                   canSelectForEntry={!isEmptySeason}
-                  onSelectForEntry={(siNumber) => {
-                    setRunnerForDirectEntry(siNumber);
-                    setActiveTab('entries');
-                  }}
+                  onRegisterSelected={handleBulkRunnerRegistration}
                   onImportRunnerDb={async (runners, source) => {
                     let response: Response | null = null;
                     let importedRunners: RunnerDbEntry[] | null = null;

@@ -83,8 +83,6 @@ interface EntriesRegistrationViewProps {
   ) => Promise<string | null>;
   onUpdateCompetitor: (id: string, patch: Partial<Competitor>) => Promise<void>;
   onDeleteCompetitor: (id: string) => Promise<void>;
-  initialSiNumber?: number | null;
-  onInitialSiNumberConsumed?: () => void;
 }
 
 export function EntriesRegistrationView({
@@ -108,8 +106,6 @@ export function EntriesRegistrationView({
   onCreateCompetitor,
   onUpdateCompetitor,
   onDeleteCompetitor,
-  initialSiNumber,
-  onInitialSiNumberConsumed,
 }: EntriesRegistrationViewProps) {
   const [siInput, setSiInput] = useState('');
   const [fullName, setFullName] = useState('');
@@ -161,13 +157,6 @@ export function EntriesRegistrationView({
       setClassId(classes[0].id);
     }
   }, [classes, classId]);
-
-  useEffect(() => {
-    if (initialSiNumber === undefined || initialSiNumber === null) return;
-    lastAutoFilledSiRef.current = null;
-    setSiInput(String(initialSiNumber));
-    onInitialSiNumberConsumed?.();
-  }, [initialSiNumber, onInitialSiNumberConsumed]);
 
   const [search, setSearch] = useState('');
 

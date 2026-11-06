@@ -9,7 +9,9 @@ interface RunnerDatabaseViewProps {
   runnerDb: RunnerDbEntry[];
   enteredSiNumbers: number[];
   canSelectForEntry: boolean;
-  onSelectForEntry: (siNumber: number) => void;
+  onRegisterSelected: (
+    runners: RunnerDbEntry[]
+  ) => Promise<{ registeredSiNumbers: number[]; errors: string[] }>;
   onImportRunnerDb: (
     runners: {
       siNumber: number;
@@ -44,7 +46,7 @@ export function RunnerDatabaseView({
   runnerDb,
   enteredSiNumbers,
   canSelectForEntry,
-  onSelectForEntry,
+  onRegisterSelected,
   onImportRunnerDb,
   onUpdateRunnerDbEntry,
   onDeleteRunnerDbEntry,
@@ -57,6 +59,10 @@ export function RunnerDatabaseView({
   const [editClub, setEditClub] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectedSiNumbers, setSelectedSiNumbers] = useState<Set<number>>(
+    () => new Set()
+  );
+  const [registering, setRegistering] = useState(false);
 
   const filteredRunnerDb = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -73,6 +79,38 @@ export function RunnerDatabaseView({
     () => new Set(enteredSiNumbers),
     [enteredSiNumbers]
   );
+  const selectedRunners = runnerDb.filter(
+    (runner) =>
+      selectedSiNumbers.has(runner.siNumber) &&
+      !enteredSiNumberSet.has(runner.siNumber)
+  );
+
+  const registerSelected = async () => {
+    if (selectedRunners.length === 0 || registering) return;
+    setRegistering(true);
+    try {
+      const result = await onRegisterSelected(selectedRunners);
+      setSelectedSiNumbers((current) => {
+        const next = new Set(current);
+        result.registeredSiNumbers.forEach((siNumber) => next.delete(siNumber));
+        return next;
+      });
+      setFeedback(
+        [
+          result.registeredSiNumbers.length
+            ? `Anmälde ${result.registeredSiNumbers.length} löpare till tävlingen.`
+            : '',
+          ...result.errors,
+        ]
+          .filter(Boolean)
+          .join(' ')
+      );
+    } catch (error: unknown) {
+      setFeedback(error instanceof Error ? error.message : 'Kunde inte anmäla löparna.');
+    } finally {
+      setRegistering(false);
+    }
+  };
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -184,6 +222,17 @@ export function RunnerDatabaseView({
               <span>Exportera CSV</span>
             </button>
             <span className="text-xs text-slate-500">{runnerDb.length} löpare</span>
+            {canSelectForEntry && (
+              <button
+                type="button"
+                onClick={() => void registerSelected()}
+                disabled={selectedRunners.length === 0 || registering}
+                className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg whitespace-nowrap"
+              >
+                {registering ? 'Anmäler...' : 'Anmäl förbockade löpare till denna tävling'}
+              </button>
+              <span className="text-xs text-slate-500">{selectedRunners.length} markerade</span>
+            )}
           </div>
           <div className="relative w-full lg:w-64">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -211,6 +260,7 @@ export function RunnerDatabaseView({
                 <th className="py-2 px-2">Löpare & Klubb</th>
                 <th className="hidden sm:table-cell py-2 px-2">Klass</th>
                 <th className="hidden md:table-cell py-2 px-2">Källa</th>
+                {canSelectForEntry && <th className="py-2 px-2">Anmäl</th>}
                 <th className="py-2 pl-2 pr-3.5 text-right">Åtgärd</th>
               </tr>
             </thead>
@@ -285,6 +335,31 @@ export function RunnerDatabaseView({
                     <td className="hidden md:table-cell py-1.5 px-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">
                       {formatRunnerSource(runner.source)}
                     </td>
+                    {canSelectForEntry && (
+                      <td className="py-1.5 px-2">
+                        {enteredSiNumberSet.has(runner.siNumber) ? (
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                            Anmäld
+                          </span>
+                        ) : (
+                          <input
+                            type="checkbox"
+                            checked={selectedSiNumbers.has(runner.siNumber)}
+                            onChange={(event) =>
+                              setSelectedSiNumbers((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) next.add(runner.siNumber);
+                                else next.delete(runner.siNumber);
+                                return next;
+                              })
+                            }
+                            aria-label={`Markera ${runner.fullName} för anmälan`}
+                            disabled={registering || isEditing}
+                            className="h-4 w-4 rounded border-slate-300 text-red-600 focus:ring-red-500"
+                          />
+                        )}
+                      </td>
+                    )}
                     <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
                       {isEditing ? (
                         <div className="inline-flex items-center gap-1">
@@ -309,20 +384,6 @@ export function RunnerDatabaseView({
                         </div>
                       ) : (
                         <div className="inline-flex items-center gap-1">
-                          {canSelectForEntry &&
-                            (enteredSiNumberSet.has(runner.siNumber) ? (
-                              <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                                Anmäld
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => onSelectForEntry(runner.siNumber)}
-                                className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline whitespace-nowrap"
-                              >
-                                Välj till anmälan
-                              </button>
-                            ))}
                           <button
                             type="button"
                             onClick={() => beginEdit(runner)}
