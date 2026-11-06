@@ -568,6 +568,10 @@
           "minLength": 0,
           "maxLength": 80
         },
+        "allowSelfRegistration": {
+          "type": "boolean",
+          "description": "Whether self registration is enabled for mobile participants."
+        },
         "enableFeesAndSwish": {
           "type": "boolean",
           "description": "Whether entry fees and payment tracking are enabled for this competition."

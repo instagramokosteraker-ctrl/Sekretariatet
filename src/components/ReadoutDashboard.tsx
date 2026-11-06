@@ -584,7 +584,7 @@ export function ReadoutDashboard({
         {/* Left 7 Columns: Digital SI-Card Readout Verification + Live Stream */}
         <div className="lg:col-span-7 space-y-3.5 min-w-0">
           {inspectedRunner && (
-            <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
               <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -696,9 +696,9 @@ export function ReadoutDashboard({
                 <div>
                   <div className="px-3.5 py-1.5 bg-slate-50/70 dark:bg-slate-950/40 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400">
                     <span>
-                      Bana:{' '}
+                      Klass:{' '}
                       <strong className="text-slate-800 dark:text-slate-200 font-medium">
-                        {inspectedRunner.validation.matchedCourseName ?? 'Ingen bana'}
+                        {inspectedClass?.name ?? 'Klass'}
                       </strong>
                       {inspectedRunner.validation.rogainingPoints !== undefined &&
                         inspectedRunner.validation.rogainingPoints !== null && (
@@ -837,7 +837,7 @@ export function ReadoutDashboard({
           )}
 
           {/* Real-Time Competition Event Stream */}
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
             <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -856,7 +856,7 @@ export function ReadoutDashboard({
               </div>
             </div>
 
-            <div>
+            <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
@@ -943,7 +943,7 @@ export function ReadoutDashboard({
 
         {/* Right 5 Columns: Hardware Testbench (0xEF SIAC/10/11 + 0xE1 SI6 + 0xB1 SI5 + 0xD3 Radio) */}
         <div className="lg:col-span-5 space-y-3.5">
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
             <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800">
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 SPORTident Hårdvarutestbänk
@@ -1111,7 +1111,7 @@ export function ReadoutDashboard({
       {/* Bottom Grid: 3. Kontrollstatus i skogen & 4. Hyrbrickor */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 pt-1">
         {/* Kontrollstatus i skogen (Kontrollintagning) */}
-        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
           <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               Kontrollstatus i skogen (Kontrollintagning)
@@ -1154,7 +1154,7 @@ export function ReadoutDashboard({
         </section>
 
         {/* Utlånade SI-hyrbrickor */}
-        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden flex flex-col justify-between">
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden flex flex-col justify-between">
           <div>
             <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">

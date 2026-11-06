@@ -650,7 +650,7 @@ export function DrawAndEmergencyView({
       </section>
 
       {/* Start List Preview Per Class */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="space-y-2.5 w-full">
         {classes.map((cls) => {
           const inCls = competitors
             .filter((c) => c.classId === cls.id)
@@ -659,7 +659,7 @@ export function DrawAndEmergencyView({
           return (
             <section
               key={cls.id}
-              className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden"
+              className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden"
             >
               <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/40">
                 <div className="flex items-baseline gap-2 min-w-0">
@@ -682,20 +682,51 @@ export function DrawAndEmergencyView({
               )}
 
               {inCls.length === 0 ? (
-                <div className="p-4 text-center text-xs text-slate-500">
+                <div className="p-3 text-center text-xs text-slate-500">
                   Inga anmälda i {cls.name}.
                 </div>
               ) : (
-                <div>
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500">
-                          <th className="py-1.5 pl-3.5 pr-2 w-16 whitespace-nowrap">Nummerlapp</th>
-                          <th className="py-1.5 px-2 whitespace-nowrap">Bricknummer</th>
-                          <th className="py-1.5 px-2 whitespace-nowrap">Namn</th>
-                          <th className="py-1.5 px-2 whitespace-nowrap">Klubb</th>
-                          <th className="py-1.5 px-2 whitespace-nowrap">Starttid</th>
-                          <th className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">Status</th>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 bg-slate-50/60 dark:bg-slate-950/30">
+                        <th className="py-1.5 pl-3.5 pr-2 w-14 font-mono">Nr-lapp</th>
+                        <th className="py-1.5 px-2 w-24 font-mono">Bricknummer</th>
+                        <th className="py-1.5 px-2">Namn</th>
+                        <th className="py-1.5 px-2">Klubb</th>
+                        <th className="py-1.5 px-2 font-mono w-20">Starttid</th>
+                        <th className="py-1.5 pl-2 pr-3.5 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
+                      {inCls.map((r) => (
+                        <tr key={r.id}>
+                          <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums text-slate-500">
+                            {r.bib ?? '—'}
+                          </td>
+                          <td className="py-1.5 px-2 font-mono tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {formatSiNumber(r.siNumber)}
+                          </td>
+                          <td className="py-1.5 px-2 font-medium text-slate-900 dark:text-slate-100">
+                            {r.fullName}
+                          </td>
+                          <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400">
+                            {r.club}
+                          </td>
+                          <td className="py-1.5 px-2 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                            {r.allocatedStartSec !== null
+                              ? formatSecondsAsClock(r.allocatedStartSec)
+                              : 'Fri'}
+                          </td>
+                          <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
+                            {r.manualFinishTimeSec ? (
+                              <span className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
+                                Man. {formatDurationMmSs(r.runningTimeSec)}
+                              </span>
+                            ) : (
+                              <RunnerStatusIndicator status={r.status} compact />
+                            )}
+                          </td>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">

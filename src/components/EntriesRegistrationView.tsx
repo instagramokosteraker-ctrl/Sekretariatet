@@ -460,7 +460,7 @@ export function EntriesRegistrationView({
       />
 
       {/* MeOS Direct Entry Card */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-3">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3 space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
             Ny direktanmälan / Koppla SI-bricka
@@ -746,7 +746,7 @@ export function EntriesRegistrationView({
       </section>
 
       {/* Segmented Table: Entered Competitors vs MeOS/Eventor Runner Database */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex items-center gap-1 p-0.5 bg-slate-100 dark:bg-slate-800 rounded-lg">

@@ -77,6 +77,7 @@ export interface CompetitionMeta {
   zeroTimeSec: number; // seconds since midnight, e.g. 36000
   arenaInfo?: string;
   seriesName?: string;
+  allowSelfRegistration?: boolean;
   enableFeesAndSwish?: boolean;
 }
 
@@ -91,6 +92,7 @@ export interface CompetitionSummary {
   zeroTimeStr: string;
   arenaInfo: string;
   seriesName?: string;
+  allowSelfRegistration?: boolean;
   enableFeesAndSwish: boolean;
   competitorCount: number;
   finishedCount: number;
