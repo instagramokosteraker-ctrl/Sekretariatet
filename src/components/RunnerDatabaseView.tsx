@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Check, Download, Pencil, Search, Trash2, Upload, X } from 'lucide-react';
+import { ArrowDownUp, Check, Download, Pencil, Search, Trash2, Upload, X } from 'lucide-react';
 import type { RunnerDbEntry, RunnerDbSource } from '../types/sportident';
 import { formatSiNumber } from '../services/sportidentProtocol';
 import { exportRunnerDbCsv, parseRunnerDbCsvOrXml } from '../utils/iofXml';
@@ -42,6 +42,9 @@ function formatRunnerSource(source: RunnerDbSource): string {
   }
 }
 
+type SortColumn = 'name' | 'club' | 'class';
+type SortDirection = 'asc' | 'desc';
+
 export function RunnerDatabaseView({
   runnerDb,
   enteredSiNumbers,
@@ -59,6 +62,8 @@ export function RunnerDatabaseView({
   const [editClub, setEditClub] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [sortColumn, setSortColumn] = useState<SortColumn>('name');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [selectedSiNumbers, setSelectedSiNumbers] = useState<Set<number>>(
     () => new Set()
   );
@@ -75,6 +80,28 @@ export function RunnerDatabaseView({
         (runner.defaultClassName?.toLocaleLowerCase().includes(query) ?? false)
     );
   }, [runnerDb, search]);
+  const sortedRunnerDb = useMemo(
+    () =>
+      [...filteredRunnerDb].sort((a, b) => {
+        const valueA =
+          sortColumn === 'name'
+            ? a.fullName
+            : sortColumn === 'club'
+              ? a.club
+              : a.defaultClassName ?? '';
+        const valueB =
+          sortColumn === 'name'
+            ? b.fullName
+            : sortColumn === 'club'
+              ? b.club
+              : b.defaultClassName ?? '';
+        const comparison = valueA.localeCompare(valueB, 'sv', {
+          sensitivity: 'base',
+        });
+        return sortDirection === 'asc' ? comparison : -comparison;
+      }),
+    [filteredRunnerDb, sortColumn, sortDirection]
+  );
   const enteredSiNumberSet = useMemo(
     () => new Set(enteredSiNumbers),
     [enteredSiNumbers]
@@ -111,6 +138,36 @@ export function RunnerDatabaseView({
       setRegistering(false);
     }
   };
+
+  const toggleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((direction) => (direction === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  const sortAria = (column: SortColumn): 'ascending' | 'descending' | 'none' =>
+    sortColumn !== column ? 'none' : sortDirection === 'asc' ? 'ascending' : 'descending';
+
+  const sortableHeader = (column: SortColumn, label: string) => (
+    <button
+      type="button"
+      onClick={() => toggleSort(column)}
+      className="inline-flex items-center gap-1 hover:text-slate-800 dark:hover:text-slate-200"
+      aria-label={`Sortera på ${label.toLocaleLowerCase('sv')}, ${
+        sortColumn === column && sortDirection === 'asc' ? 'fallande' : 'stigande'
+      } ordning`}
+    >
+      {label}
+      <ArrowDownUp
+        className={`h-3 w-3 ${
+          sortColumn === column ? 'text-red-600 dark:text-red-400' : 'opacity-50'
+        }`}
+      />
+    </button>
+  );
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -257,15 +314,25 @@ export function RunnerDatabaseView({
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
                 <th className="py-2 pl-3.5 pr-2">SI-bricka</th>
-                <th className="py-2 px-2">Löpare & Klubb</th>
-                <th className="hidden sm:table-cell py-2 px-2">Klass</th>
+                <th className="py-2 px-2" aria-sort={sortAria('name')}>
+                  {sortableHeader('name', 'Namn')}
+                </th>
+                <th className="py-2 px-2" aria-sort={sortAria('club')}>
+                  {sortableHeader('club', 'Klubb')}
+                </th>
+                <th
+                  className="hidden sm:table-cell py-2 px-2"
+                  aria-sort={sortAria('class')}
+                >
+                  {sortableHeader('class', 'Klass')}
+                </th>
                 <th className="hidden md:table-cell py-2 px-2">Källa</th>
                 {canSelectForEntry && <th className="py-2 px-2">Anmäl</th>}
                 <th className="py-2 pl-2 pr-3.5 text-right">Åtgärd</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
-              {filteredRunnerDb.map((runner) => {
+              {sortedRunnerDb.map((runner) => {
                 const isEditing = editingId === runner.id;
                 return (
                   <tr
@@ -294,39 +361,37 @@ export function RunnerDatabaseView({
                         </>
                       )}
                     </td>
-                    <td className="py-1.5 px-2 max-w-[150px] sm:max-w-[260px]">
+                    <td className="py-1.5 px-2 max-w-[170px]">
                       {isEditing ? (
-                        <div className="flex flex-col gap-1">
-                          <input
-                            aria-label={`Namn för ${runner.fullName}`}
-                            value={editFullName}
-                            onChange={(event) => setEditFullName(event.target.value)}
-                            className="w-full min-w-32 px-1.5 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded"
-                          />
-                          <input
-                            aria-label={`Klubb för ${runner.fullName}`}
-                            value={editClub}
-                            onChange={(event) => setEditClub(event.target.value)}
-                            className="w-full min-w-32 px-1.5 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded"
-                          />
-                        </div>
+                        <input
+                          aria-label={`Namn för ${runner.fullName}`}
+                          value={editFullName}
+                          onChange={(event) => setEditFullName(event.target.value)}
+                          className="w-full min-w-32 px-1.5 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded"
+                        />
                       ) : (
-                        <div className="flex items-baseline gap-1.5 min-w-0 truncate">
+                        <div className="flex items-baseline gap-1.5 min-w-0">
                           <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
                             {runner.fullName}
                           </span>
                           {runner.birthYear && (
-                            <span className="hidden sm:inline text-slate-500 dark:text-slate-400 font-mono tabular-nums shrink-0">
+                            <span className="hidden lg:inline text-slate-500 dark:text-slate-400 font-mono tabular-nums shrink-0">
                               ({runner.birthYear})
                             </span>
                           )}
-                          <span className="text-slate-300 dark:text-slate-700 shrink-0" aria-hidden="true">
-                            ·
-                          </span>
-                          <span className="text-slate-500 dark:text-slate-400 truncate">
-                            {runner.club}
-                          </span>
                         </div>
+                      )}
+                    </td>
+                    <td className="py-1.5 px-2 max-w-[170px] text-slate-500 dark:text-slate-400">
+                      {isEditing ? (
+                        <input
+                          aria-label={`Klubb för ${runner.fullName}`}
+                          value={editClub}
+                          onChange={(event) => setEditClub(event.target.value)}
+                          className="w-full min-w-32 px-1.5 py-1 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded"
+                        />
+                      ) : (
+                        <span className="block truncate">{runner.club}</span>
                       )}
                     </td>
                     <td className="hidden sm:table-cell py-1.5 px-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">
