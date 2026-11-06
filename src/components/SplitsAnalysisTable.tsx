@@ -290,9 +290,7 @@ export function SplitsAnalysisTable({
               : [];
           const visibleLegColumns = detailedView
             ? legColumns
-            : legColumns.filter(
-                (col) => radioControlCodes.has(col.code) || col.code === 999
-              );
+            : legColumns.filter((col) => radioControlCodes.has(col.code));
 
           let displayRows = [
             ...officialTimed,
@@ -740,7 +738,7 @@ export function SplitsAnalysisTable({
                                     key={col.order}
                                     className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 text-slate-800 dark:text-slate-200 whitespace-nowrap align-top"
                                   >
-                                    <div className="leading-4">
+                                    <div className="leading-4 italic">
                                       {formatDurationMmSs(liveLegTimeSec)}
                                     </div>
                                   </td>
@@ -852,17 +850,13 @@ export function SplitsAnalysisTable({
                             })}
 
                             <td className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap align-top">
-                              <div className="leading-4">
+                              <div
+                                className={`leading-4 ${
+                                  isRunning && displayedTimeSec !== null ? 'italic' : ''
+                                }`}
+                              >
                                 {formatDurationMmSs(displayedTimeSec)}
                               </div>
-                              {!detailedView && liveLegTimeSec !== null && (
-                                <div className="mt-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
-                                  {nextRadioControl
-                                    ? `(${nextRadioControl.stationCode})`
-                                    : 'Mål'}{' '}
-                                  {formatDurationMmSs(liveLegTimeSec)}
-                                </div>
-                              )}
                             </td>
 
                             <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
@@ -944,7 +938,11 @@ export function SplitsAnalysisTable({
                             ) : null}
 
                             <td className="py-1.5 pl-1.5 pr-3 text-right whitespace-nowrap">
-                              <RunnerStatusIndicator status={r.status} compact />
+                              <RunnerStatusIndicator
+                                status={r.status}
+                                compact
+                                minimal={!detailedView}
+                              />
                             </td>
                           </tr>
                           {isExpanded && (
