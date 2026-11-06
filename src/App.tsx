@@ -113,6 +113,7 @@ import {
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
   subscribePublicCompetitionSummaries,
   loadClubSettingsFromFirestore,
+  subscribeClubSettingsFromFirestore,
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
@@ -390,6 +391,7 @@ export default function App() {
   const [newEvtZeroTime, setNewEvtZeroTime] = useState('18:00:00');
   const [newEvtArena, setNewEvtArena] = useState('');
   const [newEvtSeriesName, setNewEvtSeriesName] = useState('');
+  const [newEvtSelfReg, setNewEvtSelfReg] = useState(true);
   const [newEvtFeesAndSwish, setNewEvtFeesAndSwish] = useState(false);
   const [newEvtCopyCourses, setNewEvtCopyCourses] = useState(true);
   const [newEvtCourseParsed, setNewEvtCourseParsed] = useState<ParsedIofDocument | null>(null);
@@ -494,7 +496,7 @@ export default function App() {
   }, []);
 
   const navigatePublicPortal = useCallback((shortCode: string | null) => {
-    const targetPath = shortCode ? `/t/${encodeURIComponent(shortCode)}` : '/publik';
+    const targetPath = '/publik';
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, '', targetPath);
     }
@@ -523,26 +525,21 @@ export default function App() {
   const [demoCleared, setDemoCleared] = useState<boolean>(false);
   const [clubSettings, setClubSettings] = useState<ClubSettings>({
     clubName: 'OK Österåker',
-    eventorOrgId: '603',
-    swishNumber: '123 481 92 04',
-    swishRecipientName: 'OK Österåker Tävlingskassa',
-    defaultDirectEntryFeeSek: 100,
-    rentalCardFeeSek: 30,
-    missingRentalFeeSek: 650,
+    eventorOrgId: '',
+    swishNumber: '',
+    swishRecipientName: '',
+    defaultDirectEntryFeeSek: 0,
+    rentalCardFeeSek: 0,
+    missingRentalFeeSek: 0,
   });
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
 
   useEffect(() => {
-    let active = true;
-    void loadClubSettingsFromFirestore()
-      .then((settings) => {
-        if (active) setClubSettings(settings);
-      })
-      .catch((error) => {
-        console.error('Kunde inte läsa klubbinställningar vid appstart:', error);
-      });
+    const unsubscribe = subscribeClubSettingsFromFirestore((settings) => {
+      setClubSettings(settings);
+    });
     return () => {
-      active = false;
+      unsubscribe();
     };
   }, []);
 
@@ -573,8 +570,7 @@ export default function App() {
   useEffect(() => {
     if (
       !firebaseUserUid ||
-      competitionsList.length === 0 ||
-      (!isEmptySeason && competitionsList.some((item) => item.id === activeEventId)) ||
+      (!isEmptySeason && activeEventId && competitionsList.some((item) => item.id === activeEventId)) ||
       hydratingCompetitionListRef.current
     ) {
       return;
@@ -584,6 +580,10 @@ export default function App() {
     void loadFullSeasonFromFirestore()
       .then((cloudSnap) => {
         if (!cloudSnap) return;
+        if (cloudSnap.events.length === 0) {
+          setIsEmptySeason(true);
+          return;
+        }
         const selectedEvent =
           cloudSnap.events.find((event) => event.competition.id === activeEventId) ??
           cloudSnap.events.find(
@@ -1384,6 +1384,7 @@ export default function App() {
           zeroTimeSec: parseTimeToSec(newEvtZeroTime),
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
+          allowSelfRegistration: newEvtSelfReg,
           enableFeesAndSwish: newEvtFeesAndSwish,
           courses: snap ? snap.courses : importedCourses,
           classes: snap ? snap.classes : importedClasses,
@@ -1404,6 +1405,7 @@ export default function App() {
           zeroTimeSec: parseTimeToSec(newEvtZeroTime),
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
+          allowSelfRegistration: newEvtSelfReg,
           enableFeesAndSwish: newEvtFeesAndSwish,
         };
         setCompetition(newComp);
@@ -1718,11 +1720,6 @@ export default function App() {
               {clubSettings.portalTitle?.trim() || 'PasserSI'}
             </span>
           </button>
-          {!isEmptySeason && (
-            <span className="text-[11px] font-mono tabular-nums text-slate-500 dark:text-slate-400 shrink-0">
-              /t/{activePublicShortCode}
-            </span>
-          )}
         </div>
 
         {/* Competition & Role Context (Admin Multi-Event Switcher vs Locked Official Station) */}
@@ -2170,7 +2167,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 min-w-0 p-2.5 sm:p-4 lg:p-5 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 min-w-0 p-1.5 sm:p-2.5 lg:p-3 w-full">
           {createEventModalOpen && isAdminSession && (
             <section className="mb-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
               <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
@@ -2377,11 +2374,20 @@ export default function App() {
                     <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                       <input
                         type="checkbox"
+                        checked={newEvtSelfReg}
+                        onChange={(e) => setNewEvtSelfReg(e.target.checked)}
+                        className="rounded border-slate-300 dark:border-slate-700"
+                      />
+                      <span>Mobil självregistrering</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
                         checked={newEvtFeesAndSwish}
                         onChange={(e) => setNewEvtFeesAndSwish(e.target.checked)}
                         className="rounded border-slate-300 dark:border-slate-700"
                       />
-                      <span>Avgiftsuppföljning</span>
+                      <span>Avgift / Swish-QR</span>
                     </label>
                     {!isEmptySeason && !newEvtCourseParsed && (
                       <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
@@ -2547,13 +2553,14 @@ export default function App() {
                     });
                     const contentType = res.headers.get('content-type') || '';
                     const responseBody = await res.text();
-                    let responseData: {
+                    interface ImportBatchResult {
                       error?: string;
                       addedCourses?: number;
                       addedClasses?: number;
                       addedEntries?: number;
                       syncedRunnerDb?: number;
-                    } | null = null;
+                    }
+                    let responseData: ImportBatchResult | null = null;
                     try {
                       const parsedResponse: unknown = JSON.parse(responseBody);
                       if (
@@ -2561,7 +2568,7 @@ export default function App() {
                         typeof parsedResponse === 'object' &&
                         !Array.isArray(parsedResponse)
                       ) {
-                        responseData = parsedResponse as typeof responseData;
+                        responseData = parsedResponse as ImportBatchResult;
                       }
                     } catch {
                       responseData = null;
@@ -3246,7 +3253,20 @@ export default function App() {
                       };
                       throw new Error(errorBody.error ?? 'Kunde inte importera löpardatabasen.');
                     }
-                    const imported = runners.map((runner) => ({ ...runner, source }));
+                    const nowIso = new Date().toISOString();
+                    const imported: RunnerDbEntry[] = runners.map((runner) => ({
+                      id: `rdb_${runner.siNumber}`,
+                      siNumber: runner.siNumber,
+                      cardSeries: inferCardSeries(runner.siNumber),
+                      fullName: runner.fullName,
+                      club: runner.club,
+                      birthYear: runner.birthYear ?? null,
+                      defaultClassName: runner.defaultClassName ?? null,
+                      eventorPersonId: null,
+                      eventorOrgId: null,
+                      source,
+                      updatedAt: nowIso,
+                    }));
                     await saveCompetitionImportToFirestore({
                       competitionId: activeEventId,
                       courses,
@@ -3723,6 +3743,9 @@ export default function App() {
                   onApplySeriesScoringUpdate={(settings, standings) => {
                     setClubSettings(settings);
                     setSeriesStandings(standings);
+                  }}
+                  onUpdateClubSettings={(settings) => {
+                    setClubSettings(settings);
                   }}
                 />
               )}

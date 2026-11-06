@@ -102,7 +102,7 @@ export function SpeakerResultsView({
               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              <span>Publikvy (/t/{competition.shortCode ?? 'live'})</span>
+              <span>Publikvy</span>
             </button>
           )}
 
@@ -139,7 +139,7 @@ export function SpeakerResultsView({
         </div>
       </div>
 
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-950/40">
           <div className="flex items-center gap-2 min-w-0">
             <Mic className="w-3.5 h-3.5 text-red-600 dark:text-red-400 shrink-0" />

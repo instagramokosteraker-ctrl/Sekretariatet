@@ -114,11 +114,10 @@ export function DrawView({
 
   const handleExportStartListCsv = () => {
     const rows = [
-      ['Startnummer', 'Starttid', 'Namn', 'Klubb', 'Klass', 'Bana', 'SI-bricka', 'Status'].join(';'),
+      ['Startnummer', 'Starttid', 'Namn', 'Klubb', 'Klass', 'SI-bricka', 'Status'].join(';'),
     ];
     for (const c of competitors) {
       const cls = classes.find((k) => k.id === c.classId);
-      const crs = courses.find((k) => k.id === cls?.courseId);
       const startClock =
         c.allocatedStartSec != null
           ? formatSecondsAsClock(c.allocatedStartSec)
@@ -132,7 +131,6 @@ export function DrawView({
           c.fullName,
           c.club,
           cls?.name ?? '',
-          crs?.name ?? '',
           c.siNumber,
           c.status,
         ]
@@ -183,7 +181,7 @@ export function DrawView({
       </div>
 
       {/* Startlistelottning per klass */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3 sm:p-4 space-y-3">
         <div className="pb-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Users className="w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0" />
@@ -336,12 +334,12 @@ export function DrawView({
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
                 <tr>
-                  <th className="px-3 py-2">Startnr</th>
-                  <th className="px-3 py-2">Starttid</th>
-                  <th className="px-3 py-2">Namn</th>
-                  <th className="px-3 py-2">Klubb</th>
-                  <th className="px-3 py-2">SI-bricka</th>
-                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2 whitespace-nowrap">Nummerlapp</th>
+                  <th className="px-3 py-2 whitespace-nowrap">SI-nr</th>
+                  <th className="px-3 py-2 whitespace-nowrap">Namn</th>
+                  <th className="px-3 py-2 whitespace-nowrap">Klubb</th>
+                  <th className="px-3 py-2 whitespace-nowrap">Starttid</th>
+                  <th className="px-3 py-2 whitespace-nowrap">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
@@ -361,18 +359,18 @@ export function DrawView({
                         : '—';
                     return (
                       <tr key={runner.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                        <td className="px-3 py-2 text-slate-500">{runner.bib ?? '—'}</td>
-                        <td className="px-3 py-2 font-semibold text-slate-900 dark:text-slate-100">
-                          {startClock}
+                        <td className="px-3 py-2 text-slate-500 tabular-nums">{runner.bib ?? '—'}</td>
+                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300 tabular-nums">
+                          {formatSiNumber(runner.siNumber)}
                         </td>
                         <td className="px-3 py-2 font-sans font-medium text-slate-900 dark:text-slate-100">
                           {runner.fullName}
                         </td>
                         <td className="px-3 py-2 font-sans text-slate-600 dark:text-slate-400">
-                          {runner.club}
+                          {runner.club || '—'}
                         </td>
-                        <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
-                          {formatSiNumber(runner.siNumber)}
+                        <td className="px-3 py-2 font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                          {startClock}
                         </td>
                         <td className="px-3 py-2 font-sans">
                           <RunnerStatusIndicator status={runner.status} />
