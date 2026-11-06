@@ -563,6 +563,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    document.title = clubSettings.portalTitle?.trim() || 'PasserSI';
+  }, [clubSettings.portalTitle]);
+
+  useEffect(() => {
     setLogoBroken(false);
   }, [clubSettings.logoDataUrl]);
 
