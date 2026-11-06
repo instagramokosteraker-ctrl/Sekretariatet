@@ -330,12 +330,16 @@ export function SplitsAnalysisTable({
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
+                  <table
+                    className={`w-full text-left border-collapse text-xs ${
+                      detailedView ? 'table-auto' : 'table-fixed'
+                    }`}
+                  >
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                        <th className="py-1.5 pl-3 pr-1.5 w-9">Plac</th>
-                        <th className="py-1.5 px-2">Namn</th>
-                        <th className={`py-1.5 px-2 ${!detailedView ? 'hidden sm:table-cell' : ''}`}>Klubb</th>
+                        <th className="py-1.5 pl-3 pr-1.5 w-12">Plac</th>
+                        <th className="py-1.5 px-2 w-[36%]">Namn</th>
+                        <th className={`py-1.5 px-2 w-[26%] ${!detailedView ? 'hidden sm:table-cell' : ''}`}>Klubb</th>
                         {detailedView && (
                           <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
                         )}
@@ -483,7 +487,7 @@ export function SplitsAnalysisTable({
                             </td>
 
                             <td
-                              className={`py-1.5 px-2 whitespace-nowrap ${
+                              className={`py-1.5 px-2 overflow-hidden whitespace-nowrap ${
                                 !detailedView ? 'hidden sm:table-cell' : ''
                               }`}
                             >
@@ -494,12 +498,13 @@ export function SplitsAnalysisTable({
                                     event.stopPropagation();
                                     onSelectClub?.(r.club.trim());
                                   }}
-                                  className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                  className="inline-block max-w-full truncate align-bottom text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                  title={r.club}
                                 >
                                   {r.club}
                                 </button>
                               ) : (
-                                <span className="text-slate-400">Klubblös</span>
+                                <span className="block truncate text-slate-400">Klubblös</span>
                               )}
                             </td>
 
