@@ -3287,7 +3287,7 @@ export async function submitReadoutToFirestore(
     return { code, timeSec };
   });
 
-  const season = await loadFullSeasonFromFirestore();
+  const season = await loadFullSeasonFromFirestore({ competitionId: eventId });
   const event = season?.events.find(
     (candidate) =>
       candidate.competition.id === eventId ||
