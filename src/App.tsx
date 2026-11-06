@@ -195,7 +195,7 @@ const NAV_ITEMS: {
   { id: 'results', label: 'Speaker & Resultat', icon: Mic },
   { id: 'draw', label: 'Lottning', icon: Shuffle },
   { id: 'hardware', label: 'SportIdent, ROC & USB', icon: Radio },
-  { id: 'season', label: 'Tävlingar & Säsong', icon: Trophy },
+  { id: 'season', label: 'Tävlingar och Serier', icon: Trophy },
   { id: 'runner_db', label: 'Löpardatabas', icon: Database },
   { id: 'access', label: 'Klubbadmin och behörighet', icon: KeyRound },
 ];
@@ -540,6 +540,18 @@ export default function App() {
     missingRentalFeeSek: 0,
   });
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
+  const availableSeriesNames = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...competitionsList
+            .map((item) => item.seriesName?.trim() ?? '')
+            .filter(Boolean),
+          ...Object.keys(clubSettings.seriesScoringSettings ?? {}),
+        ])
+      ).sort((a, b) => a.localeCompare(b, 'sv')),
+    [clubSettings.seriesScoringSettings, competitionsList]
+  );
 
   useEffect(() => {
     const unsubscribe = subscribeClubSettingsFromFirestore((settings) => {
@@ -2247,15 +2259,25 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Klubbserie (valfritt)
+                      Serie (valfritt)
                     </label>
-                    <input
-                      type="text"
+                    <select
                       value={newEvtSeriesName}
                       onChange={(e) => setNewEvtSeriesName(e.target.value)}
-                      placeholder="t.ex. Höstserien 2026"
                       className="w-full px-2.5 py-1.5 text-xs sm:text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                    />
+                    >
+                      <option value="">Ingen serie</option>
+                      {availableSeriesNames.map((seriesName) => (
+                        <option key={seriesName} value={seriesName}>
+                          {seriesName}
+                        </option>
+                      ))}
+                    </select>
+                    {availableSeriesNames.length === 0 && (
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        Skapa serier under Hyrbrickor & serier i Klubbadmin.
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300 mb-1">
