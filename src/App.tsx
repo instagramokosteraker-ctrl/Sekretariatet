@@ -3806,6 +3806,43 @@ export default function App() {
                       return error instanceof Error ? error.message : 'Kunde inte spara station.';
                     }
                   }}
+                  onSaveStation={async (payload) => {
+                    if (!payload.id) return 'Stationens ID saknas.';
+                    try {
+                      const useFirestore = await apiRequestUnavailable(
+                        `/api/stations/${encodeURIComponent(payload.id)}`,
+                        {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        },
+                        'Kunde inte uppdatera stationen.'
+                      );
+                      if (useFirestore) {
+                        const saved = await saveStationToFirestore(activeEventId, payload);
+                        setStations((current) =>
+                          current
+                            .map((station) => (station.id === saved.id ? saved : station))
+                            .sort((a, b) => a.stationCode - b.stationCode)
+                        );
+                      } else {
+                        setStations((current) =>
+                          current
+                            .map((station) =>
+                              station.id === payload.id
+                                ? { ...station, ...payload }
+                                : station
+                            )
+                            .sort((a, b) => a.stationCode - b.stationCode)
+                        );
+                      }
+                      return null;
+                    } catch (error) {
+                      return error instanceof Error
+                        ? error.message
+                        : 'Kunde inte uppdatera stationen.';
+                    }
+                  }}
                   onDeleteStation={async (id) => {
                     const useFirestore = await apiRequestUnavailable(
                       `/api/stations/${id}`,

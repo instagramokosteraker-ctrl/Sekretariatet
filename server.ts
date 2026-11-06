@@ -2446,6 +2446,18 @@ async function startServer() {
       courses: ev.courses,
       classes: feesEnabled ? ev.classes : ev.classes.map((cls) => ({ ...cls, feeSek: 0 })),
       competitors: ev.competitors,
+      radioControls: ev.stations
+        .filter(
+          (station) =>
+            station.active &&
+            (station.stationFunction === 'RADIO' || station.stationFunction === 'PREWARNING')
+        )
+        .map(({ stationCode, name, stationFunction, active }) => ({
+          stationCode,
+          name,
+          stationFunction,
+          active,
+        })),
       events: ev.events.slice(0, 60),
       emergency: ev.emergency,
       competitionsList: buildCompetitionsSummaryList(seasonDb),
@@ -5259,6 +5271,35 @@ async function startServer() {
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
     res.status(201).json(st);
+  });
+
+  app.put('/api/stations/:id', (req, res) => {
+    const db = getActiveEvent();
+    const station = db.stations.find((item) => item.id === req.params.id);
+    if (!station) {
+      res.status(404).json({ error: 'Stationen hittades inte.' });
+      return;
+    }
+
+    const body = req.body as Partial<SIStation>;
+    const code = Number(body.stationCode);
+    if (!Number.isInteger(code) || code < 1 || code > 511 || !body.name?.trim()) {
+      res.status(400).json({ error: 'Stationskod (CN 1–511) och benämning krävs.' });
+      return;
+    }
+    if (db.stations.some((item) => item.id !== station.id && item.stationCode === code)) {
+      res.status(409).json({ error: `Stationskod CN ${code} är redan konfigurerad.` });
+      return;
+    }
+
+    station.stationCode = code;
+    station.name = body.name.trim();
+    station.hardwareModel = body.hardwareModel ?? station.hardwareModel;
+    station.stationFunction = body.stationFunction ?? station.stationFunction;
+    db.stations.sort((a, b) => a.stationCode - b.stationCode);
+    saveSeasonDatabase(seasonDb);
+    broadcastFullState(db.competition.shortCode);
+    res.json(station);
   });
 
   app.delete('/api/stations/:id', (req, res) => {

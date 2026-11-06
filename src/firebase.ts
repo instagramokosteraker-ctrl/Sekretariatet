@@ -3790,6 +3790,18 @@ export async function loadPublicRaceFromFirestore(
       ? target.classes
       : target.classes.map((compClass) => ({ ...compClass, feeSek: 0 })),
     competitors: target.competitors,
+    radioControls: (target.stations ?? [])
+      .filter(
+        (station) =>
+          station.active &&
+          (station.stationFunction === 'RADIO' || station.stationFunction === 'PREWARNING')
+      )
+      .map(({ stationCode, name, stationFunction, active }) => ({
+        stationCode,
+        name,
+        stationFunction,
+        active,
+      })),
     events: [],
     emergency: {
       brokenControls: target.brokenControls,
