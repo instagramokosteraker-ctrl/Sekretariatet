@@ -974,9 +974,11 @@ export async function updateCompetitionMetadataInFirestore(
     enableFeesAndSwish?: boolean;
   }
 ): Promise<void> {
+  const statusOnlyUpdate =
+    Object.keys(patch).length === 1 && patch.status !== undefined;
   const context = await getCompetitionMutationContext(
     competitionId,
-    patch.status === 'LIVE' || patch.status === 'UPCOMING'
+    statusOnlyUpdate ? patch.status : undefined
   );
   const mutable: Record<string, unknown> = {};
   if ('name' in patch) mutable.name = (patch.name || '').trim().slice(0, 140);
@@ -2341,7 +2343,7 @@ interface CompetitionMutationContext {
 
 async function getCompetitionMutationContext(
   rawCompetitionId: string,
-  allowCompletedStatusUpdate = false
+  statusOnlyUpdate?: EventLifecycleStatus
 ): Promise<CompetitionMutationContext> {
   const current = await ensureValidFirestoreUser();
   if (
@@ -2371,13 +2373,18 @@ async function getCompetitionMutationContext(
     throw new Error('Tävlingen hittades inte i Firestore.');
   }
   const competition = competitionSnap.data();
-  if (competition.ownerUid !== current.uid && !isSuperAdmin) {
+  if (
+    competition.ownerUid !== current.uid &&
+    !isSuperAdmin &&
+    statusOnlyUpdate === undefined
+  ) {
     throw new Error('Ditt konto saknar behörighet att ändra den här tävlingen.');
   }
   if (
     competition.status === 'COMPLETED' &&
     !isSuperAdmin &&
-    !allowCompletedStatusUpdate
+    statusOnlyUpdate !== 'LIVE' &&
+    statusOnlyUpdate !== 'UPCOMING'
   ) {
     throw new Error('Det går inte att ändra en avslutad tävling.');
   }
