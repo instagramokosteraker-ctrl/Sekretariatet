@@ -5578,23 +5578,69 @@ async function startServer() {
       source?: RunnerDbSource;
     };
     let importedCount = 0;
+    const importedRunners: RunnerDbEntry[] = [];
     for (const r of runners) {
-      if (
-        upsertRunnerInSeasonDb(seasonDb, {
+      const imported = upsertRunnerInSeasonDb(seasonDb, {
           siNumber: Number(r.siNumber),
           fullName: r.fullName,
           club: r.club,
           birthYear: r.birthYear ?? null,
           defaultClassName: r.defaultClassName ?? null,
           source,
-        })
-      ) {
+        });
+      if (imported) {
         importedCount++;
+        importedRunners.push(imported);
       }
     }
     saveSeasonDatabase(seasonDb);
     broadcastFullState();
-    res.json({ importedCount, totalRunnerDb: seasonDb.runnerDb.length });
+    res.json({
+      importedCount,
+      totalRunnerDb: seasonDb.runnerDb.length,
+      importedRunners,
+    });
+  });
+
+  app.put('/api/runner-db/:id', (req, res) => {
+    const body = req.body as {
+      siNumber?: number;
+      fullName?: string;
+      club?: string;
+    };
+    const runner = seasonDb.runnerDb.find((entry) => entry.id === req.params.id);
+    if (!runner) {
+      res.status(404).json({ error: 'Löparen hittades inte i databasen.' });
+      return;
+    }
+    const siNumber = Number(body.siNumber);
+    const fullName = typeof body.fullName === 'string' ? body.fullName.trim() : '';
+    const club = typeof body.club === 'string' ? body.club.trim() : '';
+    if (
+      !Number.isInteger(siNumber) ||
+      siNumber < 1 ||
+      siNumber > 99999999 ||
+      !fullName
+    ) {
+      res.status(400).json({ error: 'Ange ett giltigt namn och SI-bricknummer.' });
+      return;
+    }
+    if (
+      seasonDb.runnerDb.some(
+        (entry) => entry.id !== runner.id && entry.siNumber === siNumber
+      )
+    ) {
+      res.status(409).json({ error: 'SI-bricknumret finns redan i löpardatabasen.' });
+      return;
+    }
+    runner.siNumber = siNumber;
+    runner.cardSeries = inferSeries(siNumber);
+    runner.fullName = fullName.slice(0, 120);
+    runner.club = (club || 'Klubblös').slice(0, 100);
+    runner.updatedAt = new Date().toISOString();
+    saveSeasonDatabase(seasonDb);
+    broadcastFullState();
+    res.json(runner);
   });
 
   app.delete('/api/runner-db/:id', (req, res) => {
