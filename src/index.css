@@ -42,6 +42,10 @@
     font-family: var(--font-display);
   }
 
+  table :is(th, td) {
+    vertical-align: top;
+  }
+
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }

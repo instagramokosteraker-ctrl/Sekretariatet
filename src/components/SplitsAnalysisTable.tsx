@@ -32,6 +32,13 @@ function getLiveLegTimeSec(
   return elapsedSec >= 0 ? elapsedSec : null;
 }
 
+function getPlacementClass(rank: number | null | undefined): string {
+  if (rank === 1) return 'text-red-600 dark:text-red-400 font-semibold';
+  if (rank === 2) return 'text-blue-600 dark:text-blue-400 font-semibold';
+  if (rank === 3) return 'text-green-600 dark:text-green-400 font-semibold';
+  return 'text-slate-500 dark:text-slate-400';
+}
+
 interface SplitsAnalysisTableProps {
   classes: CompClass[];
   courses: Course[];
@@ -283,6 +290,82 @@ export function SplitsAnalysisTable({
             ...inClass.filter((c) => !officialTimed.some((t) => t.id === c.id)),
           ];
 
+          const controlResults = new Map<
+            number,
+            Map<
+              string,
+              {
+                legSec: number | null;
+                cumulativeSec: number | null;
+                legRank: number | null;
+                cumulativeRank: number | null;
+              }
+            >
+          >();
+          for (const col of legColumns) {
+            if (col.code === 999) continue;
+            const results = inClass.map((runner) => {
+              const split = runner.validation?.splits.find(
+                (item) => item.order === col.order
+              );
+              const radioSplit = runner.radioSplits.find(
+                (item) => item.controlCode === col.code
+              );
+              const cumulativeSec =
+                radioSplit?.runningTimeSec ?? split?.cumulativeSec ?? null;
+              const previousCode = course?.controls[col.order - 2];
+              const previousSplit = previousCode
+                ? runner.validation?.splits.find(
+                    (item) => item.controlCode === previousCode
+                  )
+                : undefined;
+              const previousRadioSplit = previousCode
+                ? runner.radioSplits.find(
+                    (item) => item.controlCode === previousCode
+                  )
+                : undefined;
+              const previousCumulativeSec =
+                previousRadioSplit?.runningTimeSec ??
+                previousSplit?.cumulativeSec ??
+                0;
+              const legSec =
+                split?.legSec ??
+                (radioSplit && cumulativeSec !== null
+                  ? cumulativeSec - previousCumulativeSec
+                  : null);
+              return { runner, legSec, cumulativeSec };
+            });
+            controlResults.set(
+              col.code,
+              new Map(
+                results.map(({ runner, legSec, cumulativeSec }) => [
+                  runner.id,
+                  {
+                    legSec,
+                    cumulativeSec,
+                    legRank:
+                      legSec === null
+                        ? null
+                        : 1 +
+                          results.filter(
+                            (result) =>
+                              result.legSec !== null && result.legSec < legSec
+                          ).length,
+                    cumulativeRank:
+                      cumulativeSec === null
+                        ? null
+                        : 1 +
+                          results.filter(
+                            (result) =>
+                              result.cumulativeSec !== null &&
+                              result.cumulativeSec < cumulativeSec
+                          ).length,
+                  },
+                ])
+              )
+            );
+          }
+
           if (activeSortOrder !== null) {
             if (activeSortOrder === -1) {
               displayRows = [...displayRows].sort((a, b) => {
@@ -374,8 +457,14 @@ export function SplitsAnalysisTable({
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                         <th className="py-1.5 pl-3 pr-1.5 w-12">Plac</th>
-                        <th className="py-1.5 px-2 w-[36%]">Namn</th>
-                        <th className={`py-1.5 px-2 w-[26%] ${!detailedView ? 'hidden sm:table-cell' : ''}`}>Klubb</th>
+                        <th className="py-1.5 px-2 w-[36%]">
+                          {detailedView ? 'Namn / Klubb' : 'Namn'}
+                        </th>
+                        {!detailedView && (
+                          <th className="hidden sm:table-cell py-1.5 px-2 w-[26%]">
+                            Klubb
+                          </th>
+                        )}
                         {detailedView && (
                           <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
                         )}
@@ -386,7 +475,7 @@ export function SplitsAnalysisTable({
                             <th
                               key={col.order}
                               className={`py-1.5 px-2 text-right font-mono whitespace-nowrap ${
-                                isRadioControl ? 'text-red-600 dark:text-red-400' : ''
+                                isRadioControl ? 'text-orange-600 dark:text-orange-400' : ''
                               }`}
                             >
                               <button
@@ -394,7 +483,9 @@ export function SplitsAnalysisTable({
                                 onClick={() => toggleClassSort(cls.id, col.order)}
                                 className={`inline-flex flex-col items-end hover:text-slate-900 dark:hover:text-slate-100 transition-colors ${
                                   isSorted
-                                    ? 'text-red-600 dark:text-red-400 font-semibold'
+                                    ? isRadioControl
+                                      ? 'text-orange-600 dark:text-orange-400 font-semibold'
+                                      : 'text-red-600 dark:text-red-400 font-semibold'
                                     : ''
                                 }`}
                                 title={
@@ -403,7 +494,11 @@ export function SplitsAnalysisTable({
                                     : `Sortera ${cls.name} efter sträcktid till ${col.label}`
                                 }
                               >
-                                <span className="inline-flex items-center gap-1">
+                                <span
+                                  className={`inline-flex items-center ${
+                                    isRadioControl ? 'gap-0' : 'gap-1'
+                                  }`}
+                                >
                                   <span>{col.label}</span>
                                   {isRadioControl && (
                                     <Zap
@@ -513,7 +608,7 @@ export function SplitsAnalysisTable({
 
                         const isExpanded = expandedRunnerId === r.id;
                         const totalCols = detailedView
-                          ? 4 + legColumns.length + (isRogaining ? 3 : 1) + 3
+                          ? 3 + legColumns.length + (isRogaining ? 3 : 1) + 3
                           : 7;
 
                         return (
@@ -540,40 +635,74 @@ export function SplitsAnalysisTable({
                                 : '—'}
                             </td>
 
-                            <td className="py-1.5 px-2 max-w-[165px] sm:max-w-none whitespace-nowrap">
-                              <div className="flex items-center gap-1 min-w-0">
-                                <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                                  {r.fullName}
-                                </span>
-                                {isExpanded ? (
-                                  <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
-                                ) : (
-                                  <ChevronDown className="w-3 h-3 text-slate-400 shrink-0 opacity-60" />
-                                )}
-                              </div>
-                            </td>
-
                             <td
-                              className={`py-1.5 px-2 overflow-hidden whitespace-nowrap ${
-                                !detailedView ? 'hidden sm:table-cell' : ''
+                              className={`py-1.5 px-2 whitespace-nowrap ${
+                                detailedView ? 'min-w-[140px] max-w-[220px]' : 'max-w-[165px] sm:max-w-none'
                               }`}
                             >
-                              {r.club.trim() ? (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    onSelectClub?.(r.club.trim());
-                                  }}
-                                  className="inline-block max-w-full truncate align-bottom text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
-                                  title={r.club}
-                                >
-                                  {r.club}
-                                </button>
+                              {detailedView ? (
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1 min-w-0">
+                                    <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                                      {r.fullName}
+                                    </span>
+                                    {isExpanded ? (
+                                      <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
+                                    ) : (
+                                      <ChevronDown className="w-3 h-3 text-slate-400 shrink-0 opacity-60" />
+                                    )}
+                                  </div>
+                                  {r.club.trim() ? (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        onSelectClub?.(r.club.trim());
+                                      }}
+                                      className="block max-w-full truncate text-[11px] text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                      title={r.club}
+                                    >
+                                      {r.club}
+                                    </button>
+                                  ) : (
+                                    <span className="block truncate text-[11px] text-slate-400">
+                                      Klubblös
+                                    </span>
+                                  )}
+                                </div>
                               ) : (
-                                <span className="block truncate text-slate-400">Klubblös</span>
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                                    {r.fullName}
+                                  </span>
+                                  {isExpanded ? (
+                                    <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
+                                  ) : (
+                                    <ChevronDown className="w-3 h-3 text-slate-400 shrink-0 opacity-60" />
+                                  )}
+                                </div>
                               )}
                             </td>
+
+                            {!detailedView && (
+                              <td className="hidden sm:table-cell py-1.5 px-2 overflow-hidden whitespace-nowrap">
+                                {r.club.trim() ? (
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onSelectClub?.(r.club.trim());
+                                    }}
+                                    className="inline-block max-w-full truncate align-bottom text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100"
+                                    title={r.club}
+                                  >
+                                    {r.club}
+                                  </button>
+                                ) : (
+                                  <span className="block truncate text-slate-400">Klubblös</span>
+                                )}
+                              </td>
+                            )}
 
                             {detailedView && (
                               <td className="py-1.5 px-2 text-right font-mono tabular-nums text-slate-600 dark:text-slate-400 whitespace-nowrap">
@@ -594,13 +723,35 @@ export function SplitsAnalysisTable({
                               const sp = r.validation?.splits.find(
                                 (s) => s.order === col.order
                               );
+                              const controlResult = controlResults
+                                .get(col.code)
+                                ?.get(r.id);
                               if (radioSplit) {
                                 return (
                                   <td
                                     key={col.order}
-                                    className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
+                                    className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap"
                                   >
-                                    {formatDurationMmSs(radioSplit.runningTimeSec)}
+                                    <div>
+                                      {formatDurationMmSs(controlResult?.legSec ?? null)}{' '}
+                                      {controlResult?.legRank && (
+                                        <span className={getPlacementClass(controlResult.legRank)}>
+                                          ({controlResult.legRank})
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                      {formatDurationMmSs(controlResult?.cumulativeSec ?? null)}{' '}
+                                      {controlResult?.cumulativeRank && (
+                                        <span
+                                          className={getPlacementClass(
+                                            controlResult.cumulativeRank
+                                          )}
+                                        >
+                                          ({controlResult.cumulativeRank})
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                 );
                               }
@@ -668,17 +819,36 @@ export function SplitsAnalysisTable({
                                 >
                                   <div
                                     className={
-                                      isWin
+                                      isWin && !controlResult
                                         ? 'font-semibold text-emerald-700 dark:text-emerald-400'
                                         : 'text-slate-800 dark:text-slate-200'
                                     }
                                   >
-                                    {isWin ? '★ ' : ''}
-                                    {formatDurationMmSs(sp.legSec)}
-                                    {sp.legRank ? ` (${sp.legRank})` : ''}
+                                    {formatDurationMmSs(controlResult?.legSec ?? sp.legSec)}{' '}
+                                    {(controlResult?.legRank ?? sp.legRank) && (
+                                      <span
+                                        className={getPlacementClass(
+                                          controlResult?.legRank ?? sp.legRank
+                                        )}
+                                      >
+                                        ({controlResult?.legRank ?? sp.legRank})
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                    {formatDurationMmSs(sp.cumulativeSec)}
+                                    {formatDurationMmSs(
+                                      controlResult?.cumulativeSec ?? sp.cumulativeSec
+                                    )}{' '}
+                                    {(controlResult?.cumulativeRank ?? sp.cumulativeRank) && (
+                                      <span
+                                        className={getPlacementClass(
+                                          controlResult?.cumulativeRank ??
+                                            sp.cumulativeRank
+                                        )}
+                                      >
+                                        ({controlResult?.cumulativeRank ?? sp.cumulativeRank})
+                                      </span>
+                                    )}
                                     {hasBom && (
                                       <span className="ml-1 font-semibold text-amber-700 dark:text-amber-400">
                                         +{formatDurationMmSs(sp.timeLossSec ?? 0)} bom
