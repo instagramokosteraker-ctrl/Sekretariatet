@@ -1749,8 +1749,8 @@ export function AccessControlView({
           TAB 1: TÄVLINGAR, RADERING, MOLNLAGRING & SÄKERHETSKOPIA
          ===================================================================== */}
       {subTab === 'events' && (
-        <div className="space-y-3.5">
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+        <div className="space-y-3">
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
             <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <h2 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">

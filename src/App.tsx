@@ -496,7 +496,7 @@ export default function App() {
   }, []);
 
   const navigatePublicPortal = useCallback((shortCode: string | null) => {
-    const targetPath = shortCode ? `/t/${encodeURIComponent(shortCode)}` : '/publik';
+    const targetPath = '/publik';
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, '', targetPath);
     }
@@ -2167,7 +2167,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 min-w-0 p-2.5 sm:p-4 lg:p-5 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 min-w-0 p-1.5 sm:p-2.5 lg:p-3 w-full">
           {createEventModalOpen && isAdminSession && (
             <section className="mb-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
               <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">

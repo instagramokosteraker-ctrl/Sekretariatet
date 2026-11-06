@@ -1270,7 +1270,7 @@ export function StartCorralView({
       </div>
 
       {/* Full Digital E-Startlista with Inline SI Card Swap */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
         <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <select
@@ -1324,11 +1324,11 @@ export function StartCorralView({
           </div>
         </div>
 
-        <div>
+        <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
-                <th className="py-1.5 pl-3.5 pr-2 w-14 font-mono">Nummerlapp</th>
+                <th className="py-1.5 pl-3.5 pr-2 w-14 font-mono">Nr-lapp</th>
                 <th className="py-1.5 px-2 w-28 font-mono">Bricknummer</th>
                 <th className="py-1.5 px-2">Namn</th>
                 <th className="hidden sm:table-cell py-1.5 px-2">Klubb</th>

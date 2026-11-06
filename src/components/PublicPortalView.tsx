@@ -256,14 +256,11 @@ export function PublicPortalView({
     };
   }, [loadData]);
 
-  // Generate SVG QR code for current public event URL
+  // Generate SVG QR code for public portal URL (/publik)
   const publicEventUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    const code = shortCode || raceData?.competition.shortCode;
-    return code
-      ? `${window.location.origin}/t/${code}`
-      : `${window.location.origin}/publik`;
-  }, [shortCode, raceData]);
+    return `${window.location.origin}/publik`;
+  }, []);
 
   const iofResultsXmlUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
@@ -433,7 +430,7 @@ export function PublicPortalView({
           </div>
         </header>
 
-        <main className="flex-1 w-full max-w-5xl mx-auto p-3 sm:p-5 space-y-4">
+        <main className="flex-1 w-full p-2 sm:p-3.5 space-y-3">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h1 className="text-lg sm:text-xl font-display font-bold">
               {seasonClubSettings?.clubName
@@ -572,7 +569,7 @@ export function PublicPortalView({
         </main>
 
         <footer className="mt-4 club-surface bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
-          <div className="max-w-5xl mx-auto px-3 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2">
+          <div className="w-full px-2 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs club-muted text-slate-500 dark:text-slate-400">
               {effectiveClubSettings?.portalTitle?.trim() || 'PasserSI Live'} · Orienteringsresultat i realtid
             </span>
@@ -690,7 +687,7 @@ export function PublicPortalView({
 
         {/* Navigation Tabs */}
         {raceData && (
-          <div className="max-w-6xl mx-auto px-3 sm:px-6 flex flex-wrap items-center gap-x-1 border-t border-slate-100 dark:border-slate-800/80">
+          <div className="w-full px-2 sm:px-4 flex flex-wrap items-center gap-x-1 border-t border-slate-100 dark:border-slate-800/80">
             <button
               type="button"
               onClick={() => setActiveTab('RESULTS')}
@@ -719,7 +716,7 @@ export function PublicPortalView({
         )}
       </header>
 
-      <main className="flex-1 w-full max-w-6xl mx-auto p-2.5 sm:p-4 space-y-3">
+      <main className="flex-1 w-full p-1.5 sm:p-2.5 space-y-2.5">
         {loading && !raceData ? (
           <div className="p-6 text-center text-xs text-slate-500">Hämtar tävlingsdata...</div>
         ) : error && !raceData ? (
@@ -896,7 +893,7 @@ export function PublicPortalView({
 
               {/* TAB 2: START LIST */}
               {activeTab === 'STARTLIST' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-2 w-full">
                   {raceData.classes.map((cls) => {
                     const inCls = filteredCompetitors
                       .filter((c) => c.classId === cls.id)
@@ -908,28 +905,28 @@ export function PublicPortalView({
                     return (
                       <section
                         key={cls.id}
-                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden"
+                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden"
                       >
-                        <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/40">
+                        <div className="px-3 py-1.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/60 dark:bg-slate-950/40">
                           <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">{cls.name}</h3>
                           <span className="text-[11px] font-mono tabular-nums text-slate-500">
                             {inCls.length} anmälda
                           </span>
                         </div>
                         {inCls.length === 0 ? (
-                          <div className="p-4 text-center text-xs text-slate-400">
+                          <div className="p-3 text-center text-xs text-slate-400">
                             Inga löpare anmälda i {cls.name}.
                           </div>
                         ) : (
                           <div className="overflow-x-auto">
                             <table className="w-full text-left text-xs border-collapse">
                               <thead>
-                                <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/40 dark:bg-slate-950/20">
-                                  <th className="py-2 pl-3.5 pr-2 w-14 font-mono">Nummerlapp</th>
-                                  <th className="py-2 px-2 w-24 font-mono">Bricknummer</th>
-                                  <th className="py-2 px-2">Namn</th>
-                                  <th className="py-2 px-2">Klubb</th>
-                                  <th className="py-2 pl-2 pr-3.5 text-right font-mono w-20">Starttid</th>
+                                <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/50 dark:bg-slate-950/30">
+                                  <th className="py-2 pl-3 pr-2 w-16 font-mono">Nr-lapp</th>
+                                  <th className="py-2 px-2.5 w-28 font-mono">Bricknummer</th>
+                                  <th className="py-2 px-2.5">Namn</th>
+                                  <th className="py-2 px-2.5">Klubb</th>
+                                  <th className="py-2 pl-2.5 pr-3 text-right font-mono w-24">Starttid</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
@@ -940,21 +937,21 @@ export function PublicPortalView({
                                       : 'Fri';
                                   return (
                                     <tr key={r.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
-                                      <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums text-slate-600 dark:text-slate-400">
+                                      <td className="py-1.5 pl-3 pr-2 font-mono tabular-nums text-slate-600 dark:text-slate-400">
                                         {r.bib ?? '—'}
                                       </td>
-                                      <td className="py-1.5 px-2 font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                                      <td className="py-1.5 px-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300">
                                         {formatSiNumber(r.siNumber)}
                                       </td>
-                                      <td className="py-1.5 px-2 font-medium text-slate-900 dark:text-slate-100">
+                                      <td className="py-1.5 px-2.5 font-medium text-slate-900 dark:text-slate-100">
                                         {r.fullName}
                                       </td>
-                                      <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400 truncate max-w-[150px]">
+                                      <td className="py-1.5 px-2.5 text-slate-600 dark:text-slate-400">
                                         {r.club.trim() ? (
                                           <button
                                             type="button"
                                             onClick={() => setSelectedClubName(r.club.trim())}
-                                            className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100 truncate text-left"
+                                            className="text-blue-700 underline decoration-dotted underline-offset-2 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-100 text-left"
                                           >
                                             {r.club}
                                           </button>
@@ -962,7 +959,7 @@ export function PublicPortalView({
                                           'Klubblös'
                                         )}
                                       </td>
-                                      <td className="py-1.5 pl-2 pr-3.5 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                                      <td className="py-1.5 pl-2.5 pr-3 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
                                         {startClock}
                                       </td>
                                     </tr>
@@ -985,7 +982,7 @@ export function PublicPortalView({
 
       {/* Bottom Action & Share Footer */}
       <footer className="mt-6 club-surface bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
-        <div className="max-w-6xl mx-auto px-3 sm:px-6 py-3 space-y-3">
+        <div className="w-full px-2 sm:px-4 py-2.5 space-y-2.5">
           {qrModalOpen && (
             <section className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-3">
               <div className="flex items-center justify-between gap-3">
@@ -1021,7 +1018,7 @@ export function PublicPortalView({
                 <div className="md:col-span-8 space-y-2.5 text-xs min-w-0">
                   <div>
                     <label className="block font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Publik kortlänk
+                      Publik länk till liveresultat
                     </label>
                     <div className="flex items-center gap-2 min-w-0">
                       <input
