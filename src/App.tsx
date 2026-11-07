@@ -3052,6 +3052,15 @@ export default function App() {
                   onFlushOfflineQueue={async () => {
                     await offlineReadoutQueue.flushQueue();
                   }}
+                  onRetryOfflineQueueItem={async (itemId) => {
+                    await offlineReadoutQueue.retryItem(itemId);
+                  }}
+                  onRemoveOfflineQueueItem={(itemId) => {
+                    offlineReadoutQueue.removeItem(itemId);
+                  }}
+                  onClearOfflineQueue={() => {
+                    offlineReadoutQueue.clearQueue();
+                  }}
                   selectedRunnerId={selectedRunnerId}
                   onSelectRunner={(id) => setSelectedRunnerId(id)}
                   onMarkRentalReturned={async (id) => {

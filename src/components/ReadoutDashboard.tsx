@@ -10,6 +10,7 @@ import {
   Search,
   Send,
   Star,
+  Trash2,
   UserPlus,
   Wifi,
 } from 'lucide-react';
@@ -53,6 +54,9 @@ interface ReadoutDashboardProps {
   onOpenHardwareSettings?: () => void;
   onSetSimulatedOffline: (offline: boolean) => void;
   onFlushOfflineQueue: () => Promise<void>;
+  onRetryOfflineQueueItem: (itemId: string) => Promise<void>;
+  onRemoveOfflineQueueItem: (itemId: string) => void;
+  onClearOfflineQueue: () => void;
   selectedRunnerId: string | null;
   onSelectRunner: (id: string) => void;
   onMarkRentalReturned: (competitorId: string) => Promise<void>;
@@ -92,6 +96,9 @@ export function ReadoutDashboard({
   onOpenHardwareSettings,
   onSetSimulatedOffline,
   onFlushOfflineQueue,
+  onRetryOfflineQueueItem,
+  onRemoveOfflineQueueItem,
+  onClearOfflineQueue,
   selectedRunnerId,
   onSelectRunner,
   onMarkRentalReturned,
@@ -106,6 +113,7 @@ export function ReadoutDashboard({
   const [radioSiInput, setRadioSiInput] = useState<string>('8339104');
   const [busy, setBusy] = useState(false);
   const [modalRunner, setModalRunner] = useState<Competitor | null>(null);
+  const [queueActionId, setQueueActionId] = useState<string | null>(null);
 
   const inForestCount = useMemo(
     () =>
@@ -506,6 +514,122 @@ export function ReadoutDashboard({
           </div>
         )}
       </section>
+
+      {offlineSnap.pendingItems.length > 0 && (
+        <section
+          aria-label="Offline-kö"
+          className="bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900/60 rounded-xl overflow-hidden"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 border-b border-amber-100 dark:border-amber-900/50">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Offline-kö ({offlineSnap.pendingItems.length} {offlineSnap.pendingItems.length === 1 ? 'post' : 'poster'})
+              </h2>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Poster med permanent fel kräver manuell åtgärd eller borttagning.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(`Ta bort alla ${offlineSnap.pendingItems.length} poster från offline-kön? Åtgärden kan inte ångras.`)) {
+                  onClearOfflineQueue();
+                }
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 rounded-lg hover:bg-red-100 dark:hover:bg-red-950/70"
+            >
+              <Trash2 className="w-3 h-3" />
+              Rensa hela kön
+            </button>
+          </div>
+          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+            {offlineSnap.pendingItems.map((item) => {
+              const isBusy = queueActionId === item.id || offlineSnap.flushing;
+              const readout = item.readoutPayload;
+              const punch = item.onlinePunchPayload;
+              const itemName =
+                item.kind === 'READOUT'
+                  ? `Avläsning · SI ${readout?.siNumber ?? 'okänt'} · ${readout?.cardSeries ?? 'okänd bricka'}`
+                  : `Online-stämpling · SI ${punch?.siNumber ?? 'okänt'} · kontroll ${punch?.stationCode ?? 'okänd'}`;
+              return (
+                <li key={item.id} className="px-3.5 py-2.5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">{itemName}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Tävling: {item.eventId || 'saknas'} · Köad: {new Date(item.createdAt).toLocaleString('sv-SE')}
+                    </p>
+                    {readout && (
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Stämplingar: {readout.punches.length}
+                        {readout.finishTimeSec !== null && readout.finishTimeSec !== undefined
+                          ? ` · Måltid: ${formatSecondsAsClock(readout.finishTimeSec)}`
+                          : ''}
+                      </p>
+                    )}
+                    <details className="text-[11px] text-slate-600 dark:text-slate-400">
+                      <summary className="cursor-pointer">Visa innehåll</summary>
+                      <div className="mt-1 space-y-1 break-words">
+                        <p>Post-ID: <span className="font-mono">{item.id}</span></p>
+                        {readout && (
+                          <>
+                            <p>Bricktyp: {readout.cardSeries} · Kontrollkod: {readout.stationCode}</p>
+                            <p>
+                              Check: {readout.checkTimeSec == null ? '—' : formatSecondsAsClock(readout.checkTimeSec)}
+                              {' · '}Start: {readout.startTimeSec == null ? '—' : formatSecondsAsClock(readout.startTimeSec)}
+                              {' · '}Mål: {readout.finishTimeSec == null ? '—' : formatSecondsAsClock(readout.finishTimeSec)}
+                            </p>
+                            <p>Stämplingar: {readout.punches.map((entry) => `${entry.code} @ ${formatSecondsAsClock(entry.timeSec)}`).join(', ') || 'inga'}</p>
+                            {readout.rawHex && <p>Rådata: <span className="font-mono">{readout.rawHex}</span></p>}
+                          </>
+                        )}
+                        {punch && (
+                          <>
+                            <p>Station: {punch.stationName || '—'} ({punch.stationFunction || '—'})</p>
+                            <p>Tid: {punch.punchTimeSec == null ? '—' : formatSecondsAsClock(punch.punchTimeSec)} · Tidsjustering: {punch.timeOffsetSec ?? 0} sek.</p>
+                            {punch.rawHex && <p>Rådata: <span className="font-mono">{punch.rawHex}</span></p>}
+                          </>
+                        )}
+                      </div>
+                    </details>
+                    {item.lastError && (
+                      <p className={`text-[11px] ${item.permanentError ? 'text-red-700 dark:text-red-300' : 'text-amber-700 dark:text-amber-300'}`}>
+                        {item.permanentError ? 'Permanent fel' : `Senaste synkfel (${item.failureCount ?? 1})`}: {item.lastError}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={isBusy || isOfflineActive}
+                      onClick={async () => {
+                        setQueueActionId(item.id);
+                        try {
+                          await onRetryOfflineQueueItem(item.id);
+                        } finally {
+                          setQueueActionId(null);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 rounded-lg"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${queueActionId === item.id ? 'animate-spin' : ''}`} />
+                      Försök igen
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onRemoveOfflineQueueItem(item.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 disabled:opacity-50 rounded-lg"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Ta bort
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {/* Compact 4-Column Competition KPI Strip */}
       <section

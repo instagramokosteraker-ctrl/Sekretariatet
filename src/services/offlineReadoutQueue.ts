@@ -13,6 +13,9 @@ export interface QueuedReadoutItem {
   kind: 'READOUT' | 'ONLINE_PUNCH';
   createdAt: string;
   eventId?: string;
+  lastError?: string;
+  failureCount?: number;
+  permanentError?: boolean;
   readoutPayload?: FullCardReadoutPayload;
   onlinePunchPayload?: {
     clientPunchId: string;
@@ -94,7 +97,7 @@ class OfflineReadoutQueueManager {
 
       this.retryTimer = setInterval(() => {
         if (
-          this.items.length > 0 &&
+          this.items.some((item) => !item.permanentError) &&
           !this.simulatedOffline &&
           this.browserOnline &&
           Date.now() >= this.nextRetryAt
@@ -344,6 +347,23 @@ class OfflineReadoutQueueManager {
     return { queuedOffline: true };
   }
 
+  private isPermanentDeliveryError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    return [
+      'hittades inte',
+      'finns inte längre',
+      'är avslutad',
+      'tar inte emot fler avläsningar',
+      'tävlingen för den köade avläsningen saknas',
+      'tävlingen för online-stämplingen saknas',
+      'ogiltigt',
+      'ogiltig',
+      'saknar giltiga',
+      'saknar administratörsbehörighet',
+      'saknar behörighet att synka',
+    ].some((phrase) => message.includes(phrase));
+  }
+
   private async deliverSingleItem(
     item: QueuedReadoutItem
   ): Promise<ReadoutDeliveryResult | null> {
@@ -365,21 +385,73 @@ class OfflineReadoutQueueManager {
         return { queuedOffline: false };
       }
 
-      this.lastError = 'Köposten saknar giltiga avläsningsdata.';
-      this.emit();
+      const error = 'Köposten saknar giltiga avläsningsdata.';
+      this.recordItemDeliveryFailure(item, error);
       return null;
     } catch (error) {
-      this.recordDeliveryFailure(error);
+      this.recordItemDeliveryFailure(
+        item,
+        error instanceof Error ? error.message : 'Okänt synkroniseringsfel.',
+        error
+      );
       return null;
     }
   }
 
-  public async flushQueue(): Promise<number> {
+  private recordItemDeliveryFailure(
+    item: QueuedReadoutItem,
+    message: string,
+    error?: unknown
+  ): void {
+    const permanent = this.isPermanentDeliveryError(error ?? message);
+    this.items = this.items.map((queuedItem) =>
+      queuedItem.id === item.id
+        ? {
+            ...queuedItem,
+            lastError: message,
+            failureCount: (queuedItem.failureCount ?? 0) + 1,
+            permanentError: permanent,
+          }
+        : queuedItem
+    );
+    if (error) this.recordDeliveryFailure(error);
+    else {
+      this.lastError = message;
+      this.nextRetryAt = Date.now() + this.retryDelayMs;
+      this.retryDelayMs = Math.min(this.retryDelayMs * 2, MAX_RETRY_DELAY_MS);
+      this.emit();
+    }
+    this.persistAll();
+  }
+
+  public async retryItem(itemId: string): Promise<void> {
+    const item = this.items.find((queuedItem) => queuedItem.id === itemId);
+    if (!item) return;
+    this.items = this.items.map((queuedItem) =>
+      queuedItem.id === itemId
+        ? { ...queuedItem, permanentError: false, lastError: undefined }
+        : queuedItem
+    );
+    this.lastError = null;
+    this.nextRetryAt = 0;
+    this.persistAll();
+    this.emit();
+    await this.flushQueue(itemId);
+  }
+
+  public removeItem(itemId: string): void {
+    this.items = this.items.filter((item) => item.id !== itemId);
+    this.persistAll();
+    this.emit();
+  }
+
+  public async flushQueue(onlyItemId?: string): Promise<number> {
     if (
       this.flushing ||
       this.simulatedOffline ||
       !this.browserOnline ||
-      this.items.length === 0
+      this.items.length === 0 ||
+      (onlyItemId && !this.items.some((item) => item.id === onlyItemId))
     ) {
       return 0;
     }
@@ -390,11 +462,19 @@ class OfflineReadoutQueueManager {
 
     let syncedNow = 0;
     try {
-      const snapshotCopy = [...this.items];
+      const snapshotCopy = this.items.filter(
+        (item) => !item.permanentError && (!onlyItemId || item.id === onlyItemId)
+      );
       for (const item of snapshotCopy) {
         if (this.simulatedOffline || !this.browserOnline) break;
+        if (!this.items.some((queuedItem) => queuedItem.id === item.id)) continue;
         const res = await this.deliverSingleItem(item);
-        if (!res) break;
+        if (!res) {
+          if (this.items.find((queuedItem) => queuedItem.id === item.id)?.permanentError) {
+            continue;
+          }
+          break;
+        }
 
         this.items = this.items.filter((x) => x.id !== item.id);
         this.totalSyncedSession += 1;
