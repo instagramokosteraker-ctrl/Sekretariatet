@@ -342,7 +342,7 @@
     },
     "ClubSettings": {
       "title": "ClubSettings",
-      "description": "Club-wide configuration including Eventor ID, payment settings, rental card fees, and active season state.",
+      "description": "Public club configuration including Eventor organisation ID, payment settings, rental card fees, and active season state. Eventor API credentials are stored separately in the admin-only EventorPrivateSettings subdocument.",
       "type": "object",
       "properties": {
         "settingId": {
@@ -499,6 +499,46 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "EventorPrivateSettings": {
+      "title": "EventorPrivateSettings",
+      "description": "Admin-only configuration and connection metadata stored at /clubSettings/default/private/eventor. Never include API credentials in public club settings or client state.",
+      "type": "object",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "description": "Eventor API key; readable and writable only by SUPER_ADMIN and RACE_ADMIN.",
+          "maxLength": 512
+        },
+        "orgId": {
+          "type": "string",
+          "description": "Configured Eventor organisation ID.",
+          "maxLength": 32
+        },
+        "baseUrl": {
+          "type": "string",
+          "description": "HTTPS Eventor API base URL.",
+          "maxLength": 500
+        },
+        "lastSyncedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time of the most recent successful Eventor sync."
+        },
+        "connectedOrgId": {
+          "type": "string",
+          "description": "Organisation ID last verified by Eventor."
+        },
+        "connectedOrgName": {
+          "type": "string",
+          "description": "Organisation name last verified by Eventor."
+        },
+        "connectedEventId": {
+          "type": "string",
+          "description": "Eventor event ID last imported."
+        }
+      },
+      "additionalProperties": false
     },
     "CloudCompetition": {
       "title": "CloudCompetition",
@@ -1096,7 +1136,11 @@
     },
     "/clubSettings/{settingId}": {
       "schema": { "$ref": "#/entities/ClubSettings" },
-      "description": "Club-wide configuration for Eventor, payment settings, rental fees, and active season state."
+      "description": "Public club-wide configuration for Eventor organisation ID, payment settings, rental fees, and active season state."
+    },
+    "/clubSettings/default/private/eventor": {
+      "schema": { "$ref": "#/entities/EventorPrivateSettings" },
+      "description": "Private Eventor credentials and connection metadata; only SUPER_ADMIN and RACE_ADMIN may read or write."
     },
     "/competitions/{competitionId}": {
       "schema": { "$ref": "#/entities/CloudCompetition" },

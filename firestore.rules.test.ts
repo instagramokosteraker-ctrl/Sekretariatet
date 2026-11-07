@@ -35,6 +35,14 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: now,
         updatedAt: now,
       });
+      await adminDb.doc('admins/race_admin_2').set({
+        uid: 'race_admin_2',
+        displayName: 'Erik Tävlingsledare',
+        role: 'RACE_ADMIN',
+        inviteId: 'inv_erik',
+        createdAt: now,
+        updatedAt: now,
+      });
       await adminDb.doc('adminInvites/inv_other').set({
         inviteId: 'inv_other',
         email: 'secret@klubb.se',
@@ -118,6 +126,33 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       email: 'anna@klubb.se',
       email_verified: true,
     });
+    const otherRaceAdminCtx = testEnv.authenticatedContext('race_admin_2', {
+      email: 'erik@klubb.se',
+      email_verified: true,
+    });
+
+    // Eventor credentials are held only in the admin-restricted private subcollection.
+    await assertFails(
+      attackerCtx.firestore().doc('clubSettings/default/private/eventor').get()
+    );
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('clubSettings/default/private/eventor').set({
+        apiKey: 'secret-eventor-key',
+        orgId: '1234',
+        baseUrl: 'https://eventor.orientering.se/api',
+      })
+    );
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('clubSettings/default/private/eventor').get()
+    );
+    await assertFails(
+      attackerCtx.firestore().doc('clubSettings/default/private/eventor').get()
+    );
+    await assertFails(
+      attackerCtx.firestore().doc('clubSettings/default/private/eventor').set({
+        apiKey: 'attacker-key',
+      })
+    );
 
     // 1. Self-Assigned Admin Escalation -> DENIED
     await assertFails(
@@ -419,6 +454,18 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         competitionIds: [],
         ownerUid: 'race_admin_1',
         createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertSucceeds(
+      otherRaceAdminCtx.firestore().doc('clubSettings/default').update({
+        eventorOrgId: '1234',
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      otherRaceAdminCtx.firestore().doc('clubSettings/default').update({
+        clubName: 'Unauthorized profile change',
         updatedAt: serverTimestamp(),
       })
     );

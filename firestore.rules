@@ -717,6 +717,13 @@ service cloud.firestore {
               'competitionIds',
               'updatedAt'
             ])
+          ) ||
+          (
+            isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'eventorOrgId',
+              'updatedAt'
+            ])
           )
         )
       );
@@ -966,6 +973,42 @@ service cloud.firestore {
             ) ||
             isSuperAdmin()
           );
+
+          match /private/{privateId} {
+            function isValidPrivateEventorConfig(data) {
+              return data.keys().hasOnly([
+                  'apiKey',
+                  'orgId',
+                  'baseUrl',
+                  'lastSyncedAt',
+                  'connectedOrgId',
+                  'connectedOrgName',
+                  'connectedEventId'
+                ]) &&
+                (!('apiKey' in data) || (data.apiKey is string && data.apiKey.size() <= 512)) &&
+                (!('orgId' in data) || (data.orgId is string && data.orgId.size() <= 32)) &&
+                (!('baseUrl' in data) || (data.baseUrl is string && data.baseUrl.size() <= 500)) &&
+                (!('lastSyncedAt' in data) || (data.lastSyncedAt is string && data.lastSyncedAt.size() <= 40)) &&
+                (!('connectedOrgId' in data) || (data.connectedOrgId is string && data.connectedOrgId.size() <= 32)) &&
+                (!('connectedOrgName' in data) || (data.connectedOrgName is string && data.connectedOrgName.size() <= 150)) &&
+                (!('connectedEventId' in data) || (data.connectedEventId is string && data.connectedEventId.size() <= 32));
+            }
+
+            allow get: if isValidId(settingId) &&
+              settingId == 'default' &&
+              privateId == 'eventor' &&
+              isAdmin();
+            allow list: if false;
+            allow create, update: if isValidId(settingId) &&
+              settingId == 'default' &&
+              privateId == 'eventor' &&
+              isAdmin() &&
+              isValidPrivateEventorConfig(incoming());
+            allow delete: if isValidId(settingId) &&
+              settingId == 'default' &&
+              privateId == 'eventor' &&
+              isAdmin();
+          }
       }
 
       // -----------------------------------------------------------------------

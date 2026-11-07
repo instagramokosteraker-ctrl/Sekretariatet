@@ -67,6 +67,7 @@ import {
   upsertAdminInviteInFirestore,
 } from '../firebase';
 import { RunnerStatusIndicator } from './StatusLabels';
+import { EventorIntegrationSettingsView } from './EventorIntegrationSettingsView';
 import {
   CLUB_COLOR_PRESETS,
   applyClubThemeToDocument,
@@ -105,7 +106,7 @@ interface AccessControlViewProps {
   onUpdateClubSettings?: (settings: ClubSettings) => void;
 }
 
-type AdminWorkspaceTab = 'events' | 'series' | 'admins' | 'club' | 'rentals_series';
+type AdminWorkspaceTab = 'events' | 'series' | 'admins' | 'club' | 'eventor' | 'rentals_series';
 
 const PIN_ROLE_META: {
   role: OfficialPinRole;
@@ -2037,6 +2038,17 @@ export function AccessControlView({
             </button>
             <button
               type="button"
+              onClick={() => setSubTab('eventor')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'eventor'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              Eventor-integration
+            </button>
+            <button
+              type="button"
               onClick={() => setSubTab('rentals_series')}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 subTab === 'rentals_series'
@@ -2873,6 +2885,24 @@ export function AccessControlView({
             </form>
           </section>
         </div>
+      )}
+
+      {view === 'admin' && subTab === 'eventor' && (
+        <EventorIntegrationSettingsView
+          onSaveOrgId={async (orgId) => {
+            await saveClubSettingsToFirestore({ eventorOrgId: orgId }, isSuperAdmin);
+            const response = await apiFetch('/api/club-settings', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ eventorOrgId: orgId }),
+            });
+            if (!response.ok) {
+              const data = (await response.json()) as { error?: string };
+              throw new Error(data.error || 'Kunde inte uppdatera klubbens organisations-ID.');
+            }
+            onUpdateClubSettings?.({ ...clubSettings, eventorOrgId: orgId });
+          }}
+        />
       )}
 
       {/* =====================================================================

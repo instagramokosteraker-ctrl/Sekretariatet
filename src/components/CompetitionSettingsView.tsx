@@ -490,8 +490,7 @@ export function CompetitionSettingsView({
               </h2>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Synka medlemmar och tävlingar från{' '}
-              <span className="font-mono break-all">{eventor.baseUrl}</span> · Löpardatabas:{' '}
+              Synka medlemmar och tävlingar från Eventor · Löpardatabas:{' '}
               <strong className="font-mono tabular-nums text-slate-900 dark:text-slate-100">
                 {runnerDbCount}
               </strong>{' '}
@@ -500,37 +499,26 @@ export function CompetitionSettingsView({
           </div>
 
           <div className="text-xs text-slate-600 dark:text-slate-400 flex flex-wrap items-center gap-x-2 shrink-0">
-            <span>Servernyckel:</span>
-            <strong
-              className={
-                eventor.apiKeyConfigured
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : 'text-amber-700 dark:text-amber-400'
-              }
-            >
-              {eventor.apiKeyConfigured ? 'EVENTOR_API_KEY aktiv' : 'EVENTOR_API_KEY ej satt'}
-            </strong>
             {eventor.connectedOrgName && (
               <>
-                <span aria-hidden="true">·</span>
-                <span>{eventor.connectedOrgName}</span>
+                <span>Ansluten:</span>
+                <strong className="text-emerald-700 dark:text-emerald-400">
+                  {eventor.connectedOrgName}
+                </strong>
               </>
             )}
           </div>
         </div>
 
-        {!eventor.apiKeyConfigured && (
-          <div className="px-3 py-2 text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-lg">
-            För live-hämtning från Eventor: lägg in{' '}
-            <span className="font-mono font-semibold">EVENTOR_API_KEY</span> i Secrets-panelen. Den
-            lokala Löpardatabasen ({runnerDbCount} brickor) fungerar direkt även utan nyckel.
-          </div>
-        )}
+        <div className="px-3 py-2 text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-lg">
+          Eventor-anslutningen hanteras under <strong>Klubbadmin & Behörighet → Eventor-integration</strong>.
+          Den lokala Löpardatabasen ({runnerDbCount} brickor) fungerar även utan Eventor-anslutning.
+        </div>
 
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <button
             type="button"
-            disabled={eventorBusy || !eventor.apiKeyConfigured}
+            disabled={eventorBusy}
             onClick={() => void handleSyncClubClick()}
             className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap self-start"
           >
@@ -556,7 +544,7 @@ export function CompetitionSettingsView({
             />
             <button
               type="submit"
-              disabled={eventorBusy || !eventor.apiKeyConfigured || !eventorEventId.trim()}
+              disabled={eventorBusy || !eventorEventId.trim()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap"
             >
               <CloudDownload className="w-3.5 h-3.5" />

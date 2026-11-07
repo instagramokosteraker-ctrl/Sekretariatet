@@ -487,6 +487,108 @@ function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: stri
 const { projectId: FIREBASE_PROJECT_ID, firestoreDatabaseId: FIRESTORE_DATABASE_ID } =
   loadFirebaseConfigIds();
 
+function getFirestoreEventorDocumentUrl(): string {
+  return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    FIREBASE_PROJECT_ID
+  )}/databases/${encodeURIComponent(
+    FIRESTORE_DATABASE_ID
+  )}/documents/clubSettings/default/private/eventor`;
+}
+
+function getFirestoreStringField(
+  fields: Record<string, { stringValue?: string }> | undefined,
+  fieldName: string
+): string {
+  return fields?.[fieldName]?.stringValue ?? '';
+}
+
+async function getEventorFirestoreToken(
+  req: express.Request,
+  sessionUser: AuthSessionUser
+): Promise<string> {
+  const token = (req.header('x-passersi-token') || req.header('authorization') || '')
+    .replace(/^Bearer\s+/i, '')
+    .trim();
+  if (token.split('.').length !== 3) {
+    throw new Error('Logga in med Google igen för att hantera Eventor-inställningarna.');
+  }
+  const verified = await verifyFirebaseIdToken(token);
+  if (verified.uid !== sessionUser.uid) {
+    throw new Error('Firebase-inloggningen matchar inte den aktiva administratörssessionen.');
+  }
+  return token;
+}
+
+async function readEventorConfigFromFirestore(token: string): Promise<EventorConfig> {
+  const response = await fetch(getFirestoreEventorDocumentUrl(), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (response.status === 404) {
+    return {
+      apiKey: '',
+      orgId: '',
+      baseUrl: DEFAULT_EVENTOR_BASE_URL,
+      lastSyncedAt: null,
+      connectedOrgId: null,
+      connectedOrgName: null,
+      connectedEventId: null,
+    };
+  }
+  if (!response.ok) {
+    throw new Error(
+      response.status === 403
+        ? 'Firestore nekade åtkomst till Eventor-inställningarna. Kontrollera administratörsbehörigheten.'
+        : `Kunde inte läsa Eventor-inställningarna från Firestore (HTTP ${response.status}).`
+    );
+  }
+  const doc = (await response.json()) as {
+    fields?: Record<string, { stringValue?: string }>;
+  };
+  const fields = doc.fields;
+  return {
+    apiKey: getFirestoreStringField(fields, 'apiKey'),
+    orgId: getFirestoreStringField(fields, 'orgId'),
+    baseUrl: normalizeEventorBaseUrl(
+      getFirestoreStringField(fields, 'baseUrl') || DEFAULT_EVENTOR_BASE_URL
+    ),
+    lastSyncedAt: getFirestoreStringField(fields, 'lastSyncedAt') || null,
+    connectedOrgId: getFirestoreStringField(fields, 'connectedOrgId') || null,
+    connectedOrgName: getFirestoreStringField(fields, 'connectedOrgName') || null,
+    connectedEventId: getFirestoreStringField(fields, 'connectedEventId') || null,
+  };
+}
+
+async function writeEventorConfigToFirestore(
+  token: string,
+  values: Partial<EventorConfig>
+): Promise<void> {
+  const fields: Record<string, { stringValue: string }> = {};
+  const updateMask = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) continue;
+    fields[key] = { stringValue: value ?? '' };
+    updateMask.append('updateMask.fieldPaths', key);
+  }
+  const response = await fetch(
+    `${getFirestoreEventorDocumentUrl()}?${updateMask.toString()}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields }),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(
+      response.status === 403
+        ? 'Firestore nekade åtkomst när Eventor-inställningarna skulle sparas.'
+        : `Kunde inte spara Eventor-inställningarna i Firestore (HTTP ${response.status}).`
+    );
+  }
+}
+
 async function verifyFirestoreAdminRoleRest(
   uid: string,
   idToken: string
@@ -1325,15 +1427,33 @@ function recalculateEventFromRawReadouts(ev: SingleEventRecord): number {
   return recalculatedCount;
 }
 
-function getEventorEnvConfig(): { apiKey: string; baseUrl: string } {
-  const apiKey = (process.env.EVENTOR_API_KEY || '').trim();
-  const rawBase = (process.env.EVENTOR_BASE_URL || 'https://eventor.orientering.se/api')
-    .trim()
-    .replace(/\/+$/, '');
-  const baseUrl = rawBase
-    ? (rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`)
-    : 'https://eventor.orientering.se/api';
-  return { apiKey, baseUrl };
+const DEFAULT_EVENTOR_BASE_URL = 'https://eventor.orientering.se/api';
+
+interface EventorConfig {
+  apiKey: string;
+  orgId: string;
+  baseUrl: string;
+  lastSyncedAt: string | null;
+  connectedOrgId: string | null;
+  connectedOrgName: string | null;
+  connectedEventId: string | null;
+}
+
+function normalizeEventorBaseUrl(value: string): string {
+  const rawBase = value.trim().replace(/\/+$/, '');
+  const baseUrl = rawBase ? (rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`) : DEFAULT_EVENTOR_BASE_URL;
+  const parsed = new URL(baseUrl);
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('Eventor Base URL måste vara en giltig HTTPS-adress utan inloggningsuppgifter.');
+  }
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+function getLegacyEventorConfig(): { apiKey: string; baseUrl: string } {
+  return {
+    apiKey: (process.env.EVENTOR_API_KEY || '').trim(),
+    baseUrl: normalizeEventorBaseUrl(process.env.EVENTOR_BASE_URL || DEFAULT_EVENTOR_BASE_URL),
+  };
 }
 
 function getRocDefaultBaseUrl(): string {
@@ -1341,10 +1461,9 @@ function getRocDefaultBaseUrl(): string {
 }
 
 function buildDefaultEventorMeta(): EventorIntegrationStatus {
-  const { apiKey, baseUrl } = getEventorEnvConfig();
   return {
-    apiKeyConfigured: apiKey.length > 0,
-    baseUrl,
+    apiKeyConfigured: false,
+    baseUrl: DEFAULT_EVENTOR_BASE_URL,
     connectedOrgId: null,
     connectedOrgName: 'OK Österåker (Lokalt synkad klubbdatabas)',
     connectedEventId: null,
@@ -1818,24 +1937,21 @@ function parseEventorEntriesXml(
   return entries;
 }
 
-async function fetchFromEventorApi(endpointPath: string): Promise<string> {
-  const { apiKey, baseUrl } = getEventorEnvConfig();
-  if (!apiKey) {
-    throw new Error(
-      'EVENTOR_API_KEY saknas på servern. Lägg in klubbens Eventor API-nyckel under Secrets i AI Studio.'
-    );
+async function fetchFromEventorApi(endpointPath: string, config: EventorConfig): Promise<string> {
+  if (!config.apiKey) {
+    throw new Error('Eventor API-nyckel saknas. Konfigurera integrationen under Klubbadmin & Behörighet.');
   }
-  const url = `${baseUrl}${endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`}`;
+  const url = `${config.baseUrl}${endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`}`;
   const resp = await fetch(url, {
     headers: {
-      ApiKey: apiKey,
+      ApiKey: config.apiKey,
       Accept: 'application/xml, text/xml, */*',
     },
   });
   if (!resp.ok) {
     if (resp.status === 401 || resp.status === 403) {
       throw new Error(
-        `Eventor nekade åtkomst (HTTP ${resp.status}). Kontrollera att EVENTOR_API_KEY är en giltig klubb-API-nyckel.`
+        `Eventor nekade åtkomst (HTTP ${resp.status}). Kontrollera API-nyckeln och organisations-ID:t i klubbinställningarna.`
       );
     }
     if (resp.status === 404) {
@@ -2393,11 +2509,9 @@ async function startServer() {
   }
 
   function buildLiveEventorStatus(): EventorIntegrationStatus {
-    const { apiKey, baseUrl } = getEventorEnvConfig();
     return {
       ...seasonDb.eventor,
-      apiKeyConfigured: apiKey.length > 0,
-      baseUrl,
+      baseUrl: seasonDb.eventor.baseUrl || DEFAULT_EVENTOR_BASE_URL,
     };
   }
 
@@ -3382,6 +3496,19 @@ async function startServer() {
       return null;
     }
     return sessionUser;
+  }
+
+  function requireEventorAdminRequest(
+    req: express.Request,
+    res: express.Response
+  ): AuthSessionUser | null {
+    const user = requireAdminRequest(req, res);
+    if (!user) return null;
+    if (user.adminTier !== 'SUPER_ADMIN' && user.adminTier !== 'RACE_ADMIN') {
+      res.status(403).json({ error: 'Endast SUPER_ADMIN och RACE_ADMIN får hantera Eventor.' });
+      return null;
+    }
+    return user;
   }
 
   app.get('/api/auth/me', (req, res) => {
@@ -5712,11 +5839,174 @@ async function startServer() {
     res.status(204).end();
   });
 
-  app.get('/api/eventor/status', (_req, res) => {
+  app.get('/api/eventor/config', async (req, res) => {
+    const user = requireEventorAdminRequest(req, res);
+    if (!user) return;
+    try {
+      const token = await getEventorFirestoreToken(req, user);
+      const config = await readEventorConfigFromFirestore(token);
+      res.json({
+        apiKeyConfigured: config.apiKey.length > 0,
+        orgId: config.orgId,
+        baseUrl: config.baseUrl,
+        connectedOrgId: config.connectedOrgId,
+        connectedOrgName: config.connectedOrgName,
+        connectedEventId: config.connectedEventId,
+        lastSyncedAt: config.lastSyncedAt,
+        migrationAvailable:
+          !config.apiKey && Boolean((process.env.EVENTOR_API_KEY || '').trim()),
+      });
+    } catch (err: unknown) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Kunde inte läsa Eventor-inställningarna.',
+      });
+    }
+  });
+
+  app.put('/api/eventor/config', async (req, res) => {
+    const user = requireEventorAdminRequest(req, res);
+    if (!user) return;
+    const body = req.body as { apiKey?: string; orgId?: string; baseUrl?: string };
+    const orgId = String(body.orgId ?? '').trim();
+    const apiKey = String(body.apiKey ?? '').trim();
+    if (orgId && !/^\d{1,32}$/.test(orgId)) {
+      res.status(400).json({ error: 'Organisations-ID måste bestå av 1–32 siffror.' });
+      return;
+    }
+    if (apiKey.length > 512) {
+      res.status(400).json({ error: 'API-nyckeln är för lång.' });
+      return;
+    }
+    let baseUrl: string;
+    try {
+      baseUrl = normalizeEventorBaseUrl(String(body.baseUrl ?? DEFAULT_EVENTOR_BASE_URL));
+    } catch (err: unknown) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Ogiltig Eventor Base URL.',
+      });
+      return;
+    }
+
+    try {
+      const token = await getEventorFirestoreToken(req, user);
+      const current = await readEventorConfigFromFirestore(token);
+      await writeEventorConfigToFirestore(token, {
+        ...(apiKey ? { apiKey } : {}),
+        orgId,
+        baseUrl,
+      });
+      seasonDb.clubSettings = {
+        ...ensureClubSettings(seasonDb),
+        eventorOrgId: orgId,
+      };
+      saveSeasonDatabase(seasonDb);
+      broadcastFullState();
+      res.json({
+        saved: true,
+        apiKeyConfigured: Boolean(apiKey || current.apiKey),
+        orgId,
+        baseUrl,
+      });
+    } catch (err: unknown) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Kunde inte spara Eventor-inställningarna.',
+      });
+    }
+  });
+
+  app.post('/api/eventor/test', async (req, res) => {
+    const user = requireEventorAdminRequest(req, res);
+    if (!user) return;
+    try {
+      const token = await getEventorFirestoreToken(req, user);
+      const config = await readEventorConfigFromFirestore(token);
+      if (!config.apiKey) {
+        res.status(400).json({ error: 'Eventor API-nyckel saknas. Spara inställningarna först.' });
+        return;
+      }
+      if (!config.orgId) {
+        res.status(400).json({ error: 'Eventor Organisations-ID saknas. Spara inställningarna först.' });
+        return;
+      }
+      const orgXml = await fetchFromEventorApi('/organisation/apiKey', config);
+      const org = parseEventorOrgXml(orgXml);
+      if (!org) {
+        res.status(502).json({ error: 'Eventor svarade, men klubbinformationen kunde inte tolkas.' });
+        return;
+      }
+      if (org.orgId !== config.orgId) {
+        res.status(400).json({
+          error: `API-nyckeln hör till organisation ${org.orgId} (${org.orgName}), inte angivet organisations-ID ${config.orgId}.`,
+        });
+        return;
+      }
+      await writeEventorConfigToFirestore(token, {
+        connectedOrgId: org.orgId,
+        connectedOrgName: org.orgName,
+      });
+      res.json({ connected: true, orgId: org.orgId, orgName: org.orgName });
+    } catch (err: unknown) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Kunde inte testa anslutningen till Eventor.',
+      });
+    }
+  });
+
+  app.post('/api/eventor/migrate-legacy', async (req, res) => {
+    const user = requireEventorAdminRequest(req, res);
+    if (!user) return;
+    try {
+      const token = await getEventorFirestoreToken(req, user);
+      const current = await readEventorConfigFromFirestore(token);
+      if (current.apiKey) {
+        res.status(409).json({ error: 'En Eventor API-nyckel är redan sparad i Firestore.' });
+        return;
+      }
+      const legacy = getLegacyEventorConfig();
+      if (!legacy.apiKey) {
+        res.status(404).json({ error: 'Ingen äldre EVENTOR_API_KEY hittades på servern.' });
+        return;
+      }
+      const orgId = (current.orgId || ensureClubSettings(seasonDb).eventorOrgId).trim();
+      if (!orgId) {
+        res.status(400).json({
+          error: 'Ange och spara Eventor Organisations-ID under Klubbprofil innan migreringen.',
+        });
+        return;
+      }
+      const config = { ...current, ...legacy, orgId };
+      const orgXml = await fetchFromEventorApi('/organisation/apiKey', config);
+      const org = parseEventorOrgXml(orgXml);
+      if (!org || org.orgId !== orgId) {
+        res.status(400).json({
+          error: org
+            ? `Den äldre API-nyckeln hör till organisation ${org.orgId}, inte ${orgId}.`
+            : 'Den äldre API-nyckeln gav inget giltigt organisationssvar från Eventor.',
+        });
+        return;
+      }
+      await writeEventorConfigToFirestore(token, {
+        apiKey: legacy.apiKey,
+        orgId,
+        baseUrl: legacy.baseUrl,
+        connectedOrgId: org.orgId,
+        connectedOrgName: org.orgName,
+      });
+      res.json({ migrated: true, orgId, orgName: org.orgName });
+    } catch (err: unknown) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Kunde inte migrera äldre Eventor-inställningar.',
+      });
+    }
+  });
+
+  app.get('/api/eventor/status', (req, res) => {
+    if (!requireEventorAdminRequest(req, res)) return;
     res.json(buildLiveEventorStatus());
   });
 
   app.put('/api/eventor/settings', (req, res) => {
+    if (!requireEventorAdminRequest(req, res)) return;
     const body = req.body as { autoCreateFromRunnerDbOnReadout?: boolean };
     if (body.autoCreateFromRunnerDbOnReadout !== undefined) {
       seasonDb.eventor.autoCreateFromRunnerDbOnReadout = Boolean(
@@ -5728,9 +6018,17 @@ async function startServer() {
     res.json(buildLiveEventorStatus());
   });
 
-  app.post('/api/eventor/sync-club', async (_req, res) => {
+  app.post('/api/eventor/sync-club', async (req, res) => {
+    const user = requireEventorAdminRequest(req, res);
+    if (!user) return;
     try {
-      const orgXml = await fetchFromEventorApi('/organisation/apiKey');
+      const token = await getEventorFirestoreToken(req, user);
+      const config = await readEventorConfigFromFirestore(token);
+      if (!config.apiKey || !config.orgId) {
+        res.status(400).json({ error: 'Spara Eventor API-nyckel och organisations-ID först.' });
+        return;
+      }
+      const orgXml = await fetchFromEventorApi('/organisation/apiKey', config);
       const org = parseEventorOrgXml(orgXml);
       if (!org) {
         res.status(502).json({
@@ -5738,9 +6036,14 @@ async function startServer() {
         });
         return;
       }
+      if (org.orgId !== config.orgId) {
+        res.status(400).json({ error: 'Eventor API-nyckeln och organisations-ID:t matchar inte.' });
+        return;
+      }
 
       const compXml = await fetchFromEventorApi(
-        `/competitors?organisationId=${encodeURIComponent(org.orgId)}&includeContactDetails=false`
+        `/competitors?organisationId=${encodeURIComponent(org.orgId)}&includeContactDetails=false`,
+        config
       );
       const parsedMembers = parseEventorCompetitorsXml(compXml, org.orgName, org.orgId);
 
@@ -5765,6 +6068,11 @@ async function startServer() {
       seasonDb.eventor.connectedOrgName = org.orgName;
       seasonDb.eventor.lastSyncedAt = new Date().toISOString();
       saveSeasonDatabase(seasonDb);
+      await writeEventorConfigToFirestore(token, {
+        lastSyncedAt: seasonDb.eventor.lastSyncedAt,
+        connectedOrgId: org.orgId,
+        connectedOrgName: org.orgName,
+      });
       broadcastFullState();
 
       res.json({
@@ -5781,6 +6089,23 @@ async function startServer() {
   });
 
   app.post('/api/eventor/import-event', async (req, res) => {
+    const user = requireEventorAdminRequest(req, res);
+    if (!user) return;
+    let firestoreToken: string;
+    let eventorConfig: EventorConfig;
+    try {
+      firestoreToken = await getEventorFirestoreToken(req, user);
+      eventorConfig = await readEventorConfigFromFirestore(firestoreToken);
+    } catch (err: unknown) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Kunde inte läsa Eventor-inställningarna.',
+      });
+      return;
+    }
+    if (!eventorConfig.apiKey || !eventorConfig.orgId) {
+      res.status(400).json({ error: 'Spara Eventor API-nyckel och organisations-ID först.' });
+      return;
+    }
     const db = getActiveEvent();
     const { eventId } = req.body as { eventId?: string };
     const cleanId = String(eventId || '').replace(/\D/g, '');
@@ -5790,7 +6115,7 @@ async function startServer() {
     }
 
     try {
-      const eventXml = await fetchFromEventorApi(`/event/${cleanId}`);
+      const eventXml = await fetchFromEventorApi(`/event/${cleanId}`, eventorConfig);
       const eventBlock = extractFirstTag(eventXml, 'Event') ?? eventXml;
       const evName = extractFirstTag(eventBlock, 'Name');
       const startBlock = extractFirstTag(eventBlock, 'StartDate') ?? eventBlock;
@@ -5799,7 +6124,7 @@ async function startServer() {
       if (evName) db.competition.name = evName;
       if (evDate && /^\d{4}-\d{2}-\d{2}$/.test(evDate)) db.competition.date = evDate;
 
-      const classesXml = await fetchFromEventorApi(`/eventclasses?eventId=${cleanId}`);
+      const classesXml = await fetchFromEventorApi(`/eventclasses?eventId=${cleanId}`, eventorConfig);
       const classMap = parseEventorClassesXml(classesXml);
 
       let addedClasses = 0;
@@ -5819,7 +6144,8 @@ async function startServer() {
       }
 
       const entriesXml = await fetchFromEventorApi(
-        `/entries?eventIds=${cleanId}&includePersonElement=true&includeOrganisationElement=true`
+        `/entries?eventIds=${cleanId}&includePersonElement=true&includeOrganisationElement=true`,
+        eventorConfig
       );
       const parsedEntries = parseEventorEntriesXml(entriesXml, classMap);
 
@@ -5887,6 +6213,10 @@ async function startServer() {
       seasonDb.eventor.connectedEventId = cleanId;
       seasonDb.eventor.lastSyncedAt = new Date().toISOString();
       saveSeasonDatabase(seasonDb);
+      await writeEventorConfigToFirestore(firestoreToken, {
+        connectedEventId: cleanId,
+        lastSyncedAt: seasonDb.eventor.lastSyncedAt,
+      });
       broadcastFullState(db.competition.shortCode);
 
       res.json({
