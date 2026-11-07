@@ -282,7 +282,11 @@ export function AccessControlView({
   const anyEventHasFees = Boolean(enableFeesAndSwish);
 
   useEffect(() => {
-    setClubForm(clubSettings);
+    setClubForm((prev) => ({
+      ...clubSettings,
+      logoDataUrl: clubSettings.logoDataUrl || prev.logoDataUrl || '',
+      portalTitle: clubSettings.portalTitle || prev.portalTitle || '',
+    }));
     setLogoPreviewBroken(false);
   }, [clubSettings]);
 
@@ -1425,22 +1429,10 @@ export function AccessControlView({
     setClubBusy(true);
     setClubNotice(null);
     try {
-      try {
-        const res = await apiFetch('/api/club-settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(clubForm),
-        });
-        if (res.ok) {
-          const stateRes = await apiFetch('/api/state');
-          if (stateRes.ok) {
-            const snap = (await stateRes.json()) as MeosAppState;
-            onApplyStateSnapshot(snap);
-          }
-        }
-      } catch {
-        // Backend offline / Vercel static
+      if (onUpdateClubSettings) {
+        onUpdateClubSettings(clubForm);
       }
+      applyClubThemeToDocument(clubForm, false);
 
       let savedToFirestore = false;
       if (auth.currentUser) {
@@ -1460,10 +1452,28 @@ export function AccessControlView({
         }
       }
 
-      if (onUpdateClubSettings) {
-        onUpdateClubSettings(clubForm);
+      try {
+        const res = await apiFetch('/api/club-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(clubForm),
+        });
+        if (res.ok) {
+          const stateRes = await apiFetch('/api/state');
+          if (stateRes.ok) {
+            const snap = (await stateRes.json()) as MeosAppState;
+            if (snap.clubSettings) {
+              snap.clubSettings.logoDataUrl =
+                snap.clubSettings.logoDataUrl || clubForm.logoDataUrl || '';
+              snap.clubSettings.portalTitle =
+                snap.clubSettings.portalTitle || clubForm.portalTitle || '';
+            }
+            onApplyStateSnapshot(snap);
+          }
+        }
+      } catch {
+        // Backend offline / Vercel static
       }
-      applyClubThemeToDocument(clubForm, false);
 
       setClubNotice({
         ok: true,

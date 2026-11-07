@@ -74,8 +74,24 @@ export async function apiFetch(
 ): Promise<Response> {
   const session = getStoredAuthSession();
   const headers = new Headers(init.headers || {});
-  if (session?.token) {
-    headers.set('x-passersi-token', session.token);
+  let token = session?.token;
+  if (auth.currentUser) {
+    try {
+      token = await auth.currentUser.getIdToken();
+      if (session && session.token !== token) {
+        session.token = token;
+        try {
+          localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+        } catch {
+          // ignore storage error
+        }
+      }
+    } catch {
+      // Keep existing token
+    }
+  }
+  if (token) {
+    headers.set('x-passersi-token', token);
   }
   return fetch(input, {
     ...init,

@@ -74,7 +74,7 @@ const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const CLOCK_REGEX = /^\d{2}:\d{2}(:\d{2})?$/;
 const PIN_REGEX = /^\d{4,6}$/;
 const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
-const MAX_LOGO_DATA_URL_LEN = 200_000;
+const MAX_LOGO_DATA_URL_LEN = 500_000;
 const BATCH_CHUNK_LIMIT = 350;
 
 function sanitizeCloudHexColor(raw?: string | null): string {
@@ -87,10 +87,7 @@ function sanitizeCloudLogoDataUrl(raw?: string | null): string {
   if (!raw || typeof raw !== 'string') return '';
   const trimmed = raw.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_LOGO_DATA_URL_LEN) return '';
-  if (
-    trimmed.startsWith('data:image/png;base64,') ||
-    trimmed.startsWith('data:image/jpeg;base64,')
-  ) {
+  if (trimmed.startsWith('data:image/')) {
     return trimmed;
   }
   return '';
@@ -1119,13 +1116,31 @@ export async function syncFullSeasonToFirestore(
   };
 
   let existingClubOwner: string | null = null;
+  let existingClubDoc: Record<string, unknown> | null = null;
   try {
     const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
     if (clubSnap.exists()) {
-      existingClubOwner = (clubSnap.data() as { ownerUid?: string }).ownerUid || null;
+      existingClubDoc = clubSnap.data() as Record<string, unknown>;
+      existingClubOwner = (existingClubDoc.ownerUid as string) || null;
     }
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.GET, clubPath);
+  }
+
+  // Preserve existing non-empty branding and indexed IDs if snapshot is empty
+  if (existingClubDoc) {
+    if (!clubMutable.logoDataUrl && typeof existingClubDoc.logoDataUrl === 'string' && existingClubDoc.logoDataUrl.length > 0) {
+      clubMutable.logoDataUrl = existingClubDoc.logoDataUrl;
+    }
+    if (!clubMutable.portalTitle && typeof existingClubDoc.portalTitle === 'string' && existingClubDoc.portalTitle.length > 0) {
+      clubMutable.portalTitle = existingClubDoc.portalTitle;
+    }
+    if (clubMutable.competitionIds.length === 0 && Array.isArray(existingClubDoc.competitionIds) && existingClubDoc.competitionIds.length > 0) {
+      clubMutable.competitionIds = existingClubDoc.competitionIds as string[];
+    }
+    if (!clubMutable.activeEventId && typeof existingClubDoc.activeEventId === 'string' && existingClubDoc.activeEventId.length > 0) {
+      clubMutable.activeEventId = existingClubDoc.activeEventId;
+    }
   }
 
   if (!existingClubOwner) {
@@ -4432,20 +4447,56 @@ export async function saveClubSettingsToFirestore(
   const clubRef = doc(db, 'clubSettings', 'default');
   const clubSnap = await getDoc(clubRef);
 
+  const existingData = clubSnap.exists() ? (clubSnap.data() as Record<string, unknown>) : null;
+
   const clubName =
-    (settings.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) ||
-    DEFAULT_CLUB_SETTINGS.clubName;
-  const eventorOrgId = (settings.eventorOrgId || '').trim().slice(0, 32);
-  const swishNumber = (settings.swishNumber || '').trim().slice(0, 20);
-  const swishRecipientName = (settings.swishRecipientName || clubName).trim().slice(0, 100);
-  const defaultDirectEntryFeeSek = clampInt(settings.defaultDirectEntryFeeSek, 0, 10000, 100);
-  const rentalCardFeeSek = clampInt(settings.rentalCardFeeSek, 0, 5000, 30);
-  const missingRentalFeeSek = clampInt(settings.missingRentalFeeSek, 0, 20000, 650);
-  const portalTitle = (settings.portalTitle || '').trim().slice(0, 80);
-  const logoDataUrl = sanitizeCloudLogoDataUrl(settings.logoDataUrl);
-  const customBgColor = sanitizeCloudHexColor(settings.customBgColor);
-  const customTextColor = sanitizeCloudHexColor(settings.customTextColor);
-  const customAccentColor = sanitizeCloudHexColor(settings.customAccentColor);
+    settings.clubName !== undefined
+      ? (settings.clubName.trim().slice(0, 100) || DEFAULT_CLUB_SETTINGS.clubName)
+      : (typeof existingData?.clubName === 'string' ? existingData.clubName : DEFAULT_CLUB_SETTINGS.clubName);
+  const eventorOrgId =
+    settings.eventorOrgId !== undefined
+      ? settings.eventorOrgId.trim().slice(0, 32)
+      : (typeof existingData?.eventorOrgId === 'string' ? existingData.eventorOrgId : '');
+  const swishNumber =
+    settings.swishNumber !== undefined
+      ? settings.swishNumber.trim().slice(0, 20)
+      : (typeof existingData?.swishNumber === 'string' ? existingData.swishNumber : '');
+  const swishRecipientName =
+    settings.swishRecipientName !== undefined
+      ? settings.swishRecipientName.trim().slice(0, 100)
+      : (typeof existingData?.swishRecipientName === 'string' ? existingData.swishRecipientName : clubName);
+  const defaultDirectEntryFeeSek =
+    settings.defaultDirectEntryFeeSek !== undefined
+      ? clampInt(settings.defaultDirectEntryFeeSek, 0, 10000, 100)
+      : (typeof existingData?.defaultDirectEntryFeeSek === 'number' ? existingData.defaultDirectEntryFeeSek : 100);
+  const rentalCardFeeSek =
+    settings.rentalCardFeeSek !== undefined
+      ? clampInt(settings.rentalCardFeeSek, 0, 5000, 30)
+      : (typeof existingData?.rentalCardFeeSek === 'number' ? existingData.rentalCardFeeSek : 30);
+  const missingRentalFeeSek =
+    settings.missingRentalFeeSek !== undefined
+      ? clampInt(settings.missingRentalFeeSek, 0, 20000, 650)
+      : (typeof existingData?.missingRentalFeeSek === 'number' ? existingData.missingRentalFeeSek : 650);
+  const portalTitle =
+    settings.portalTitle !== undefined
+      ? settings.portalTitle.trim().slice(0, 80)
+      : (typeof existingData?.portalTitle === 'string' ? existingData.portalTitle : '');
+  const logoDataUrl =
+    settings.logoDataUrl !== undefined
+      ? sanitizeCloudLogoDataUrl(settings.logoDataUrl)
+      : (typeof existingData?.logoDataUrl === 'string' ? existingData.logoDataUrl : '');
+  const customBgColor =
+    settings.customBgColor !== undefined
+      ? sanitizeCloudHexColor(settings.customBgColor)
+      : (typeof existingData?.customBgColor === 'string' ? existingData.customBgColor : '');
+  const customTextColor =
+    settings.customTextColor !== undefined
+      ? sanitizeCloudHexColor(settings.customTextColor)
+      : (typeof existingData?.customTextColor === 'string' ? existingData.customTextColor : '');
+  const customAccentColor =
+    settings.customAccentColor !== undefined
+      ? sanitizeCloudHexColor(settings.customAccentColor)
+      : (typeof existingData?.customAccentColor === 'string' ? existingData.customAccentColor : '');
   const seriesScoringSettings =
     settings.seriesScoringSettings === undefined
       ? undefined

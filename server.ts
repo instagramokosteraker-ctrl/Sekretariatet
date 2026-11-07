@@ -1470,7 +1470,7 @@ function offsetDateIso(daysOffset: number): string {
 }
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
-const MAX_LOGO_DATA_URL_CHARS = 200_000;
+const MAX_LOGO_DATA_URL_CHARS = 500_000;
 
 function sanitizeServerHexColor(raw?: string | null): string {
   if (!raw || typeof raw !== 'string') return '';
@@ -1482,10 +1482,7 @@ function sanitizeServerLogoDataUrl(raw?: string | null): string {
   if (!raw || typeof raw !== 'string') return '';
   const trimmed = raw.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_LOGO_DATA_URL_CHARS) return '';
-  if (
-    trimmed.startsWith('data:image/png;base64,') ||
-    trimmed.startsWith('data:image/jpeg;base64,')
-  ) {
+  if (trimmed.startsWith('data:image/')) {
     return trimmed;
   }
   return '';

@@ -33,15 +33,12 @@ service cloud.firestore {
 
     function isValidLogoDataUrlField(val) {
       return val is string &&
-        val.size() <= 200000 &&
+        val.size() <= 500000 &&
         (
           val.size() == 0 ||
           (
-            val.size() >= 24 &&
-            (
-              val[0:22] == 'data:image/png;base64,' ||
-              val[0:23] == 'data:image/jpeg;base64,'
-            )
+            val.size() >= 20 &&
+            val[0:11] == 'data:image/'
           )
         );
     }

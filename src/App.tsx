@@ -859,7 +859,14 @@ export default function App() {
       setIsFreshColdStart(Boolean(snap.isFreshColdStart));
     }
     setDemoCleared(Boolean(snap.demoCleared));
-    if (snap.clubSettings) setClubSettings(snap.clubSettings);
+    if (snap.clubSettings) {
+      setClubSettings((prev) => ({
+        ...prev,
+        ...snap.clubSettings,
+        logoDataUrl: snap.clubSettings?.logoDataUrl || prev.logoDataUrl || '',
+        portalTitle: snap.clubSettings?.portalTitle || prev.portalTitle || '',
+      }));
+    }
     if (snap.seriesStandings) setSeriesStandings(snap.seriesStandings);
     setCompetition(snap.competition);
     setCourses(snap.courses);
@@ -1138,6 +1145,12 @@ export default function App() {
           const expRes = await apiFetch('/api/system/cloud-export');
           if (!expRes.ok) return;
           const snapshot = (await expRes.json()) as CloudSeasonSnapshot;
+          if (clubSettings.logoDataUrl && !snapshot.clubSettings?.logoDataUrl) {
+            snapshot.clubSettings.logoDataUrl = clubSettings.logoDataUrl;
+          }
+          if (clubSettings.portalTitle && !snapshot.clubSettings?.portalTitle) {
+            snapshot.clubSettings.portalTitle = clubSettings.portalTitle;
+          }
           await syncFullSeasonToFirestore(
             snapshot,
             authSession.user.adminTier === 'SUPER_ADMIN'
@@ -3475,99 +3488,136 @@ export default function App() {
                   competitors={competitors}
                   enableFeesAndSwish={Boolean(competition.enableFeesAndSwish)}
                   onSaveCourse={async (payload, existingId) => {
-                    const useFirestore = await apiRequestUnavailable(
-                      existingId ? `/api/courses/${existingId}` : '/api/courses',
-                      {
-                        method: existingId ? 'PUT' : 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                      },
-                      'Kunde inte spara banan.'
-                    );
-                    if (!useFirestore) return;
-                    const saved = await saveCourseToFirestore(
-                      activeEventId,
-                      payload,
-                      existingId
-                    );
+                    let saved: Course | null = null;
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        saved = await saveCourseToFirestore(
+                          activeEventId,
+                          payload,
+                          existingId
+                        );
+                      } catch (cloudErr) {
+                        console.warn('Firestore saveCourse error:', cloudErr);
+                      }
+                    }
+                    if (!saved) {
+                      const prevCourse = courses.find((c) => c.id === existingId);
+                      saved = {
+                        id: existingId || `crs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                        name: payload.name || prevCourse?.name || 'Ny bana',
+                        lengthMeters: payload.lengthMeters ?? prevCourse?.lengthMeters ?? 0,
+                        climbMeters: payload.climbMeters ?? prevCourse?.climbMeters ?? 0,
+                        controls: payload.controls ?? prevCourse?.controls ?? [],
+                      };
+                    }
                     setCourses((current) =>
                       existingId
-                        ? current.map((course) => (course.id === existingId ? saved : course))
-                        : [...current, saved]
+                        ? current.map((course) => (course.id === existingId ? saved! : course))
+                        : [...current, saved!]
                     );
-                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                    setCompetitors(recalculated.competitors);
-                    setEmergency(recalculated.emergency);
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                        setCompetitors(recalculated.competitors);
+                        setEmergency(recalculated.emergency);
+                      } catch {
+                        // ignore
+                      }
+                    }
+                    try {
+                      await apiFetch(
+                        existingId ? `/api/courses/${existingId}` : '/api/courses',
+                        {
+                          method: existingId ? 'PUT' : 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        }
+                      );
+                    } catch {
+                      // offline fallback
+                    }
                   }}
                   onDeleteCourse={async (id) => {
-                    const useFirestore = await apiRequestUnavailable(
-                      `/api/courses/${id}`,
-                      { method: 'DELETE' },
-                      'Kunde inte ta bort banan.'
-                    );
-                    if (!useFirestore) return;
-                    await deleteCourseFromFirestore(activeEventId, id);
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        await deleteCourseFromFirestore(activeEventId, id);
+                      } catch (cloudErr) {
+                        console.warn('Firestore deleteCourse error:', cloudErr);
+                      }
+                    }
                     setCourses((current) => current.filter((course) => course.id !== id));
-                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                    setCompetitors(recalculated.competitors);
-                    setEmergency(recalculated.emergency);
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                        setCompetitors(recalculated.competitors);
+                        setEmergency(recalculated.emergency);
+                      } catch {
+                        // ignore
+                      }
+                    }
+                    try {
+                      await apiFetch(`/api/courses/${id}`, { method: 'DELETE' });
+                    } catch {
+                      // offline fallback
+                    }
                   }}
                   onSaveClass={async (payload, existingId) => {
-                    const useFirestore = await apiRequestUnavailable(
-                      existingId ? `/api/classes/${existingId}` : '/api/classes',
-                      {
-                        method: existingId ? 'PUT' : 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                      },
-                      'Kunde inte spara klassen.'
-                    );
-                    if (!useFirestore) return;
-                    const saved = await saveClassToFirestore(
-                      activeEventId,
-                      payload,
-                      existingId
-                    );
+                    let saved: CompClass | null = null;
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        saved = await saveClassToFirestore(
+                          activeEventId,
+                          payload,
+                          existingId
+                        );
+                      } catch (cloudErr) {
+                        console.warn('Firestore saveClass error:', cloudErr);
+                      }
+                    }
+                    if (!saved) {
+                      const prevClass = classes.find((c) => c.id === existingId);
+                      saved = {
+                        id: existingId || `cls-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                        name: payload.name || prevClass?.name || 'Ny klass',
+                        courseId: payload.courseId !== undefined ? payload.courseId : (prevClass?.courseId ?? null),
+                        classFormat: payload.classFormat ?? prevClass?.classFormat ?? 'STANDARD',
+                        forkCourseIds: payload.forkCourseIds ?? prevClass?.forkCourseIds ?? [],
+                        rogainingMaxTimeSec: null,
+                        rogainingPenaltyPerMin: null,
+                        allowDirectEntry: payload.allowDirectEntry ?? prevClass?.allowDirectEntry ?? true,
+                        freeStart: payload.freeStart ?? prevClass?.freeStart ?? false,
+                        autoMatchCourse: payload.autoMatchCourse ?? prevClass?.autoMatchCourse ?? false,
+                        feeSek: payload.feeSek ?? prevClass?.feeSek ?? 100,
+                      };
+                    }
                     setClasses((current) =>
                       existingId
-                        ? current.map((cls) => (cls.id === existingId ? saved : cls))
-                        : [...current, saved]
+                        ? current.map((cls) => (cls.id === existingId ? saved! : cls))
+                        : [...current, saved!]
                     );
-                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                    setCompetitors(recalculated.competitors);
-                    setEmergency(recalculated.emergency);
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                        setCompetitors(recalculated.competitors);
+                        setEmergency(recalculated.emergency);
+                      } catch {
+                        // ignore
+                      }
+                    }
+                    try {
+                      await apiFetch(
+                        existingId ? `/api/classes/${existingId}` : '/api/classes',
+                        {
+                          method: existingId ? 'PUT' : 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        }
+                      );
+                    } catch {
+                      // offline fallback
+                    }
                   }}
                   onImportCourseBatch={async (payload) => {
-                    let res: Response | null = null;
-                    try {
-                      res = await apiFetch('/api/import/batch', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          courses: payload.courses,
-                          classes: payload.classes,
-                          entries: [],
-                          runnerDbEntries: [],
-                          replaceExisting: payload.replaceExisting,
-                          defaultFreeStart: payload.defaultFreeStart,
-                        }),
-                      });
-                    } catch (error) {
-                      if (!(error instanceof TypeError)) throw error;
-                    }
-                    if (res?.ok) {
-                      return (await res.json()) as {
-                        addedCourses: number;
-                        addedClasses: number;
-                        replaced?: boolean;
-                      };
-                    }
-                    if (res && res.status !== 404 && res.status !== 405) {
-                      const errorBody = (await res.json().catch(() => ({}))) as {
-                        error?: string;
-                      };
-                      throw new Error(errorBody.error ?? 'Kunde inte importera banfil.');
-                    }
                     const makeImportId = (prefix: string, index: number) =>
                       `${prefix}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
                     const normalizeName = (name: string) => name.trim().toLocaleLowerCase();
@@ -3641,23 +3691,60 @@ export default function App() {
                             [...classes, ...importedClasses].map((cls) => [cls.id, cls])
                           ).values()
                         );
-                    await saveCompetitionImportToFirestore({
-                      competitionId: activeEventId,
-                      courses: nextCourses,
-                      classes: nextClasses,
-                      competitors,
-                      runnerDbEntries: [],
-                      competitorCount: competitors.length,
-                      replaceCoursesAndClasses: payload.replaceExisting,
-                    });
+
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        await saveCompetitionImportToFirestore({
+                          competitionId: activeEventId,
+                          courses: nextCourses,
+                          classes: nextClasses,
+                          competitors,
+                          runnerDbEntries: [],
+                          competitorCount: competitors.length,
+                          replaceCoursesAndClasses: payload.replaceExisting,
+                        });
+                      } catch (cloudErr) {
+                        console.warn('Firestore batch import error:', cloudErr);
+                      }
+                    }
+
                     setCourses(nextCourses);
                     setClasses(nextClasses);
-                    const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                    setCompetitors(recalculated.competitors);
-                    setEmergency(recalculated.emergency);
+
+                    if (firebaseUserPresent || auth.currentUser) {
+                      try {
+                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+                        setCompetitors(recalculated.competitors);
+                        setEmergency(recalculated.emergency);
+                      } catch {
+                        // ignore
+                      }
+                    }
+
+                    let serverRes: { addedCourses?: number; addedClasses?: number } | null = null;
+                    try {
+                      const res = await apiFetch('/api/import/batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          courses: payload.courses,
+                          classes: payload.classes,
+                          entries: [],
+                          runnerDbEntries: [],
+                          replaceExisting: payload.replaceExisting,
+                          defaultFreeStart: payload.defaultFreeStart,
+                        }),
+                      });
+                      if (res.ok) {
+                        serverRes = await res.json();
+                      }
+                    } catch {
+                      // offline fallback
+                    }
+
                     return {
-                      addedCourses: payload.courses.length,
-                      addedClasses: importedClasses.length,
+                      addedCourses: serverRes?.addedCourses ?? payload.courses.length,
+                      addedClasses: serverRes?.addedClasses ?? importedClasses.length,
                       replaced: payload.replaceExisting,
                     };
                   }}
