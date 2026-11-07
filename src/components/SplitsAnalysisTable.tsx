@@ -43,6 +43,38 @@ function getPlacementTimeClass(rank: number | null | undefined): string {
   return rank === 1 || rank === 2 || rank === 3 ? getPlacementClass(rank) : '';
 }
 
+function rankTimes<T>(
+  results: T[],
+  getRunnerId: (result: T) => string,
+  getTime: (result: T) => number | null
+): Map<string, number> {
+  const timedResults = results.flatMap((result) => {
+    const time = getTime(result);
+    return time === null || Number.isNaN(time)
+      ? []
+      : [{ runnerId: getRunnerId(result), time }];
+  });
+  timedResults.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+
+  const ranks = new Map<string, number>();
+  let rank = 0;
+  for (let index = 0; index < timedResults.length; index += 1) {
+    const current = timedResults[index];
+    if (index === 0 || current.time !== timedResults[index - 1].time) {
+      rank = index + 1;
+    }
+    ranks.set(current.runnerId, rank);
+  }
+
+  for (const result of results) {
+    if (Number.isNaN(getTime(result))) {
+      ranks.set(getRunnerId(result), 1);
+    }
+  }
+
+  return ranks;
+}
+
 interface SplitsAnalysisTableProps {
   classes: CompClass[];
   courses: Course[];
@@ -385,6 +417,16 @@ export function SplitsAnalysisTable({
                   : null);
               return { runner, legSec, cumulativeSec };
             });
+            const legRanks = rankTimes(
+              results,
+              (result) => result.runner.id,
+              (result) => result.legSec
+            );
+            const cumulativeRanks = rankTimes(
+              results,
+              (result) => result.runner.id,
+              (result) => result.cumulativeSec
+            );
             controlResults.set(
               col.code,
               new Map(
@@ -393,23 +435,11 @@ export function SplitsAnalysisTable({
                   {
                     legSec,
                     cumulativeSec,
-                    legRank:
-                      legSec === null
-                        ? null
-                        : 1 +
-                          results.filter(
-                            (result) =>
-                              result.legSec !== null && result.legSec < legSec
-                          ).length,
+                    legRank: legSec === null ? null : legRanks.get(runner.id) ?? null,
                     cumulativeRank:
                       cumulativeSec === null
                         ? null
-                        : 1 +
-                          results.filter(
-                            (result) =>
-                              result.cumulativeSec !== null &&
-                              result.cumulativeSec < cumulativeSec
-                          ).length,
+                        : cumulativeRanks.get(runner.id) ?? null,
                   },
                 ])
               )
