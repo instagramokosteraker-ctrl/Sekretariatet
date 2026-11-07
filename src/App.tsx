@@ -81,7 +81,9 @@ import {
 } from './services/offlineReadoutQueue';
 import {
   apiFetch,
+  ensureApiResponseOk,
   getStoredAuthSession,
+  readApiResponseJson,
   setStoredAuthSession,
   logoutSecretariatSession,
   subscribeAuthSession,
@@ -250,8 +252,8 @@ async function apiRequestUnavailable(
   }
   if (response.ok) return false;
   if (response.status === 404 || response.status === 405) return true;
-  const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
-  throw new Error(errorBody.error ?? fallbackMessage);
+  await ensureApiResponseOk(response, fallbackMessage);
+  return false;
 }
 
 export default function App() {
@@ -1068,24 +1070,30 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(cloudSnap),
           });
-          if (res.ok) {
-            const hydrated = (await res.json()) as MeosAppState;
-            applySnapshot(hydrated);
-            return;
-          }
+          const hydrated = await readApiResponseJson<MeosAppState>(
+            res,
+            'Kunde inte läsa in klubbens molndata i servern.'
+          );
+          applySnapshot(hydrated);
+          return;
         } else {
           // If Firestore is empty, export local season and populate Firestore immediately
           const expRes = await apiFetch('/api/system/cloud-export');
-          if (expRes.ok) {
-            const currentSnap = (await expRes.json()) as CloudSeasonSnapshot;
-            await syncFullSeasonToFirestore(
-              currentSnap,
-              authSession.user.adminTier === 'SUPER_ADMIN'
-            );
-          }
+          const currentSnap = await readApiResponseJson<CloudSeasonSnapshot>(
+            expRes,
+            'Kunde inte hämta säsongsdata från servern för Firestore-synkronisering.'
+          );
+          await syncFullSeasonToFirestore(
+            currentSnap,
+            authSession.user.adminTier === 'SUPER_ADMIN'
+          );
         }
         setIsFreshColdStart(false);
-      } catch {
+      } catch (error) {
+        console.warn(
+          'Kunde inte synka molnsäsongen vid kallstart. Försök igen från Klubbadmin & Behörighet.',
+          error
+        );
         setIsFreshColdStart(false);
       } finally {
         hydratingCloudRef.current = false;
@@ -1143,8 +1151,10 @@ export default function App() {
       void (async () => {
         try {
           const expRes = await apiFetch('/api/system/cloud-export');
-          if (!expRes.ok) return;
-          const snapshot = (await expRes.json()) as CloudSeasonSnapshot;
+          const snapshot = await readApiResponseJson<CloudSeasonSnapshot>(
+            expRes,
+            'Kunde inte hämta säsongsdata från servern för Firestore-synkronisering.'
+          );
           if (clubSettings.logoDataUrl && !snapshot.clubSettings?.logoDataUrl) {
             snapshot.clubSettings.logoDataUrl = clubSettings.logoDataUrl;
           }
@@ -1155,7 +1165,11 @@ export default function App() {
             snapshot,
             authSession.user.adminTier === 'SUPER_ADMIN'
           );
-        } catch {
+        } catch (error) {
+          console.warn(
+            'Kunde inte synka ändringar till Firestore. Kontrollera anslutningen och försök igen.',
+            error
+          );
           // Offline or Firestore unavailable — never disrupt local Secretariat work
         }
       })();
@@ -1602,15 +1616,19 @@ export default function App() {
       void (async () => {
         try {
           const expRes = await apiFetch('/api/system/cloud-export');
-          if (expRes.ok) {
-            const currentSnap = (await expRes.json()) as CloudSeasonSnapshot;
-            await syncFullSeasonToFirestore(
-              currentSnap,
-              authSession?.user.adminTier === 'SUPER_ADMIN'
-            );
-          }
-        } catch {
-          // ignore
+          const currentSnap = await readApiResponseJson<CloudSeasonSnapshot>(
+            expRes,
+            'Kunde inte hämta säsongsdata från servern för Firestore-synkronisering.'
+          );
+          await syncFullSeasonToFirestore(
+            currentSnap,
+            authSession?.user.adminTier === 'SUPER_ADMIN'
+          );
+        } catch (error) {
+          console.warn(
+            'Kunde inte synka tävlingen till Firestore. Synkronisera igen från Klubbadmin & Behörighet.',
+            error
+          );
         }
       })();
     } catch (err: unknown) {
@@ -2674,53 +2692,63 @@ export default function App() {
                   }}
                   onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
                   onUpdateEventorSettings={async (patch) => {
-                    await apiFetch('/api/eventor/settings', {
+                    const response = await apiFetch('/api/eventor/settings', {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(patch),
                     });
+                    await ensureApiResponseOk(
+                      response,
+                      'Kunde inte spara Eventor-inställningarna.'
+                    );
                   }}
                   onSyncEventorClub={async () => {
-                    const res = await apiFetch('/api/eventor/sync-club', { method: 'POST' });
-                    const data = (await res.json()) as {
-                      error?: string;
-                      orgName?: string;
-                      syncedRunners?: number;
-                      totalRunnerDb?: number;
-                    };
-                    if (!res.ok) {
+                    try {
+                      const res = await apiFetch('/api/eventor/sync-club', { method: 'POST' });
+                      const data = await readApiResponseJson<{
+                        orgName?: string;
+                        syncedRunners?: number;
+                        totalRunnerDb?: number;
+                      }>(
+                        res,
+                        'Kunde inte synka mot Eventor. Kontrollera serveranslutningen och försök igen.'
+                      );
+                      return {
+                        ok: true,
+                        message: `Synkade ${data.syncedRunners ?? 0} klubbmedlemmar med SI-brickor från ${data.orgName ?? 'Eventor'} (totalt ${data.totalRunnerDb ?? 0} i Löpardatabasen).`,
+                      };
+                    } catch (error) {
                       return {
                         ok: false,
-                        message: data.error ?? 'Kunde inte synka mot Eventor API.',
+                        message: error instanceof Error ? error.message : 'Kunde inte synka mot Eventor API.',
                       };
                     }
-                    return {
-                      ok: true,
-                      message: `Synkade ${data.syncedRunners ?? 0} klubbmedlemmar med SI-brickor från ${data.orgName ?? 'Eventor'} (totalt ${data.totalRunnerDb ?? 0} i Löpardatabasen).`,
-                    };
                   }}
                   onImportEventorEvent={async (eventId) => {
-                    const res = await apiFetch('/api/eventor/import-event', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ eventId }),
-                    });
-                    const data = (await res.json()) as {
-                      error?: string;
-                      eventName?: string;
-                      addedClasses?: number;
-                      addedEntries?: number;
-                    };
-                    if (!res.ok) {
+                    try {
+                      const res = await apiFetch('/api/eventor/import-event', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ eventId }),
+                      });
+                      const data = await readApiResponseJson<{
+                        eventName?: string;
+                        addedClasses?: number;
+                        addedEntries?: number;
+                      }>(
+                        res,
+                        'Kunde inte hämta tävling från Eventor. Kontrollera serveranslutningen och försök igen.'
+                      );
+                      return {
+                        ok: true,
+                        message: `Hämtade "${data.eventName ?? eventId}" från Eventor: +${data.addedClasses ?? 0} klasser och +${data.addedEntries ?? 0} anmälda deltagare.`,
+                      };
+                    } catch (error) {
                       return {
                         ok: false,
-                        message: data.error ?? 'Kunde inte hämta tävling från Eventor.',
+                        message: error instanceof Error ? error.message : 'Kunde inte hämta tävling från Eventor.',
                       };
                     }
-                    return {
-                      ok: true,
-                      message: `Hämtade "${data.eventName ?? eventId}" från Eventor: +${data.addedClasses ?? 0} klasser och +${data.addedEntries ?? 0} anmälda deltagare.`,
-                    };
                   }}
                   onImportIofBatch={async (batch) => {
                     const res = await apiFetch('/api/import/batch', {
@@ -3480,12 +3508,15 @@ export default function App() {
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(params),
                     });
-                    return (await res.json()) as {
+                    return await readApiResponseJson<{
                       className: string;
                       drawnCount: number;
                       mode: string;
                       vacantStartTimes: string[];
-                    };
+                    }>(
+                      res,
+                      'Kunde inte genomföra lottningen. Kontrollera anslutningen och försök igen.'
+                    );
                   }}
                 />
               )}

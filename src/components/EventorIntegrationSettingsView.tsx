@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, KeyRound, RefreshCw, Save } from 'lucide-react';
-import { apiFetch } from '../services/authClient';
+import { apiFetch, readApiResponseJson } from '../services/authClient';
 
 interface EventorAdminConfig {
   apiKeyConfigured: boolean;
@@ -38,8 +38,10 @@ export function EventorIntegrationSettingsView({
     setLoading(true);
     try {
       const response = await apiFetch('/api/eventor/config');
-      const data = (await response.json()) as EventorAdminConfig & { error?: string };
-      if (!response.ok) throw new Error(data.error || 'Kunde inte läsa Eventor-inställningarna.');
+      const data = await readApiResponseJson<EventorAdminConfig>(
+        response,
+        'Kunde inte läsa Eventor-inställningarna. Kontrollera serveranslutningen och försök igen.'
+      );
       setConfig(data);
       setOrgId(data.orgId);
       setBaseUrl(data.baseUrl || DEFAULT_BASE_URL);
@@ -66,8 +68,10 @@ export function EventorIntegrationSettingsView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey, orgId, baseUrl }),
       });
-      const data = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(data.error || 'Kunde inte spara Eventor-inställningarna.');
+      await readApiResponseJson<{ saved: boolean }>(
+        response,
+        'Kunde inte spara Eventor-inställningarna. Kontrollera serveranslutningen och försök igen.'
+      );
       setApiKey('');
       await onSaveOrgId?.(orgId);
       setNotice({ ok: true, message: 'Eventor-inställningarna har sparats i Firestore.' });
@@ -87,13 +91,14 @@ export function EventorIntegrationSettingsView({
     setNotice(null);
     try {
       const response = await apiFetch('/api/eventor/test', { method: 'POST' });
-      const data = (await response.json()) as {
+      const data = await readApiResponseJson<{
         connected?: boolean;
         orgId?: string;
         orgName?: string;
-        error?: string;
-      };
-      if (!response.ok) throw new Error(data.error || 'Anslutningen till Eventor misslyckades.');
+      }>(
+        response,
+        'Anslutningen till Eventor misslyckades. Kontrollera serveranslutningen och försök igen.'
+      );
       setNotice({
         ok: true,
         message: `Ansluten till Eventor\nKlubb: ${data.orgName}\nOrganisation-ID: ${data.orgId}`,
@@ -114,12 +119,13 @@ export function EventorIntegrationSettingsView({
     setNotice(null);
     try {
       const response = await apiFetch('/api/eventor/migrate-legacy', { method: 'POST' });
-      const data = (await response.json()) as {
+      const data = await readApiResponseJson<{
         orgName?: string;
         orgId?: string;
-        error?: string;
-      };
-      if (!response.ok) throw new Error(data.error || 'Migreringen misslyckades.');
+      }>(
+        response,
+        'Migreringen misslyckades. Kontrollera serveranslutningen och försök igen.'
+      );
       setNotice({
         ok: true,
         message: `Migrerade den befintliga nyckeln till Firestore.\nKlubb: ${data.orgName}\nOrganisation-ID: ${data.orgId}`,

@@ -99,6 +99,70 @@ export async function apiFetch(
   });
 }
 
+function logNonJsonApiResponse(response: Response, body: string): void {
+  console.error('API returned a non-JSON response:', {
+    url: response.url,
+    status: response.status,
+    contentType: response.headers.get('content-type'),
+    body,
+  });
+}
+
+function getJsonErrorMessage(body: string, fallbackMessage: string): string {
+  try {
+    const payload = JSON.parse(body) as { error?: unknown; message?: unknown };
+    if (typeof payload.error === 'string' && payload.error.trim()) return payload.error;
+    if (typeof payload.message === 'string' && payload.message.trim()) return payload.message;
+  } catch {
+    // Non-JSON response bodies are logged separately.
+  }
+  return fallbackMessage;
+}
+
+/**
+ * Reads JSON API responses consistently and prevents HTML/plain-text platform
+ * error pages from surfacing as JSON.parse exceptions in the UI.
+ */
+export async function readApiResponseJson<T>(
+  response: Response,
+  fallbackMessage: string
+): Promise<T> {
+  const body = await response.text();
+  const contentType = response.headers.get('content-type') || '';
+  const isJson = contentType.toLowerCase().includes('application/json');
+
+  if (!response.ok) {
+    if (!isJson) logNonJsonApiResponse(response, body);
+    throw new Error(isJson ? getJsonErrorMessage(body, fallbackMessage) : fallbackMessage);
+  }
+
+  if (!isJson) {
+    logNonJsonApiResponse(response, body);
+    throw new Error(fallbackMessage);
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    logNonJsonApiResponse(response, body);
+    throw new Error(fallbackMessage);
+  }
+}
+
+export async function ensureApiResponseOk(
+  response: Response,
+  fallbackMessage: string
+): Promise<void> {
+  if (response.ok) return;
+  const body = await response.text();
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    logNonJsonApiResponse(response, body);
+    throw new Error(fallbackMessage);
+  }
+  throw new Error(getJsonErrorMessage(body, fallbackMessage));
+}
+
 /**
  * Client-side session verification. Does NOT call /api/auth/...
  */

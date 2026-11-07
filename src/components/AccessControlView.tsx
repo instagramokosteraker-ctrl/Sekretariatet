@@ -41,7 +41,11 @@ import { formatSiNumber } from '../services/sportidentProtocol';
 import {
   DEFAULT_SERIES_SCORING_CONFIG,
 } from '../services/seriesStandings';
-import { apiFetch } from '../services/authClient';
+import {
+  apiFetch,
+  ensureApiResponseOk,
+  readApiResponseJson,
+} from '../services/authClient';
 import {
   BOOTSTRAP_SUPER_ADMIN_EMAILS,
   DEFAULT_CLUB_SETTINGS,
@@ -512,8 +516,10 @@ export function AccessControlView({
     const validUser = await ensureValidFirestoreUser();
     if (!validUser) return null;
     const expRes = await apiFetch('/api/system/cloud-export');
-    if (!expRes.ok) return null;
-    const cloudSnap = (await expRes.json()) as CloudSeasonSnapshot;
+    const cloudSnap = await readApiResponseJson<CloudSeasonSnapshot>(
+      expRes,
+      'Kunde inte hämta säsongsdata från servern för Firestore-synkronisering.'
+    );
     const result = await syncFullSeasonToFirestore(cloudSnap, isSuperAdmin);
     await loadCloudCompetitions();
     return result.syncedEvents;
@@ -942,10 +948,13 @@ export function AccessControlView({
         ok: true,
         msg: `Synkade klubbinställningar och ${count ?? 0} tävlingar (inkl. banor, klasser och deltagare) till Firestore.`,
       });
-    } catch {
+    } catch (error) {
       setCloudNotice({
         ok: false,
-        msg: 'Kunde inte nå Firestore just nu. Kontrollera internetuppkopplingen.',
+        msg:
+          error instanceof Error
+            ? error.message
+            : 'Kunde inte synka till Firestore. Kontrollera internetuppkopplingen.',
       });
     } finally {
       setCloudBusy(false);
@@ -979,25 +988,20 @@ export function AccessControlView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cloudSnap),
       });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        setCloudNotice({
-          ok: false,
-          msg: err.error || 'Kunde inte aktivera molnsäsongen i servern.',
-        });
-        return;
-      }
-      const hydrated = (await res.json()) as MeosAppState;
+      const hydrated = await readApiResponseJson<MeosAppState>(
+        res,
+        'Kunde inte aktivera molnsäsongen i servern.'
+      );
       onApplyStateSnapshot(hydrated);
       await loadManageData();
       setCloudNotice({
         ok: true,
         msg: `Läste in ${cloudSnap.events.length} tävlingar och klubbinställningar från Firestore.`,
       });
-    } catch {
+    } catch (error) {
       setCloudNotice({
         ok: false,
-        msg: 'Kunde inte hämta data från Firestore.',
+        msg: error instanceof Error ? error.message : 'Kunde inte hämta data från Firestore.',
       });
     } finally {
       setCloudBusy(false);
@@ -2896,10 +2900,10 @@ export function AccessControlView({
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ eventorOrgId: orgId }),
             });
-            if (!response.ok) {
-              const data = (await response.json()) as { error?: string };
-              throw new Error(data.error || 'Kunde inte uppdatera klubbens organisations-ID.');
-            }
+            await ensureApiResponseOk(
+              response,
+              'Kunde inte uppdatera klubbens organisations-ID.'
+            );
             onUpdateClubSettings?.({ ...clubSettings, eventorOrgId: orgId });
           }}
         />
