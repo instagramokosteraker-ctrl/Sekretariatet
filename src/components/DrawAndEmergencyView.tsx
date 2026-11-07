@@ -698,37 +698,6 @@ export function DrawAndEmergencyView({
                         <th className="py-1.5 pl-2 pr-3.5 text-right">Status</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
-                      {inCls.map((r) => (
-                        <tr key={r.id}>
-                          <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums text-slate-500">
-                            {r.bib ?? '—'}
-                          </td>
-                          <td className="py-1.5 px-2 font-mono tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                            {formatSiNumber(r.siNumber)}
-                          </td>
-                          <td className="py-1.5 px-2 font-medium text-slate-900 dark:text-slate-100">
-                            {r.fullName}
-                          </td>
-                          <td className="py-1.5 px-2 text-slate-600 dark:text-slate-400">
-                            {r.club}
-                          </td>
-                          <td className="py-1.5 px-2 font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                            {r.allocatedStartSec !== null
-                              ? formatSecondsAsClock(r.allocatedStartSec)
-                              : 'Fri'}
-                          </td>
-                          <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
-                            {r.manualFinishTimeSec ? (
-                              <span className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
-                                Man. {formatDurationMmSs(r.runningTimeSec)}
-                              </span>
-                            ) : (
-                              <RunnerStatusIndicator status={r.status} compact />
-                            )}
-                          </td>
-                        </tr>
-                      </thead>
                       <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
                         {inCls.map((r) => (
                           <tr key={r.id}>

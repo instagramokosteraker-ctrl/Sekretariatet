@@ -995,7 +995,7 @@ export function SplitsAnalysisTable({
                               )}
                             </td>
 
-                            {detailedView ? (
+                            {detailedView && (
                               <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
                                 {isRogaining
                                   ? ptsDiff !== null

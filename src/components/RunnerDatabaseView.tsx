@@ -280,15 +280,19 @@ export function RunnerDatabaseView({
             </button>
             <span className="text-xs text-slate-500">{runnerDb.length} löpare</span>
             {canSelectForEntry && (
-              <button
-                type="button"
-                onClick={() => void registerSelected()}
-                disabled={selectedRunners.length === 0 || registering}
-                className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg whitespace-nowrap"
-              >
-                {registering ? 'Anmäler...' : 'Anmäl förbockade löpare till denna tävling'}
-              </button>
-              <span className="text-xs text-slate-500">{selectedRunners.length} markerade</span>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void registerSelected()}
+                  disabled={selectedRunners.length === 0 || registering}
+                  className="px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg whitespace-nowrap"
+                >
+                  {registering ? 'Anmäler...' : 'Anmäl förbockade löpare till denna tävling'}
+                </button>
+                <span className="text-xs text-slate-500">
+                  {selectedRunners.length} markerade
+                </span>
+              </>
             )}
           </div>
           <div className="relative w-full lg:w-64">

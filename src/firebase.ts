@@ -2435,10 +2435,7 @@ export async function deleteCourseFromFirestore(
   competitionId: string,
   courseId: string
 ): Promise<void> {
-  const context = await getCompetitionMutationContext(
-    competitionId,
-    patch.status === 'LIVE' || patch.status === 'UPCOMING'
-  );
+  const context = await getCompetitionMutationContext(competitionId);
   const id = sanitizeFirestoreId(courseId, 'crs');
   await deleteDoc(doc(db, 'competitions', context.competitionId, 'courses', id));
 }
@@ -2850,7 +2847,7 @@ export async function saveRunnerDbEntriesToFirestore(
   const adminSnap = isBootstrapAdmin
     ? null
     : await getDoc(doc(db, 'admins', ownerUid));
-  const isSuperAdmin = isBootstrapAdmin || adminSnap?.data().role === 'SUPER_ADMIN';
+  const isSuperAdmin = isBootstrapAdmin || adminSnap?.data()?.role === 'SUPER_ADMIN';
   for (let offset = 0; offset < runners.length; offset += 400) {
     const batch = writeBatch(db);
     for (const runner of runners.slice(offset, offset + 400)) {
@@ -2918,7 +2915,7 @@ export async function updateRunnerDbEntryInFirestore(
   const adminSnap = isBootstrapAdmin
     ? null
     : await getDoc(doc(db, 'admins', ownerUid));
-  const isSuperAdmin = isBootstrapAdmin || adminSnap?.data().role === 'SUPER_ADMIN';
+  const isSuperAdmin = isBootstrapAdmin || adminSnap?.data()?.role === 'SUPER_ADMIN';
   if (previousSnap.data().ownerUid !== ownerUid && !isSuperAdmin) {
     throw new Error('Du saknar behörighet att ändra den här löparen.');
   }
