@@ -1327,9 +1327,12 @@ function recalculateEventFromRawReadouts(ev: SingleEventRecord): number {
 
 function getEventorEnvConfig(): { apiKey: string; baseUrl: string } {
   const apiKey = (process.env.EVENTOR_API_KEY || '').trim();
-  const baseUrl = (process.env.EVENTOR_BASE_URL || 'https://eventor.orientering.se/api')
+  const rawBase = (process.env.EVENTOR_BASE_URL || 'https://eventor.orientering.se/api')
     .trim()
     .replace(/\/+$/, '');
+  const baseUrl = rawBase
+    ? (rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`)
+    : 'https://eventor.orientering.se/api';
   return { apiKey, baseUrl };
 }
 
