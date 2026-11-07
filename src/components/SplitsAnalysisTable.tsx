@@ -43,6 +43,11 @@ function getPlacementTimeClass(rank: number | null | undefined): string {
   return rank === 1 || rank === 2 || rank === 3 ? getPlacementClass(rank) : '';
 }
 
+function formatSignedDuration(sec: number | null | undefined): string {
+  if (sec === null || sec === undefined || !Number.isFinite(sec)) return '—';
+  return `${sec >= 0 ? '+' : '−'}${formatDurationMmSs(Math.abs(sec))}`;
+}
+
 function rankTimes<T>(
   results: T[],
   getRunnerId: (result: T) => string,
@@ -380,6 +385,8 @@ export function SplitsAnalysisTable({
               {
                 legSec: number | null;
                 cumulativeSec: number | null;
+                cumulativeDiffSec: number | null;
+                bestCumulativeSec: number | null;
                 legRank: number | null;
                 cumulativeRank: number | null;
               }
@@ -427,6 +434,14 @@ export function SplitsAnalysisTable({
               (result) => result.runner.id,
               (result) => result.cumulativeSec
             );
+            const bestCumulativeSec = results.reduce<number | null>(
+              (best, result) =>
+                result.cumulativeSec !== null &&
+                (best === null || result.cumulativeSec < best)
+                  ? result.cumulativeSec
+                  : best,
+              null
+            );
             controlResults.set(
               col.code,
               new Map(
@@ -435,6 +450,11 @@ export function SplitsAnalysisTable({
                   {
                     legSec,
                     cumulativeSec,
+                    cumulativeDiffSec:
+                      cumulativeSec === null || bestCumulativeSec === null
+                        ? null
+                        : cumulativeSec - bestCumulativeSec,
+                    bestCumulativeSec,
                     legRank: legSec === null ? null : legRanks.get(runner.id) ?? null,
                     cumulativeRank:
                       cumulativeSec === null
@@ -593,7 +613,11 @@ export function SplitsAnalysisTable({
                           );
                         })}
                         <th className="py-1.5 px-2 text-right">Tid</th>
-                        <th className="hidden sm:table-cell py-1.5 px-2 text-right">Diff</th>
+                        {detailedView && (
+                          <th className="hidden sm:table-cell py-1.5 px-2 text-right">
+                            Diff
+                          </th>
+                        )}
                         {detailedView && isRogaining ? (
                           <>
                             <th className="hidden sm:table-cell py-1.5 px-2 text-right whitespace-nowrap">
@@ -684,7 +708,7 @@ export function SplitsAnalysisTable({
                         const isExpanded = expandedRunnerId === r.id;
                         const totalCols = detailedView
                           ? 3 + legColumns.length + (isRogaining ? 3 : 1) + 3
-                          : 6 +
+                          : 5 +
                             visibleLegColumns.length +
                             (isRogaining || isForked ? 1 : 0);
 
@@ -802,6 +826,13 @@ export function SplitsAnalysisTable({
                                         </span>
                                       )}
                                     </div>
+                                    {!detailedView && !isRogaining && !isForked && (
+                                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                        {formatSignedDuration(
+                                          controlResult?.cumulativeDiffSec
+                                        )}
+                                      </div>
+                                    )}
                                   </td>
                                 );
                               }
@@ -816,9 +847,20 @@ export function SplitsAnalysisTable({
                                     key={col.order}
                                     className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 text-slate-800 dark:text-slate-200 whitespace-nowrap align-top"
                                   >
-                                    <div className="leading-4 italic">
-                                      {formatDurationMmSs(liveLegTimeSec)}
+                                    <div className="leading-4 italic font-normal">
+                                      ({formatDurationMmSs(liveLegTimeSec)})
                                     </div>
+                                    {!detailedView && !isRogaining && !isForked && (
+                                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                        {formatSignedDuration(
+                                          displayedTimeSec !== null &&
+                                            controlResult?.bestCumulativeSec != null
+                                            ? displayedTimeSec -
+                                                controlResult.bestCumulativeSec
+                                            : null
+                                        )}
+                                      </div>
+                                    )}
                                   </td>
                                 );
                               }
@@ -923,6 +965,13 @@ export function SplitsAnalysisTable({
                                       </span>
                                     )}
                                   </div>
+                                  {!detailedView && !isRogaining && !isForked && (
+                                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                      {formatSignedDuration(
+                                        controlResult?.cumulativeDiffSec
+                                      )}
+                                    </div>
+                                  )}
                                 </td>
                               );
                             })}
@@ -930,26 +979,37 @@ export function SplitsAnalysisTable({
                             <td className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap align-top">
                               <div
                                 className={`leading-4 ${
-                                  isRunning && displayedTimeSec !== null ? 'italic' : ''
+                                  isRunning && displayedTimeSec !== null
+                                    ? 'italic font-normal'
+                                    : ''
                                 }`}
                               >
-                                {formatDurationMmSs(displayedTimeSec)}
+                                {isRunning && displayedTimeSec !== null
+                                  ? `(${formatDurationMmSs(displayedTimeSec)})`
+                                  : formatDurationMmSs(displayedTimeSec)}
                               </div>
+                              {!detailedView && !isRogaining && (
+                                <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                                  {formatSignedDuration(diff)}
+                                </div>
+                              )}
                             </td>
 
-                            <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                              {isRogaining
-                                ? ptsDiff !== null
-                                ? ptsDiff === 0
-                                  ? '0 p'
-                                  : `${ptsDiff} p`
-                                : '—'
-                                : diff !== null
-                                ? diff === 0
-                                  ? '0:00'
-                                  : `${diff > 0 ? '+' : '−'}${formatDurationMmSs(Math.abs(diff))}`
-                                : '—'}
-                            </td>
+                            {detailedView ? (
+                              <td className="hidden sm:table-cell py-1.5 px-2 text-right font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                                {isRogaining
+                                  ? ptsDiff !== null
+                                    ? ptsDiff === 0
+                                      ? '0 p'
+                                      : `${ptsDiff} p`
+                                    : '—'
+                                  : diff !== null
+                                    ? diff === 0
+                                      ? '0:00'
+                                      : `${diff > 0 ? '+' : '−'}${formatDurationMmSs(Math.abs(diff))}`
+                                    : '—'}
+                              </td>
+                            )}
 
                             {detailedView && isRogaining ? (
                               <>
@@ -988,7 +1048,12 @@ export function SplitsAnalysisTable({
                               </td>
                             ) : !detailedView && isRogaining ? (
                               <td className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
-                                {r.validation?.rogainingPoints ?? '—'}
+                                <div>{r.validation?.rogainingPoints ?? '—'}</div>
+                                <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                                  {ptsDiff === null
+                                    ? '—'
+                                    : `${ptsDiff > 0 ? '+' : ''}${ptsDiff} p`}
+                                </div>
                               </td>
                             ) : !detailedView && isForked ? (
                               <td className="py-1.5 px-2 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap">
