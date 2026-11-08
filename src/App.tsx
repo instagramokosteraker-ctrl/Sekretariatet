@@ -522,6 +522,7 @@ export default function App() {
   const activeEventIdRef = useRef<string>('');
   const activeEventIdFromFirestoreRef = useRef(false);
   const mirroredActiveEventIdRef = useRef<string | null>(null);
+  const mirroredSeriesScoringSettingsRef = useRef<string | null>(null);
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
   const [competitionSwitchError, setCompetitionSwitchError] = useState<string | null>(null);
   const [isEmptySeason, setIsEmptySeason] = useState<boolean>(true);
@@ -561,6 +562,7 @@ export default function App() {
     if (!firebaseUserUid) {
       activeEventIdFromFirestoreRef.current = false;
       mirroredActiveEventIdRef.current = null;
+      mirroredSeriesScoringSettingsRef.current = null;
       return;
     }
     return subscribeActiveEventIdFromFirestore((firestoreActiveEventId) => {
@@ -570,6 +572,36 @@ export default function App() {
       }
     });
   }, [firebaseUserUid]);
+
+  const seriesScoringSettingsJson = JSON.stringify(
+    clubSettings.seriesScoringSettings ?? {}
+  );
+  useEffect(() => {
+    if (!firebaseUserUid || authSession?.user.sessionKind !== 'ADMIN') return;
+    const mirrorKey = `${firebaseUserUid}:${seriesScoringSettingsJson}`;
+    if (mirroredSeriesScoringSettingsRef.current === mirrorKey) return;
+    mirroredSeriesScoringSettingsRef.current = mirrorKey;
+    void apiFetch('/api/club-settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        seriesScoringSettings: clubSettings.seriesScoringSettings ?? {},
+      }),
+    })
+      .then((response) => {
+        if (!response.ok && response.status !== 404 && response.status !== 405) {
+          console.warn(
+            `Kunde inte uppdatera Express-kompatibilitetsspeglingen för serieinställningar (HTTP ${response.status}).`
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          'Kunde inte nå Express-kompatibilitetsspeglingen för serieinställningar:',
+          error
+        );
+      });
+  }, [authSession, clubSettings.seriesScoringSettings, firebaseUserUid, seriesScoringSettingsJson]);
 
   useEffect(() => {
     if (
@@ -609,6 +641,23 @@ export default function App() {
     applyClubThemeToDocument(clubSettings, darkMode);
   }, [clubSettings, darkMode]);
   const [seriesStandings, setSeriesStandings] = useState<SeriesStandingsBundle[]>([]);
+
+  useEffect(() => {
+    if (!firebaseUserUid) return;
+    let active = true;
+    void loadFullSeasonFromFirestore({ includeRunnerDb: false })
+      .then((cloudSnapshot) => {
+        if (active && cloudSnapshot) {
+          setSeriesStandings(cloudSnapshot.seriesStandings ?? []);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Kunde inte läsa serieställning från Firestore:', error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [firebaseUserUid, seriesScoringSettingsJson]);
 
   const [competition, setCompetition] = useState<CompetitionMeta>({
     id: '',
@@ -919,6 +968,7 @@ export default function App() {
               defaultDirectEntryFeeSek: prev.defaultDirectEntryFeeSek,
               rentalCardFeeSek: prev.rentalCardFeeSek,
               missingRentalFeeSek: prev.missingRentalFeeSek,
+              seriesScoringSettings: prev.seriesScoringSettings,
             }
           : {}),
       }));

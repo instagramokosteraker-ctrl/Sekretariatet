@@ -1527,24 +1527,6 @@ export function AccessControlView({
     setSeriesScoringBusy(true);
     setSeriesScoringNotice(null);
     try {
-      let savedToServer = false;
-      try {
-        const response = await apiFetch('/api/club-settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(nextSettings),
-        });
-        if (response.ok) {
-          savedToServer = true;
-          const stateResponse = await apiFetch('/api/state');
-          if (stateResponse.ok) {
-            onApplyStateSnapshot((await stateResponse.json()) as MeosAppState);
-          }
-        }
-      } catch {
-        // Use Firestore directly when the Express API is unavailable.
-      }
-
       if (auth.currentUser) {
         await saveClubSettingsToFirestore(
           { seriesScoringSettings: nextSettings.seriesScoringSettings },
@@ -1557,8 +1539,19 @@ export function AccessControlView({
             cloudSnapshot.seriesStandings ?? []
           );
         }
-      } else if (!savedToServer) {
-        throw new Error('Logga in för att spara poängmodellen för serien.');
+      } else {
+        const response = await apiFetch('/api/club-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            seriesScoringSettings: nextSettings.seriesScoringSettings,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error('Logga in för att spara poängmodellen för serien.');
+        }
+        onUpdateClubSettings?.(nextSettings);
+        onApplySeriesScoringUpdate(nextSettings, seriesStandings);
       }
 
       setSeriesScoringNotice({
@@ -1608,29 +1601,6 @@ export function AccessControlView({
     setNewSeriesBusy(true);
     setNewSeriesNotice(null);
     try {
-      let savedToServer = false;
-      try {
-        const response = await apiFetch('/api/club-settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(nextSettings),
-        });
-        if (response.ok) {
-          savedToServer = true;
-          const stateResponse = await apiFetch('/api/state');
-          if (stateResponse.ok) {
-            onApplyStateSnapshot((await stateResponse.json()) as MeosAppState);
-          }
-        } else if (response.status !== 404 && response.status !== 405) {
-          const errorBody = (await response.json().catch(() => ({}))) as {
-            error?: string;
-          };
-          throw new Error(errorBody.error ?? 'Kunde inte skapa serien.');
-        }
-      } catch (error) {
-        if (!(error instanceof TypeError)) throw error;
-      }
-
       if (auth.currentUser) {
         await saveClubSettingsToFirestore(
           { seriesScoringSettings: nextSettings.seriesScoringSettings },
@@ -1645,11 +1615,19 @@ export function AccessControlView({
         } else {
           onApplySeriesScoringUpdate(nextSettings, seriesStandings);
         }
-      } else if (savedToServer) {
+      } else {
+        const response = await apiFetch('/api/club-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            seriesScoringSettings: nextSettings.seriesScoringSettings,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error('Logga in för att skapa en serie.');
+        }
         onUpdateClubSettings?.(nextSettings);
         onApplySeriesScoringUpdate(nextSettings, seriesStandings);
-      } else {
-        throw new Error('Logga in för att skapa en serie.');
       }
 
       setNewSeriesName('');
@@ -1719,24 +1697,6 @@ export function AccessControlView({
         await onUpdateCompetitionMeta(event.id, { seriesName: nextName });
       }
 
-      try {
-        const response = await apiFetch('/api/club-settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(nextSettings),
-        });
-        if (response.ok) {
-          serverSettingsSaved = true;
-        } else if (response.status !== 404 && response.status !== 405) {
-          const errorBody = (await response.json().catch(() => ({}))) as {
-            error?: string;
-          };
-          throw new Error(errorBody.error ?? 'Kunde inte spara det nya serienamnet.');
-        }
-      } catch (error) {
-        if (!(error instanceof TypeError)) throw error;
-      }
-
       if (auth.currentUser) {
         firestoreSettingsSaveAttempted = true;
         await saveClubSettingsToFirestore(
@@ -1752,19 +1712,19 @@ export function AccessControlView({
         } else {
           onApplySeriesScoringUpdate(nextSettings, seriesStandings);
         }
-      } else if (serverSettingsSaved) {
-        onUpdateClubSettings?.(nextSettings);
       } else {
-        throw new Error('Logga in för att ändra en serie.');
-      }
-
-      try {
-        const stateResponse = await apiFetch('/api/state');
-        if (stateResponse.ok) {
-          onApplyStateSnapshot((await stateResponse.json()) as MeosAppState);
+        const response = await apiFetch('/api/club-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            seriesScoringSettings: nextSettings.seriesScoringSettings,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error('Logga in för att ändra en serie.');
         }
-      } catch (error) {
-        if (!(error instanceof TypeError)) throw error;
+        serverSettingsSaved = true;
+        onUpdateClubSettings?.(nextSettings);
       }
       setSelectedSeriesName((selected) =>
         selected === previousName ? nextName : selected

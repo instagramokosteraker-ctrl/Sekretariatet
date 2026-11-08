@@ -106,6 +106,7 @@ export function PublicPortalView({
 
   const loadData = useCallback(async () => {
     try {
+      let firestoreSeason: Awaited<ReturnType<typeof loadFullSeasonFromFirestore>> = null;
       if (!shortCode) {
         let overview: PublicSeasonOverviewPayload | null = null;
         try {
@@ -133,9 +134,10 @@ export function PublicPortalView({
             setApiCompetitionsList(fallbackCompetitions);
             setError(null);
           } else {
-            const cloudSeason = await loadFullSeasonFromFirestore({
+            firestoreSeason = await loadFullSeasonFromFirestore({
               includeRunnerDb: false,
             });
+            const cloudSeason = firestoreSeason;
             if (cloudSeason) {
               setApiCompetitionsList(
                 cloudSeason.events.map((event) => ({
@@ -190,6 +192,37 @@ export function PublicPortalView({
           setError(null);
         }
       }
+      if (!firestoreSeason) {
+        try {
+          firestoreSeason = await loadFullSeasonFromFirestore({
+            includeRunnerDb: false,
+          });
+        } catch (error) {
+          console.error('Kunde inte läsa kanoniska serieställningar från Firestore:', error);
+        }
+      }
+      if (firestoreSeason) {
+        setSeasonClubSettings((current) => ({
+          ...(current ?? firestoreSeason.clubSettings),
+          seriesScoringSettings: firestoreSeason.clubSettings.seriesScoringSettings,
+        }));
+        setSeasonSeriesStandings(firestoreSeason.seriesStandings ?? []);
+        setRaceData((current) =>
+          current
+            ? {
+                ...current,
+                clubSettings: current.clubSettings
+                  ? {
+                      ...current.clubSettings,
+                      seriesScoringSettings:
+                        firestoreSeason.clubSettings.seriesScoringSettings,
+                    }
+                  : current.clubSettings,
+                seriesStandings: firestoreSeason.seriesStandings ?? [],
+              }
+            : current
+        );
+      }
     } catch {
       setError('Kunde inte nå resultatservern — visar senast hämtade data.');
     } finally {
@@ -216,19 +249,51 @@ export function PublicPortalView({
     );
   }, [shortCode]);
 
-  useEffect(
-    () =>
-      subscribeClubSettingsFromFirestore((settings) => {
-        setFirestoreBranding({
-          portalTitle: settings.portalTitle,
-          logoDataUrl: settings.logoDataUrl,
-          customBgColor: settings.customBgColor,
-          customTextColor: settings.customTextColor,
-          customAccentColor: settings.customAccentColor,
+  useEffect(() => {
+    let active = true;
+    let revision = 0;
+    const unsubscribe = subscribeClubSettingsFromFirestore((settings) => {
+      setFirestoreBranding({
+        portalTitle: settings.portalTitle,
+        logoDataUrl: settings.logoDataUrl,
+        customBgColor: settings.customBgColor,
+        customTextColor: settings.customTextColor,
+        customAccentColor: settings.customAccentColor,
+      });
+      const currentRevision = ++revision;
+      void loadFullSeasonFromFirestore({ includeRunnerDb: false })
+        .then((cloudSeason) => {
+          if (!active || currentRevision !== revision || !cloudSeason) return;
+          setSeasonClubSettings((current) => ({
+            ...(current ?? cloudSeason.clubSettings),
+            seriesScoringSettings: cloudSeason.clubSettings.seriesScoringSettings,
+          }));
+          setSeasonSeriesStandings(cloudSeason.seriesStandings ?? []);
+          setRaceData((current) =>
+            current
+              ? {
+                  ...current,
+                  clubSettings: current.clubSettings
+                    ? {
+                        ...current.clubSettings,
+                        seriesScoringSettings:
+                          cloudSeason.clubSettings.seriesScoringSettings,
+                      }
+                    : current.clubSettings,
+                  seriesStandings: cloudSeason.seriesStandings ?? [],
+                }
+              : current
+          );
+        })
+        .catch((error: unknown) => {
+          console.error('Kunde inte läsa publika serieställningar från Firestore:', error);
         });
-      }),
-    []
-  );
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (seasonSeriesStandings.length === 0) {

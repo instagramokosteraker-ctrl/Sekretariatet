@@ -99,6 +99,10 @@ Full-season sync no longer writes branding fields to an existing `clubSettings/d
 
 `clubSettings/default.clubName` is canonical and is used for club branding and as the default organizer for newly created competitions. Existing `competition.organizer` values remain competition-specific historical data. Startup normalization, club-settings saves, cloud hydration, restore, and competition updates no longer replace them with the current club name. Competition duplication retains the source organizer in both Express and Firestore paths. Full-season sync only seeds `clubName` when the Firestore settings document is first created; authenticated UI state preserves the Firestore-listened value when applying Express snapshots. Express `seasonDb` and its JSON backup/export can continue carrying a compatibility mirror.
 
+## Firestore-owned series scoring settings
+
+`clubSettings/default.seriesScoringSettings` is canonical. Full-season synchronization seeds the field only when creating the club-settings document and does not update it on an existing document. Authenticated state snapshots preserve the Firestore-listened setting, and series scoring changes are written to Firestore before refreshing standings. Admin and public standings are recalculated from a Firestore season snapshot; an authenticated administrator also mirrors the canonical setting to Express so legacy server-generated snapshots remain aligned. Cloud export, hydration, and `seasonDb` may retain a compatibility mirror but do not write this field back to an existing Firestore document.
+
 ## Swish removal
 
 Swish number/recipient configuration and Swish-specific payment labels have been removed. Fee amounts and manual paid/unpaid tracking remain generic. Existing Firestore club documents have deprecated Swish fields deleted by club-setting saves and season synchronization; existing competition fee flags are mapped to `feeTrackingEnabled` when read, while new writes use only `feeTrackingEnabled`.

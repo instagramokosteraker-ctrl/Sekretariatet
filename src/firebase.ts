@@ -1346,6 +1346,9 @@ export async function syncFullSeasonToFirestore(
         ),
         eventorOrgId: (snapshot.clubSettings.eventorOrgId || '').trim().slice(0, 32),
         ...legacyBranding,
+        seriesScoringSettings: normalizeSeriesScoringSettings(
+          snapshot.clubSettings.seriesScoringSettings
+        ),
         activeEventId: snapshot.activeEventId
           ? sanitizeFirestoreId(snapshot.activeEventId, 'evt')
           : '',
