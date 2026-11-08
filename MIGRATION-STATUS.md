@@ -6,7 +6,7 @@ Last updated: 2026-11-08
 
 - **Frontend:** React/Vite application, intended to be hosted on Vercel.
 - **Authentication and authorization:** Google Sign-In through Firebase Auth. User roles are stored in Firestore and include `SUPER_ADMIN`, `RACE_ADMIN`, `START`, `READOUT`, `FOREST`, and `SPEAKER`.
-- **Cloud data:** Firestore is used for role data, club settings, and cloud season synchronization. `clubSettings/default.activeEventId`, `clubName`, branding settings (`portalTitle`, `logoDataUrl`, `customBgColor`, `customTextColor`, `customAccentColor`), `eventorOrgId`, and fee defaults (`defaultDirectEntryFeeSek`, `rentalCardFeeSek`, `missingRentalFeeSek`) are canonical in Firestore. Express `seasonDb` values remain temporary compatibility mirrors for existing routes. Competition organizers are competition-owned data.
+- **Cloud data:** Firestore is used for role data, club settings, runner database records, and cloud season synchronization. `clubSettings/default.activeEventId`, `clubName`, branding settings (`portalTitle`, `logoDataUrl`, `customBgColor`, `customTextColor`, `customAccentColor`), `eventorOrgId`, fee defaults (`defaultDirectEntryFeeSek`, `rentalCardFeeSek`, `missingRentalFeeSek`), and `runnerDb/{siNumber}` are canonical in Firestore. Express `seasonDb` values remain temporary compatibility mirrors for existing routes. Competition organizers are competition-owned data.
 - **Fees:** Swish configuration and Swish-specific UI have been removed. Generic fee tracking remains available under `feeTrackingEnabled`; older competition documents are read compatibly and new documents use only the renamed field.
 - **Backend:** The Express application in `server.ts` still exists and serves API routes, serves the production frontend when configured to do so, and hosts the `/api/ws` WebSocket endpoint. It also retains server-side integration and persistence responsibilities.
 - **Eventor:** Eventor settings are managed in the administration UI and stored privately in Firestore. Eventor calls have **not** been migrated to Firebase Functions and still depend on the Express backend.
@@ -102,6 +102,12 @@ Full-season sync no longer writes branding fields to an existing `clubSettings/d
 ## Firestore-owned series scoring settings
 
 `clubSettings/default.seriesScoringSettings` is canonical. Full-season synchronization seeds the field only when creating the club-settings document and does not update it on an existing document. Authenticated state snapshots preserve the Firestore-listened setting, and series scoring changes are written to Firestore before refreshing standings. Admin and public standings are recalculated from a Firestore season snapshot; an authenticated administrator also mirrors the canonical setting to Express so legacy server-generated snapshots remain aligned. Cloud export, hydration, and `seasonDb` may retain a compatibility mirror but do not write this field back to an existing Firestore document.
+
+## Firestore-owned runner database
+
+`runnerDb/{siNumber}` is canonical. Admins read and mutate it directly in Firestore; assigned officials have read-only access for SI-number lookup and start-corral workflows. The client subscribes to Firestore runner records, ignores `runnerDb` from authenticated Express snapshots, and writes imports, edits, deletions, and learned direct-entry records to Firestore before updating the temporary Express mirror. Eventor club/event imports continue through the existing Eventor routes and return the imported runner records for Firestore persistence. Full-season sync does not write the runner collection. Cloud export, cloud hydration, JSON backup/restore, and server snapshots can still carry or rebuild the Express compatibility mirror, but do not replace Firestore records.
+
+The Express mirror remains used by legacy routes and server-side auto-learning when competitors are edited. That server-side side effect is not yet a Firestore write; moving it completely requires a later competitor-state migration. Existing runner records that exist only in a local JSON backup are not automatically re-imported, because treating a missing Firestore document as permission to recreate it could resurrect an intentionally deleted record. Such records must be explicitly imported by an administrator.
 
 ## Swish removal
 

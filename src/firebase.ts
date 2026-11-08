@@ -2248,23 +2248,9 @@ export async function loadFullSeasonFromFirestore(options?: {
   };
 }
 
-async function loadRunnerDbFromFirestore(): Promise<RunnerDbEntry[]> {
-  const current = auth.currentUser;
-  if (!current?.emailVerified) return [];
-  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
-    (current.email || '').toLowerCase()
-  );
-  const adminSnap = isBootstrapAdmin
-    ? null
-    : await getDoc(doc(db, 'admins', sanitizeFirestoreId(current.uid, 'usr')));
-  const role = adminSnap?.exists() ? adminSnap.data().role : null;
-  if (!isBootstrapAdmin && role !== 'RACE_ADMIN' && role !== 'SUPER_ADMIN') return [];
-
-  const runnerSnap = await getDocs(collection(db, 'runnerDb'));
-  return runnerSnap.docs.flatMap((runnerDoc) => {
-    const data = runnerDoc.data();
+function parseRunnerDbDocument(id: string, data: Record<string, unknown>): RunnerDbEntry | null {
     const siNumber = Number(data.siNumber);
-    if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999) return [];
+    if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999) return null;
     const cardSeries = [
       'SI-Card 5',
       'SI-Card 6',
@@ -2273,7 +2259,7 @@ async function loadRunnerDbFromFirestore(): Promise<RunnerDbEntry[]> {
       'SI-Card 10',
       'SI-Card 11',
       'SIAC Air+',
-    ].includes(data.cardSeries)
+    ].includes(String(data.cardSeries))
       ? (data.cardSeries as SICardSeries)
       : 'SI-Card 10';
     const source =
@@ -2282,27 +2268,96 @@ async function loadRunnerDbFromFirestore(): Promise<RunnerDbEntry[]> {
       data.source === 'MEOS_CSV'
         ? data.source
         : 'LEARNED_ENTRY';
-    return [
-      {
-        id: runnerDoc.id,
-        siNumber,
-        cardSeries,
-        fullName: String(data.fullName || ''),
-        club: String(data.club || ''),
-        birthYear:
-          typeof data.birthYear === 'number' && Number.isInteger(data.birthYear)
-            ? data.birthYear
-            : null,
-        defaultClassName:
-          typeof data.defaultClassName === 'string' ? data.defaultClassName : null,
-        eventorPersonId: typeof data.eventorPersonId === 'string' ? data.eventorPersonId : null,
-        eventorOrgId: typeof data.eventorOrgId === 'string' ? data.eventorOrgId : null,
-        source,
-        updatedAt:
-          typeof data.updatedAtIso === 'string' ? data.updatedAtIso : new Date(0).toISOString(),
-      },
-    ];
+    return {
+      id,
+      siNumber,
+      cardSeries,
+      fullName: String(data.fullName || ''),
+      club: String(data.club || ''),
+      birthYear:
+        typeof data.birthYear === 'number' && Number.isInteger(data.birthYear)
+          ? data.birthYear
+          : null,
+      defaultClassName:
+        typeof data.defaultClassName === 'string' ? data.defaultClassName : null,
+      eventorPersonId: typeof data.eventorPersonId === 'string' ? data.eventorPersonId : null,
+      eventorOrgId: typeof data.eventorOrgId === 'string' ? data.eventorOrgId : null,
+      source,
+      updatedAt:
+        typeof data.updatedAtIso === 'string' ? data.updatedAtIso : new Date(0).toISOString(),
+    };
+}
+
+async function loadRunnerDbFromFirestore(): Promise<RunnerDbEntry[]> {
+  const authorization = await getCurrentFirebaseRoles();
+  if (
+    !authorization.adminTier &&
+    !['START', 'READOUT', 'FOREST', 'SPEAKER'].includes(
+      authorization.officialRole || ''
+    )
+  ) {
+    return [];
+  }
+
+  const runnerSnap = await getDocs(collection(db, 'runnerDb'));
+  return runnerSnap.docs.flatMap((runnerDoc) => {
+    const runner = parseRunnerDbDocument(
+      runnerDoc.id,
+      runnerDoc.data() as Record<string, unknown>
+    );
+    return runner ? [runner] : [];
   });
+}
+
+export async function loadRunnerDbEntriesFromFirestore(): Promise<RunnerDbEntry[]> {
+  return loadRunnerDbFromFirestore();
+}
+
+export function subscribeRunnerDbFromFirestore(
+  onEntries: (entries: RunnerDbEntry[]) => void,
+  onError: (error: Error) => void
+): () => void {
+  let active = true;
+  let unsubscribe = () => {};
+  void getCurrentFirebaseRoles()
+    .then((authorization) => {
+      if (
+        !authorization.adminTier &&
+        !['START', 'READOUT', 'FOREST', 'SPEAKER'].includes(
+          authorization.officialRole || ''
+        )
+      ) {
+        throw new Error('Ditt Google-konto saknar roll för löpardatabasen.');
+      }
+      if (!active) return;
+      unsubscribe = onSnapshot(
+        collection(db, 'runnerDb'),
+        (snapshot) => {
+          if (!active) return;
+          onEntries(
+            snapshot.docs.flatMap((runnerDoc) => {
+              const runner = parseRunnerDbDocument(
+                runnerDoc.id,
+                runnerDoc.data() as Record<string, unknown>
+              );
+              return runner ? [runner] : [];
+            })
+          );
+        },
+        (error) => {
+          if (active) onError(error);
+        }
+      );
+    })
+    .catch((error: unknown) => {
+      if (active) {
+        onError(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  return () => {
+    active = false;
+    unsubscribe();
+  };
 }
 
 export async function saveCompetitionImportToFirestore(params: {
@@ -2461,6 +2516,7 @@ export async function saveCompetitionImportToFirestore(params: {
     const id = String(runner.siNumber);
     const ref = doc(db, 'runnerDb', id);
     const snap = await getDoc(ref);
+    const existingData = snap.exists() ? snap.data() : {};
     const mutable = {
       siNumber: runner.siNumber,
       cardSeries: runner.cardSeries,
@@ -2471,10 +2527,18 @@ export async function saveCompetitionImportToFirestore(params: {
         runner.birthYear !== undefined &&
         Number.isInteger(runner.birthYear)
           ? runner.birthYear
-          : null,
-      defaultClassName: (runner.defaultClassName || '').trim().slice(0, 80),
-      eventorPersonId: (runner.eventorPersonId || '').trim().slice(0, 128),
-      eventorOrgId: (runner.eventorOrgId || '').trim().slice(0, 32),
+          : typeof existingData.birthYear === 'number'
+            ? existingData.birthYear
+            : null,
+      defaultClassName:
+        (runner.defaultClassName || '').trim().slice(0, 80) ||
+        (typeof existingData.defaultClassName === 'string' ? existingData.defaultClassName : ''),
+      eventorPersonId:
+        (runner.eventorPersonId || '').trim().slice(0, 128) ||
+        (typeof existingData.eventorPersonId === 'string' ? existingData.eventorPersonId : ''),
+      eventorOrgId:
+        (runner.eventorOrgId || '').trim().slice(0, 32) ||
+        (typeof existingData.eventorOrgId === 'string' ? existingData.eventorOrgId : ''),
       source: runner.source,
       updatedAtIso: runner.updatedAt,
     };
@@ -3117,12 +3181,33 @@ export async function saveRunnerDbEntriesToFirestore(
       ) {
         throw new Error('Importerad löpare tillhör ett annat konto.');
       }
+      const existingData = existing.exists() ? existing.data() : {};
       batch.set(
         runnerRef,
         {
           runnerId: id,
-          ...runnerDbFirestoreFields(runner),
-          ownerUid,
+          ...runnerDbFirestoreFields({
+            ...runner,
+            birthYear:
+              runner.birthYear ??
+              (typeof existingData.birthYear === 'number' ? existingData.birthYear : null),
+            defaultClassName:
+              runner.defaultClassName ??
+              (typeof existingData.defaultClassName === 'string'
+                ? existingData.defaultClassName
+                : null),
+            eventorPersonId:
+              runner.eventorPersonId ??
+              (typeof existingData.eventorPersonId === 'string'
+                ? existingData.eventorPersonId
+                : null),
+            eventorOrgId:
+              runner.eventorOrgId ??
+              (typeof existingData.eventorOrgId === 'string'
+                ? existingData.eventorOrgId
+                : null),
+          }),
+          ownerUid: existing.exists() ? existingData.ownerUid : ownerUid,
           ...(!existing.exists() ? { createdAt: serverTimestamp() } : {}),
           updatedAt: serverTimestamp(),
         },
@@ -3131,6 +3216,58 @@ export async function saveRunnerDbEntriesToFirestore(
     }
     await batch.commit();
   }
+}
+
+export async function saveLearnedRunnerDbEntryToFirestore(
+  runner: RunnerDbEntry
+): Promise<RunnerDbEntry | null> {
+  const current = await ensureRunnerDbAdmin();
+  if (
+    !Number.isInteger(runner.siNumber) ||
+    runner.siNumber < 1 ||
+    runner.siNumber > 99999999 ||
+    !runner.fullName.trim()
+  ) {
+    throw new Error('Ange ett giltigt namn och SI-bricknummer.');
+  }
+  const id = String(runner.siNumber);
+  const ref = doc(db, 'runnerDb', id);
+  const existing = await getDoc(ref);
+  if (existing.exists()) {
+    const currentEntry = parseRunnerDbDocument(
+      existing.id,
+      existing.data() as Record<string, unknown>
+    );
+    if (!currentEntry) {
+      throw new Error('Löparposten i Firestore har ett ogiltigt SI-bricknummer.');
+    }
+    if (
+      currentEntry.fullName.trim().toLocaleLowerCase() !==
+      runner.fullName.trim().toLocaleLowerCase()
+    ) {
+      return currentEntry;
+    }
+    const mutable = {
+      ...runnerDbFirestoreFields(runner),
+      birthYear: runner.birthYear ?? currentEntry.birthYear,
+      defaultClassName: runner.defaultClassName || currentEntry.defaultClassName || '',
+      eventorPersonId: runner.eventorPersonId || currentEntry.eventorPersonId || '',
+      eventorOrgId: runner.eventorOrgId || currentEntry.eventorOrgId || '',
+      source: runner.source === 'LEARNED_ENTRY' ? currentEntry.source : runner.source,
+    };
+    await updateDoc(ref, { ...mutable, updatedAt: serverTimestamp() });
+    return { ...currentEntry, ...runner, ...mutable, id };
+  }
+
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
+  await setDoc(ref, {
+    runnerId: id,
+    ...runnerDbFirestoreFields(runner),
+    ownerUid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return { ...runner, id };
 }
 
 export async function updateRunnerDbEntryInFirestore(
@@ -3177,7 +3314,10 @@ export async function updateRunnerDbEntryInFirestore(
     {
       runnerId: String(runner.siNumber),
       ...runnerDbFirestoreFields(runner),
-      ownerUid,
+      ownerUid:
+        previousSiNumber === runner.siNumber
+          ? previousSnap.data().ownerUid
+          : ownerUid,
       ...(previousSiNumber !== runner.siNumber
         ? { createdAt: serverTimestamp() }
         : {}),

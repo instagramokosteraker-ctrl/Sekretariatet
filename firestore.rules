@@ -906,11 +906,26 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 4. /runnerDb/{siNumber} — Admin-only club runner database
+    // 4. /runnerDb/{siNumber} — admins and assigned officials may read runner lookup data
     // =========================================================================
     match /runnerDb/{siNumber} {
-      allow get: if isVerifiedUser() && isAdmin() && isValidId(siNumber);
-      allow list: if isVerifiedUser() && isAdmin();
+      allow get: if isVerifiedUser() &&
+        isValidId(siNumber) &&
+        (
+          isAdmin() ||
+          hasOfficialRole('START') ||
+          hasOfficialRole('READOUT') ||
+          hasOfficialRole('FOREST') ||
+          hasOfficialRole('SPEAKER')
+        );
+      allow list: if isVerifiedUser() &&
+        (
+          isAdmin() ||
+          hasOfficialRole('START') ||
+          hasOfficialRole('READOUT') ||
+          hasOfficialRole('FOREST') ||
+          hasOfficialRole('SPEAKER')
+        );
 
       allow create: if isVerifiedUser() &&
         isValidId(siNumber) &&

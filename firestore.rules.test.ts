@@ -529,6 +529,14 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     await assertSucceeds(
       raceAdminCtx.firestore().doc('runnerDb/8500111').set(runnerDbEntry)
     );
+    await assertSucceeds(officialCtx.firestore().doc('runnerDb/8500111').get());
+    await assertSucceeds(officialCtx.firestore().collection('runnerDb').get());
+    await assertFails(
+      officialCtx.firestore().doc('runnerDb/8500111').update({
+        fullName: 'Unauthorized edit',
+        updatedAt: serverTimestamp(),
+      })
+    );
     await assertFails(attackerCtx.firestore().collection('runnerDb').get());
     await assertFails(
       raceAdminCtx.firestore().doc('runnerDb/8500111').update({

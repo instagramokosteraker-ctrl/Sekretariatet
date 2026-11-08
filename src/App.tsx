@@ -119,6 +119,9 @@ import {
   loadClubSettingsFromFirestore,
   subscribeClubSettingsFromFirestore,
   subscribeActiveEventIdFromFirestore,
+  subscribeRunnerDbFromFirestore,
+  loadRunnerDbEntriesFromFirestore,
+  saveLearnedRunnerDbEntryToFirestore,
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
@@ -675,6 +678,12 @@ export default function App() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [runnerDb, setRunnerDb] = useState<RunnerDbEntry[]>([]);
   useEffect(() => {
+    if (!firebaseUserUid) return;
+    return subscribeRunnerDbFromFirestore(setRunnerDb, (error) => {
+      console.error('Kunde inte prenumerera på löpardatabasen från Firestore:', error);
+    });
+  }, [firebaseUserUid]);
+  useEffect(() => {
     if (
       !firebaseUserUid ||
       !activeEventId ||
@@ -979,7 +988,9 @@ export default function App() {
     setClasses(snap.classes);
     setStations(snap.stations);
     setCompetitors(snap.competitors);
-    setRunnerDb(snap.runnerDb ?? []);
+    if (!firebaseUserUid && !auth.currentUser) {
+      setRunnerDb(snap.runnerDb ?? []);
+    }
     if (snap.eventor) setEventor(snap.eventor);
     if (snap.emergency) setEmergency(snap.emergency);
     if (snap.roc) setRoc(snap.roc);
@@ -1440,19 +1451,52 @@ export default function App() {
   const handleCreateDirectEntry = async (
     payload: Parameters<typeof saveDirectCompetitionEntryToFirestore>[0]['payload']
   ): Promise<string | null> => {
+    let response: Response | null = null;
     try {
-      const res = await apiFetch('/api/competitors', {
+      response = await apiFetch('/api/competitors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (res.ok) return null;
-      if (res.status !== 404 && res.status !== 405) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        return err.error ?? 'Kunde inte spara anmälan.';
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+    }
+
+    if (response?.ok) {
+      const siNumber = Number(payload.siNumber);
+      if (
+        (firebaseUserPresent || auth.currentUser) &&
+        !payload.isRentalCard &&
+        !payload.isBorrowedCard &&
+        Number.isInteger(siNumber) &&
+        siNumber > 0
+      ) {
+        const learnedRunner = await saveLearnedRunnerDbEntryToFirestore({
+          id: String(siNumber),
+          siNumber,
+          cardSeries: payload.cardSeries ?? inferCardSeries(siNumber),
+          fullName: payload.fullName || '',
+          club: payload.club || 'Klubblös',
+          birthYear: null,
+          defaultClassName:
+            classes.find((candidate) => candidate.id === payload.classId)?.name ?? null,
+          eventorPersonId: null,
+          eventorOrgId: null,
+          source: 'LEARNED_ENTRY',
+          updatedAt: new Date().toISOString(),
+        });
+        if (learnedRunner) {
+          setRunnerDb((current) => [
+            learnedRunner,
+            ...current.filter((runner) => runner.siNumber !== learnedRunner.siNumber),
+          ]);
+        }
       }
-    } catch {
-      // Use Firestore when the optional Secretariat API is unavailable.
+      return null;
+    }
+    if (response && response.status !== 404 && response.status !== 405) {
+      const err = (await response.json().catch(() => ({}))) as { error?: string };
+      return err.error ?? 'Kunde inte spara anmälan.';
     }
 
     try {
@@ -2786,10 +2830,14 @@ export default function App() {
                         orgName?: string;
                         syncedRunners?: number;
                         totalRunnerDb?: number;
+                        runnerDbEntries?: RunnerDbEntry[];
                       }>(
                         res,
                         'Kunde inte synka mot Eventor. Kontrollera serveranslutningen och försök igen.'
                       );
+                      if (data.runnerDbEntries?.length) {
+                        await saveRunnerDbEntriesToFirestore(data.runnerDbEntries);
+                      }
                       return {
                         ok: true,
                         message: `Synkade ${data.syncedRunners ?? 0} klubbmedlemmar med SI-brickor från ${data.orgName ?? 'Eventor'} (totalt ${data.totalRunnerDb ?? 0} i Löpardatabasen).`,
@@ -2812,10 +2860,14 @@ export default function App() {
                         eventName?: string;
                         addedClasses?: number;
                         addedEntries?: number;
+                        runnerDbEntries?: RunnerDbEntry[];
                       }>(
                         res,
                         'Kunde inte hämta tävling från Eventor. Kontrollera serveranslutningen och försök igen.'
                       );
+                      if (data.runnerDbEntries?.length) {
+                        await saveRunnerDbEntriesToFirestore(data.runnerDbEntries);
+                      }
                       return {
                         ok: true,
                         message: `Hämtade "${data.eventName ?? eventId}" från Eventor: +${data.addedClasses ?? 0} klasser och +${data.addedEntries ?? 0} anmälda deltagare.`,
@@ -3100,7 +3152,7 @@ export default function App() {
                     setCourses(nextCourses);
                     setClasses(nextClasses);
                     setCompetitors(nextCompetitors);
-                    setRunnerDb(nextRunnerDb);
+                    if (!firebaseUserUid) setRunnerDb(nextRunnerDb);
                     setCompetitionsList((current) =>
                       current.map((item) =>
                         item.id === activeEventId
@@ -3448,6 +3500,49 @@ export default function App() {
                   canSelectForEntry={!isEmptySeason}
                   onRegisterSelected={handleBulkRunnerRegistration}
                   onImportRunnerDb={async (runners, source) => {
+                    if (firebaseUserPresent || auth.currentUser) {
+                      const bySiNumber = new Map(
+                        runnerDb.map((runner) => [runner.siNumber, runner])
+                      );
+                      const imported = runners.map((runner): RunnerDbEntry => {
+                        const existing = bySiNumber.get(runner.siNumber);
+                        return {
+                          id: String(runner.siNumber),
+                          siNumber: runner.siNumber,
+                          cardSeries: inferCardSeries(runner.siNumber),
+                          fullName: runner.fullName,
+                          club: runner.club,
+                          birthYear: runner.birthYear ?? existing?.birthYear ?? null,
+                          defaultClassName:
+                            runner.defaultClassName ?? existing?.defaultClassName ?? null,
+                          eventorPersonId: existing?.eventorPersonId ?? null,
+                          eventorOrgId: existing?.eventorOrgId ?? null,
+                          source,
+                          updatedAt: new Date().toISOString(),
+                        };
+                      });
+                      await saveRunnerDbEntriesToFirestore(imported);
+                      try {
+                        const mirrorResponse = await apiFetch('/api/runner-db/import', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ runners, source }),
+                        });
+                        if (!mirrorResponse.ok && mirrorResponse.status !== 404 && mirrorResponse.status !== 405) {
+                          console.warn(
+                            `Kunde inte uppdatera Express-kompatibilitetsspeglingen för löpardatabasen (HTTP ${mirrorResponse.status}).`
+                          );
+                        }
+                      } catch (error: unknown) {
+                        console.warn('Kunde inte nå Express-kompatibilitetsspeglingen för löpardatabasen:', error);
+                      }
+                      const canonicalRunnerDb = await loadRunnerDbEntriesFromFirestore();
+                      setRunnerDb(canonicalRunnerDb);
+                      return {
+                        importedCount: imported.length,
+                        totalRunnerDb: canonicalRunnerDb.length,
+                      };
+                    }
                     let response: Response | null = null;
                     let importedRunners: RunnerDbEntry[] | null = null;
                     try {
@@ -3532,6 +3627,28 @@ export default function App() {
                       cardSeries: inferCardSeries(patch.siNumber),
                       updatedAt: new Date().toISOString(),
                     };
+                    if (firebaseUserPresent || auth.currentUser) {
+                      await updateRunnerDbEntryInFirestore(existing.siNumber, updated);
+                      try {
+                        const mirrorResponse = await apiFetch(
+                          `/api/runner-db/${encodeURIComponent(String(existing.siNumber))}`,
+                          {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(patch),
+                          }
+                        );
+                        if (!mirrorResponse.ok && mirrorResponse.status !== 404 && mirrorResponse.status !== 405) {
+                          console.warn(
+                            `Kunde inte uppdatera Express-kompatibilitetsspeglingen för löparen (HTTP ${mirrorResponse.status}).`
+                          );
+                        }
+                      } catch (error: unknown) {
+                        console.warn('Kunde inte nå Express-kompatibilitetsspeglingen för löparen:', error);
+                      }
+                      setRunnerDb(await loadRunnerDbEntriesFromFirestore());
+                      return;
+                    }
                     let response: Response | null = null;
                     try {
                       response = await apiFetch(`/api/runner-db/${encodeURIComponent(id)}`, {
@@ -3558,6 +3675,26 @@ export default function App() {
                     );
                   }}
                   onDeleteRunnerDbEntry={async (id) => {
+                    if (firebaseUserPresent || auth.currentUser) {
+                      const runner = runnerDb.find((candidate) => candidate.id === id);
+                      if (!runner) throw new Error('Löparen hittades inte i databasen.');
+                      await deleteRunnerDbEntryFromFirestore(runner.siNumber);
+                      try {
+                        const mirrorResponse = await apiFetch(
+                          `/api/runner-db/${encodeURIComponent(String(runner.siNumber))}`,
+                          { method: 'DELETE' }
+                        );
+                        if (!mirrorResponse.ok && mirrorResponse.status !== 404 && mirrorResponse.status !== 405) {
+                          console.warn(
+                            `Kunde inte uppdatera Express-kompatibilitetsspeglingen vid borttagning (HTTP ${mirrorResponse.status}).`
+                          );
+                        }
+                      } catch (error: unknown) {
+                        console.warn('Kunde inte nå Express-kompatibilitetsspeglingen vid borttagning:', error);
+                      }
+                      setRunnerDb(await loadRunnerDbEntriesFromFirestore());
+                      return;
+                    }
                     const useFirestore = await apiRequestUnavailable(
                       `/api/runner-db/${encodeURIComponent(id)}`,
                       { method: 'DELETE' },

@@ -5383,7 +5383,9 @@ async function startServer() {
       fullName?: string;
       club?: string;
     };
-    const runner = seasonDb.runnerDb.find((entry) => entry.id === req.params.id);
+    const runner = seasonDb.runnerDb.find(
+      (entry) => entry.id === req.params.id || String(entry.siNumber) === req.params.id
+    );
     if (!runner) {
       res.status(404).json({ error: 'Löparen hittades inte i databasen.' });
       return;
@@ -5402,7 +5404,7 @@ async function startServer() {
     }
     if (
       seasonDb.runnerDb.some(
-        (entry) => entry.id !== runner.id && entry.siNumber === siNumber
+        (entry) => entry !== runner && entry.siNumber === siNumber
       )
     ) {
       res.status(409).json({ error: 'SI-bricknumret finns redan i löpardatabasen.' });
@@ -5419,7 +5421,9 @@ async function startServer() {
   });
 
   app.delete('/api/runner-db/:id', (req, res) => {
-    seasonDb.runnerDb = seasonDb.runnerDb.filter((r) => r.id !== req.params.id);
+    seasonDb.runnerDb = seasonDb.runnerDb.filter(
+      (r) => r.id !== req.params.id && String(r.siNumber) !== req.params.id
+    );
     saveSeasonDatabase(seasonDb);
     broadcastFullState();
     res.status(204).end();
@@ -5634,9 +5638,9 @@ async function startServer() {
       const parsedMembers = parseEventorCompetitorsXml(compXml, org.orgName, org.orgId);
 
       let syncedRunners = 0;
+      const runnerDbEntries: RunnerDbEntry[] = [];
       for (const m of parsedMembers) {
-        if (
-          upsertRunnerInSeasonDb(seasonDb, {
+        const runner = upsertRunnerInSeasonDb(seasonDb, {
             siNumber: m.siNumber,
             fullName: m.fullName,
             club: m.club,
@@ -5644,9 +5648,10 @@ async function startServer() {
             eventorPersonId: m.eventorPersonId,
             eventorOrgId: m.eventorOrgId,
             source: 'EVENTOR_API',
-          })
-        ) {
+          });
+        if (runner) {
           syncedRunners++;
+          runnerDbEntries.push(runner);
         }
       }
 
@@ -5666,6 +5671,7 @@ async function startServer() {
         orgName: org.orgName,
         syncedRunners,
         totalRunnerDb: seasonDb.runnerDb.length,
+        runnerDbEntries,
       });
     } catch (err: unknown) {
       res.status(400).json({
@@ -5737,6 +5743,7 @@ async function startServer() {
 
       let addedEntries = 0;
       let nextBib = db.competitors.reduce((m, c) => Math.max(m, c.bib), 500) + 1;
+      const runnerDbEntries: RunnerDbEntry[] = [];
 
       for (const ent of parsedEntries) {
         let targetCls = db.classes.find(
@@ -5757,7 +5764,7 @@ async function startServer() {
         }
 
         if (ent.siNumber > 0) {
-          upsertRunnerInSeasonDb(seasonDb, {
+          const runner = upsertRunnerInSeasonDb(seasonDb, {
             siNumber: ent.siNumber,
             fullName: ent.fullName,
             club: ent.club,
@@ -5765,6 +5772,7 @@ async function startServer() {
             eventorPersonId: ent.personId,
             source: 'EVENTOR_API',
           });
+          if (runner) runnerDbEntries.push(runner);
         }
 
         const si = ent.siNumber > 0 ? ent.siNumber : 8900000 + nextBib;
@@ -5810,6 +5818,7 @@ async function startServer() {
         eventName: db.competition.name,
         addedClasses,
         addedEntries,
+        runnerDbEntries,
       });
     } catch (err: unknown) {
       res.status(400).json({
