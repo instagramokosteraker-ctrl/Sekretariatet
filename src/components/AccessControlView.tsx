@@ -7,7 +7,6 @@ import {
   ExternalLink,
   FolderPlus,
   ImagePlus,
-  KeyRound,
   Palette,
   RefreshCw,
   RotateCcw,
@@ -16,7 +15,6 @@ import {
   Trophy,
   Upload,
   UserPlus,
-  WifiOff,
 } from 'lucide-react';
 import type {
   AuthManagePayload,
@@ -34,9 +32,7 @@ import type {
   OfficialRole,
   OfficialRoleAssignment,
   OfficialRoleInvite,
-  OfficialPinRole,
   RentalCardOverviewItem,
-  RolePinMap,
   SeriesScoringConfig,
   SeriesStandingsBundle,
 } from '../types/sportident';
@@ -47,7 +43,6 @@ import {
 import {
   apiFetch,
   ensureApiResponseOk,
-  LEGACY_PIN_AUTH_ENABLED,
   readApiResponseJson,
 } from '../services/authClient';
 import {
@@ -120,59 +115,12 @@ interface AccessControlViewProps {
 
 type AdminWorkspaceTab = 'events' | 'series' | 'admins' | 'club' | 'eventor' | 'rentals_series';
 
-const PIN_ROLE_META: {
-  role: OfficialPinRole;
-  title: string;
-  allowedViews: string;
-}[] = [
-  {
-    role: 'START',
-    title: 'Startfålla & E-start',
-    allowedViews: 'Startfålla · Direktanmälan · Kvar i skogen · USB-station',
-  },
-  {
-    role: 'READOUT',
-    title: 'Mål & Avläsning',
-    allowedViews: 'Avläsning & Översikt · Direktanmälan · Kvar i skogen · Resultat · USB',
-  },
-  {
-    role: 'FOREST',
-    title: 'Skogssäkerhet & Sök',
-    allowedViews: 'Kvar i skogen · Startfålla · Avläsning · Nödlägen',
-  },
-  {
-    role: 'SPEAKER',
-    title: 'Speaker & Resultat',
-    allowedViews: 'Speaker & Resultat · Förvarning · Kvar i skogen · Startfålla',
-  },
-];
-
 const OFFICIAL_ROLE_LABELS: Record<OfficialRole, string> = {
   START: 'Start',
   READOUT: 'Avläsning',
   FOREST: 'Skog',
   SPEAKER: 'Speaker',
 };
-
-function generateUniqueRandomPins(): RolePinMap {
-  const used = new Set<string>();
-  const pick = (): string => {
-    for (let i = 0; i < 50; i++) {
-      const code = String(1000 + Math.floor(Math.random() * 9000));
-      if (!used.has(code)) {
-        used.add(code);
-        return code;
-      }
-    }
-    return String(1000 + used.size);
-  };
-  return {
-    START: pick(),
-    READOUT: pick(),
-    FOREST: pick(),
-    SPEAKER: pick(),
-  };
-}
 
 export function AccessControlView({
   view = 'admin',
@@ -208,18 +156,6 @@ export function AccessControlView({
   const [eventsNotice, setEventsNotice] = useState<{ ok: boolean; msg: string } | null>(null);
   const [backupBusy, setBackupBusy] = useState<boolean>(false);
 
-  // PINs state
-  const [rolePins, setRolePins] = useState<RolePinMap>({
-    START: '1100',
-    READOUT: '2200',
-    FOREST: '3300',
-    SPEAKER: '4400',
-  });
-  const [pinsCustomized, setPinsCustomized] = useState<boolean>(false);
-  const [pinsBusy, setPinsBusy] = useState<boolean>(false);
-  const [pinsNotice, setPinsNotice] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [copiedRole, setCopiedRole] = useState<string | null>(null);
-
   // Google Administrators state
   const [admins, setAdmins] = useState<ClubAdminAccount[]>([]);
   const [newAdminEmail, setNewAdminEmail] = useState<string>('');
@@ -236,13 +172,6 @@ export function AccessControlView({
   const [roleBusy, setRoleBusy] = useState(false);
   const [roleNotice, setRoleNotice] = useState<{ ok: boolean; msg: string } | null>(null);
   const [confirmRemoveRoleEmail, setConfirmRemoveRoleEmail] = useState<string | null>(null);
-
-  // Offline backup code state
-  const [offlineEnabled, setOfflineEnabled] = useState<boolean>(true);
-  const [offlineCustomized, setOfflineCustomized] = useState<boolean>(false);
-  const [newOfflineCode, setNewOfflineCode] = useState<string>('');
-  const [offlineBusy, setOfflineBusy] = useState<boolean>(false);
-  const [offlineNotice, setOfflineNotice] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // Cloud Firestore state
   const [cloudRecords, setCloudRecords] = useState<CloudCompetitionRecord[]>([]);
@@ -367,14 +296,8 @@ export function AccessControlView({
         ]);
         if (manageRes.ok) {
           const data = (await manageRes.json()) as AuthManagePayload;
-          setRolePins(data.rolePins);
-          setPinsCustomized(data.pinsCustomized);
           setAdmins(data.admins);
-          setOfflineEnabled(data.offlineCodeEnabled);
-          setOfflineCustomized(data.offlineCodeCustomized);
         } else {
-          setRolePins({ START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' });
-          setPinsCustomized(false);
           setAdmins([
             {
               email: currentUser.email || 'instagram.okosteraker@gmail.com',
@@ -384,8 +307,6 @@ export function AccessControlView({
               addedAt: new Date().toISOString(),
             },
           ]);
-          setOfflineEnabled(true);
-          setOfflineCustomized(false);
         }
 
         if (firebaseReadyUser) {
@@ -475,8 +396,6 @@ export function AccessControlView({
           setRentals(localRentals);
         }
       } catch {
-        setRolePins({ START: '1100', READOUT: '2200', FOREST: '3300', SPEAKER: '4400' });
-        setPinsCustomized(false);
         setAdmins([
           {
             email: currentUser.email || 'instagram.okosteraker@gmail.com',
@@ -486,8 +405,6 @@ export function AccessControlView({
             addedAt: new Date().toISOString(),
           },
         ]);
-        setOfflineEnabled(true);
-        setOfflineCustomized(false);
       }
 
       // Single-document read for /clubSettings/default from Firestore (never getDocs)
@@ -1037,73 +954,6 @@ export function AccessControlView({
     }
   };
 
-  // PINs handlers
-  const handleRandomizeSingleRole = (targetRole: OfficialPinRole) => {
-    const others = new Set(
-      (Object.keys(rolePins) as OfficialPinRole[])
-        .filter((k) => k !== targetRole)
-        .map((k) => rolePins[k])
-    );
-    let candidate = '1000';
-    for (let i = 0; i < 50; i++) {
-      const next = String(1000 + Math.floor(Math.random() * 9000));
-      if (!others.has(next)) {
-        candidate = next;
-        break;
-      }
-    }
-    setRolePins((prev) => ({ ...prev, [targetRole]: candidate }));
-    setPinsNotice(null);
-  };
-
-  const handleSavePins = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeEventId) return;
-    setPinsBusy(true);
-    setPinsNotice(null);
-    try {
-      const res = await apiFetch('/api/auth/pins', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          eventId: activeEventId,
-          rolePins,
-        }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        rolePins?: RolePinMap;
-        pinsCustomized?: boolean;
-        error?: string;
-      };
-      if (!res.ok || !data.rolePins) {
-        setPinsNotice({
-          ok: false,
-          msg: data.error || 'Kunde inte spara PIN-koderna.',
-        });
-        return;
-      }
-      setRolePins(data.rolePins);
-      setPinsCustomized(true);
-      setPinsNotice({
-        ok: true,
-        msg: `Sparade funktionärernas PIN-koder för ${competitionName}.`,
-      });
-    } finally {
-      setPinsBusy(false);
-    }
-  };
-
-  const handleCopyPin = async (role: OfficialPinRole, title: string) => {
-    const text = `${competitionName} — ${title}: PIN ${rolePins[role]}`;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedRole(role);
-      setTimeout(() => setCopiedRole(null), 1800);
-    } catch {
-      // ignore clipboard restrictions
-    }
-  };
-
   // Google Admin handlers
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1444,45 +1294,6 @@ export function AccessControlView({
       });
     } finally {
       setRoleBusy(false);
-    }
-  };
-
-  const handleSaveOfflineSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setOfflineBusy(true);
-    setOfflineNotice(null);
-    try {
-      const res = await apiFetch('/api/auth/offline-code', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          enabled: offlineEnabled,
-          ...(newOfflineCode.trim() ? { newCode: newOfflineCode.trim() } : {}),
-        }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        offlineCodeEnabled?: boolean;
-        offlineCodeCustomized?: boolean;
-        error?: string;
-      };
-      if (!res.ok) {
-        setOfflineNotice({
-          ok: false,
-          msg: data.error || 'Kunde inte uppdatera offline reservkod.',
-        });
-        return;
-      }
-      setOfflineEnabled(Boolean(data.offlineCodeEnabled));
-      setOfflineCustomized(Boolean(data.offlineCodeCustomized));
-      setNewOfflineCode('');
-      setOfflineNotice({
-        ok: true,
-        msg: newOfflineCode.trim()
-          ? 'Ny offline reservkod sparad (krypterad med scrypt).'
-          : 'Inställning för offline reservläge sparad.',
-      });
-    } finally {
-      setOfflineBusy(false);
     }
   };
 
@@ -2502,7 +2313,7 @@ export function AccessControlView({
                       Permanent molnlagring (Firestore)
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                      Sparar tävlingar, banor, deltagare, SI-stämplingar och PIN-koder i ert Firebase-projekt.
+                      Sparar tävlingar, banor, deltagare och SI-stämplingar i ert Firebase-projekt.
                     </p>
                   </div>
                   <Cloud className="w-4 h-4 text-slate-400 shrink-0" />
@@ -2971,198 +2782,6 @@ export function AccessControlView({
             </div>
           </section>
 
-          {LEGACY_PIN_AUTH_ENABLED && (
-            <>
-          {/* 4-Digit Official PINs per Role */}
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0">
-                <h2 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100 truncate">
-                  Funktionärernas 4-siffriga PIN-koder
-                  {activeEventId ? ` — ${competitionName}` : ''}
-                </h2>
-                <span className="text-xs text-slate-500 dark:text-slate-400">
-                  {activeEventId
-                    ? pinsCustomized
-                      ? 'Anpassade koder'
-                      : 'Standardkoder'
-                    : 'Ingen tävling vald'}
-                </span>
-              </div>
-
-              {activeEventId && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRolePins(generateUniqueRandomPins());
-                    setPinsNotice(null);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Slumpa alla 4</span>
-                </button>
-              )}
-            </div>
-
-            {!activeEventId ? (
-              <div className="p-4 text-xs text-slate-500 dark:text-slate-400">
-                Skapa eller välj en aktiv tävling under Tävlingar för att ställa in PIN-koder.
-              </div>
-            ) : (
-              <form onSubmit={handleSavePins} className="p-4 space-y-3">
-                {pinsNotice && (
-                  <div
-                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border ${
-                      pinsNotice.ok
-                        ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900'
-                        : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900'
-                    }`}
-                  >
-                    {pinsNotice.msg}
-                  </div>
-                )}
-
-                <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg">
-                  {PIN_ROLE_META.map((item) => (
-                    <div
-                      key={item.role}
-                      className="px-3.5 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-baseline gap-x-2">
-                          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-900 dark:text-slate-100">
-                            <KeyRound className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>{item.title}</span>
-                          </span>
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                            {item.allowedViews}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          maxLength={6}
-                          value={rolePins[item.role]}
-                          onChange={(e) => {
-                            const clean = e.target.value.replace(/\D/g, '').slice(0, 6);
-                            setRolePins((prev) => ({ ...prev, [item.role]: clean }));
-                            setPinsNotice(null);
-                          }}
-                          aria-label={`PIN-kod för ${item.title}`}
-                          className="w-24 px-2 py-1 text-center text-sm font-mono tabular-nums font-bold tracking-widest bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleRandomizeSingleRole(item.role)}
-                          className="px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                        >
-                          Slumpa
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleCopyPin(item.role, item.title)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                        >
-                          {copiedRole === item.role ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                              <span>Kopierad</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Kopiera</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    PIN-kod låser enheten till denna tävling och döljer adminvyer.
-                  </p>
-                  <button
-                    type="submit"
-                    disabled={pinsBusy}
-                    className="px-3.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                  >
-                    {pinsBusy ? 'Sparar...' : 'Spara PIN-koder'}
-                  </button>
-                </div>
-              </form>
-            )}
-          </section>
-
-          {/* Offline Emergency Backup Code */}
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-            <form onSubmit={handleSaveOfflineSettings} className="space-y-2.5 max-w-2xl">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">
-                    Offline reservkod för tävlingsledare
-                  </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {offlineCustomized ? 'Egen reservkod satt' : 'Standardkod aktiv'} · Låser upp adminläge utan internet i skogen.
-                  </p>
-                </div>
-                <WifiOff className="w-4 h-4 text-slate-400 shrink-0" />
-              </div>
-
-              {offlineNotice && (
-                <div
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border ${
-                    offlineNotice.ok
-                      ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900'
-                      : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900'
-                  }`}
-                >
-                  {offlineNotice.msg}
-                </div>
-              )}
-
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-800 dark:text-slate-200 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={offlineEnabled}
-                  onChange={(e) => setOfflineEnabled(e.target.checked)}
-                  className="rounded border-slate-300 dark:border-slate-700"
-                />
-                <span>Tillåt inloggning med offline reservkod</span>
-              </label>
-
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2">
-                <div className="flex-1 min-w-0">
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Ny offline reservkod (minst 6 tecken)
-                  </label>
-                  <input
-                    type="password"
-                    value={newOfflineCode}
-                    onChange={(e) => setNewOfflineCode(e.target.value)}
-                    disabled={!offlineEnabled}
-                    placeholder="Lämna tomt för att behålla nuvarande"
-                    className="w-full px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 disabled:opacity-50"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={offlineBusy}
-                  className="px-3.5 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                >
-                  {offlineBusy ? 'Sparar...' : 'Spara offline-kod'}
-                </button>
-              </div>
-            </form>
-          </section>
-            </>
-          )}
         </div>
       )}
 

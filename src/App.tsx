@@ -373,7 +373,7 @@ export default function App() {
     []
   );
 
-  // Enforce role & station locking whenever a PIN_OFFICIAL session is active
+  // Keep non-admin users within their assigned role.
   useEffect(() => {
     if (!authSession) return;
     if (authSession.user.sessionKind !== 'ADMIN') {
@@ -1806,7 +1806,7 @@ export default function App() {
     );
   }
 
-  // 3. Inline Secretariat Login Gate (4-digit Role PIN + Google Admin Auth + Offline Emergency Code)
+  // 3. Google sign-in gate for assigned Secretariat roles
   if (!authSession) {
     return (
       <AuthGateView
@@ -1820,7 +1820,6 @@ export default function App() {
           organizer: c.organizer,
           date: c.date,
           status: c.status,
-          pinsCustomized: false,
         }))}
         clubSettings={clubSettings}
         onAuthenticated={(sess) => {
@@ -1836,13 +1835,13 @@ export default function App() {
     );
   }
 
-  const isPinOfficial = authSession.user.sessionKind !== 'ADMIN';
+  const isOfficialSession = authSession.user.sessionKind !== 'ADMIN';
   const isAdminSession = authSession.user.sessionKind === 'ADMIN';
   const sidebarCompetition =
     competitionsList.find((item) => item.id === activeEventId) ??
     (isEmptySeason ? competitionsList[0] : undefined);
   const sidebarIsEmptySeason = isEmptySeason && !sidebarCompetition;
-  const effectiveRoleMode: OfficialRoleMode = isPinOfficial
+  const effectiveRoleMode: OfficialRoleMode = isOfficialSession
     ? (authSession.user.officialRole as OfficialRoleMode)
     : roleMode;
 
@@ -1890,7 +1889,7 @@ export default function App() {
 
         {/* Competition & Role Context (Admin Multi-Event Switcher vs Locked Official Station) */}
         <div className="p-2.5 border-b border-slate-200 dark:border-slate-800 relative">
-          {isPinOfficial ? (
+          {isOfficialSession ? (
             <div className="px-2.5 py-2 bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 rounded-lg space-y-0.5">
               <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                 <span className="inline-flex items-center gap-1 font-medium">
@@ -1902,7 +1901,7 @@ export default function App() {
                   onClick={() => void handleLogout()}
                   className="font-semibold club-accent-text hover:underline whitespace-nowrap shrink-0"
                 >
-                  Byt roll
+                  Logga ut
                 </button>
               </div>
               <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
@@ -2075,7 +2074,7 @@ export default function App() {
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                 {authSession.user.email ||
-                  (isPinOfficial ? 'Funktionärs-PIN' : 'Offline reservkod')}
+                (isOfficialSession ? 'Funktionär' : 'Administratör')}
               </div>
             </div>
             <button
@@ -2083,13 +2082,11 @@ export default function App() {
               onClick={() => void handleLogout()}
               className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors whitespace-nowrap shrink-0"
               title={
-                isPinOfficial
-                  ? 'Byt funktionärsroll / tillbaka till PIN-sidan'
-                  : 'Logga ut från sekretariatet'
+                'Logga ut från sekretariatet'
               }
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>{isPinOfficial ? 'Byt roll' : 'Logga ut'}</span>
+              <span>Logga ut</span>
             </button>
           </div>
         </div>
@@ -2128,7 +2125,7 @@ export default function App() {
               </button>
             </div>
             <div className="p-2.5 border-b border-slate-200 dark:border-slate-800 space-y-1.5">
-              {isPinOfficial ? (
+              {isOfficialSession ? (
                 <div className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg space-y-0.5">
                   <div className="flex items-center justify-between gap-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                     <span>Låst station · {competition.date}</span>
@@ -2137,7 +2134,7 @@ export default function App() {
                       onClick={() => void handleLogout()}
                       className="font-semibold club-accent-text hover:underline whitespace-nowrap shrink-0"
                     >
-                      Byt roll
+                      Logga ut
                     </button>
                   </div>
                   <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
@@ -2236,7 +2233,7 @@ export default function App() {
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                     {authSession.user.email ||
-                      (isPinOfficial ? 'Funktionärs-PIN' : 'Offline reservkod')}
+                      (isOfficialSession ? 'Funktionär' : 'Administratör')}
                   </div>
                 </div>
                 <button
@@ -2245,7 +2242,7 @@ export default function App() {
                   className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md whitespace-nowrap shrink-0"
                 >
                   <LogOut className="w-3.5 h-3.5" />
-                  <span>{isPinOfficial ? 'Byt roll' : 'Logga ut'}</span>
+                  <span>Logga ut</span>
                 </button>
               </div>
               <PWAInstallButton />
@@ -2298,16 +2295,14 @@ export default function App() {
               type="button"
               onClick={() => void handleLogout()}
               title={
-                isPinOfficial
-                  ? 'Byt funktionärsroll / tillbaka till PIN-inloggning'
-                  : 'Logga ut från sekretariatet'
+                'Logga ut från sekretariatet'
               }
-              aria-label={isPinOfficial ? 'Byt roll' : 'Logga ut'}
+              aria-label="Logga ut"
               className="inline-flex items-center gap-1.5 p-1.5 sm:px-2.5 sm:py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent sm:border-slate-200/80 sm:dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <LogOut className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">
-                {isPinOfficial ? 'Byt roll' : 'Logga ut'}
+                Logga ut
               </span>
             </button>
 

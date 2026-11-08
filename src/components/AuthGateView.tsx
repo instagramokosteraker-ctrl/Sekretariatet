@@ -1,25 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowRight,
-  ChevronDown,
-  ChevronUp,
-  Delete,
   ExternalLink,
   Eye,
-  KeyRound,
-  Lock,
   Moon,
   ShieldCheck,
   Sun,
-  WifiOff,
 } from 'lucide-react';
 import type { ClubSettings, EventLifecycleStatus } from '../types/sportident';
 import { prewarmGooglePopupAuth } from '../firebase';
 import {
   loginWithGoogleClient,
-  loginWithOfflineCodeClient,
-  loginWithPinClient,
-  LEGACY_PIN_AUTH_ENABLED,
   type StoredAuthSession,
 } from '../services/authClient';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
@@ -31,8 +21,6 @@ export interface GateCompetitionItem {
   organizer: string;
   date: string;
   status: EventLifecycleStatus;
-  pinsCustomized?: boolean;
-  demoPinHints?: Record<string, string>;
 }
 
 interface AuthGateViewProps {
@@ -77,14 +65,7 @@ export function AuthGateView({
   onOpenPublicPortal,
 }: AuthGateViewProps) {
   const compList = competitions && competitions.length > 0 ? competitions : DEFAULT_DEMO_COMPETITIONS;
-  const [selectedEventId, setSelectedEventId] = useState<string>(() => compList[0]?.id || '');
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (compList.length > 0 && (!selectedEventId || !compList.some((c) => c.id === selectedEventId))) {
-      setSelectedEventId(compList[0].id);
-    }
-  }, [compList, selectedEventId]);
 
   useEffect(() => {
     setLogoBroken(false);
@@ -108,74 +89,16 @@ export function AuthGateView({
     return window.location.href;
   }, []);
 
-  // Official PIN state
-  const [pinValue, setPinValue] = useState<string>('');
-  const [pinBusy, setPinBusy] = useState<boolean>(false);
-  const [pinError, setPinError] = useState<string | null>(null);
-
-  // Admin Google & Offline state
+  // Google sign-in state
   const [googleBusy, setGoogleBusy] = useState<boolean>(false);
   const [adminError, setAdminError] = useState<string | null>(null);
   const [adminErrorCode, setAdminErrorCode] = useState<string | null>(null);
-  const [offlineExpanded, setOfflineExpanded] = useState<boolean>(false);
-  const [offlineCode, setOfflineCode] = useState<string>('');
-  const [offlineBusy, setOfflineBusy] = useState<boolean>(false);
 
   useEffect(() => {
     prewarmGooglePopupAuth();
   }, []);
 
-  const selectedCompetition = useMemo(() => {
-    return (
-      compList.find((c) => c.id === selectedEventId) ??
-      compList[0] ??
-      null
-    );
-  }, [compList, selectedEventId]);
-
-  const submitPin = (codeToSubmit: string) => {
-    const clean = codeToSubmit.replace(/\D/g, '');
-    if (clean.length < 4) {
-      setPinError('Ange din 4-siffriga funktionärs-PIN.');
-      return;
-    }
-    const targetId = selectedCompetition?.id || selectedEventId;
-    if (!targetId) {
-      setPinError('Ingen tävling hittades.');
-      return;
-    }
-
-    setPinBusy(true);
-    setPinError(null);
-    const result = loginWithPinClient({
-      eventId: targetId,
-      eventName: selectedCompetition?.name,
-      pin: clean,
-    });
-    setPinBusy(false);
-
-    if (result.ok === false) {
-      setPinError(result.error);
-      setPinValue('');
-      return;
-    }
-    onAuthenticated(result.session);
-  };
-
-  const handleNumpadDigit = (digit: string) => {
-    if (pinBusy) return;
-    setPinError(null);
-    const next = (pinValue + digit).replace(/\D/g, '').slice(0, 6);
-    setPinValue(next);
-    if (next.length === 4) {
-      submitPin(next);
-    }
-  };
-
-  const handleBackspace = () => {
-    setPinError(null);
-    setPinValue((prev) => prev.slice(0, -1));
-  };
+  const selectedCompetition = compList[0] ?? null;
 
   const handleGoogleSignIn = async () => {
     setGoogleBusy(true);
@@ -198,29 +121,6 @@ export function AuthGateView({
     } finally {
       setGoogleBusy(false);
     }
-  };
-
-  const submitOfflineCodeValue = (rawCode: string) => {
-    const clean = rawCode.trim();
-    if (!clean) {
-      setAdminError('Ange klubbens offline reservkod.');
-      return;
-    }
-    setOfflineBusy(true);
-    setAdminError(null);
-    setAdminErrorCode(null);
-    const res = loginWithOfflineCodeClient(clean);
-    setOfflineBusy(false);
-    if (res.ok === false) {
-      setAdminError(res.error);
-      return;
-    }
-    onAuthenticated(res.session);
-  };
-
-  const handleOfflineSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    submitOfflineCodeValue(offlineCode);
   };
 
   return (
@@ -270,125 +170,7 @@ export function AuthGateView({
 
       {/* Main Container */}
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6 lg:p-8">
-        <div
-          className={`w-full ${
-            LEGACY_PIN_AUTH_ENABLED ? 'max-w-4xl md:grid-cols-2' : 'max-w-xl md:grid-cols-1'
-          } grid grid-cols-1 gap-5`}
-        >
-          {LEGACY_PIN_AUTH_ENABLED && (
-            <>
-          {/* Card 1: Funktionärs-PIN */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col justify-between space-y-4 shadow-sm">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <KeyRound className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
-                  <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                    Funktionärs-PIN
-                  </h2>
-                </div>
-                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                  Station
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Logga in på en station (Start, Mål, Skog eller Speaker) med din 4-siffriga PIN.
-              </p>
-
-              {/* Event selector */}
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1">
-                  Välj tävling:
-                </label>
-                {compList.length > 0 ? (
-                  <select
-                    value={selectedEventId}
-                    onChange={(e) => setSelectedEventId(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-medium bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100"
-                  >
-                    {compList.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.date})
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <div className="p-3 bg-slate-100 dark:bg-slate-800/60 rounded-lg text-xs text-slate-600 dark:text-slate-400">
-                    Ingen tävling har lagts till ännu. Logga in som administratör nedan för att skapa eller importera säsongens första tävling.
-                  </div>
-                )}
-              </div>
-
-              {/* PIN input display */}
-              <div className="pt-2">
-                <div className="flex justify-center gap-3">
-                  {[0, 1, 2, 3].map((idx) => {
-                    const digit = pinValue[idx];
-                    return (
-                      <div
-                        key={idx}
-                        className={`w-11 h-12 rounded-xl border-2 flex items-center justify-center text-lg font-mono font-bold transition-all ${
-                          digit
-                            ? 'border-red-600 dark:border-red-500 text-slate-900 dark:text-slate-100 bg-red-50/20 dark:bg-red-950/20'
-                            : 'border-slate-200 dark:border-slate-800 text-slate-400 bg-slate-50/50 dark:bg-slate-950/50'
-                        }`}
-                      >
-                        {digit ? '•' : ''}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {pinError && (
-                  <p className="text-xs text-red-600 dark:text-red-400 text-center font-medium mt-2">
-                    {pinError}
-                  </p>
-                )}
-              </div>
-
-              {/* Numpad */}
-              <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto pt-2">
-                {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
-                  <button
-                    key={digit}
-                    type="button"
-                    onClick={() => handleNumpadDigit(digit)}
-                    className="h-11 rounded-xl text-base font-semibold bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 transition-all"
-                  >
-                    {digit}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setPinValue('')}
-                  className="h-11 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  Rensa
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleNumpadDigit('0')}
-                  className="h-11 rounded-xl text-base font-semibold bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 transition-all"
-                >
-                  0
-                </button>
-                <button
-                  type="button"
-                  onClick={handleBackspace}
-                  className="h-11 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                  aria-label="Radera siffra"
-                >
-                  <Delete className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="pt-2 text-[11px] text-slate-400 text-center border-t border-slate-100 dark:border-slate-800">
-              Standard-PIN: Start 1100 · Mål 2200 · Skog 3300 · Speaker 4400
-            </div>
-          </div>
-            </>
-          )}
+        <div className="w-full max-w-xl grid grid-cols-1 gap-5">
 
           {/* Google sign-in for assigned club roles */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col justify-between space-y-4 shadow-sm">
@@ -455,46 +237,6 @@ export function AuthGateView({
                 )}
               </div>
 
-              {LEGACY_PIN_AUTH_ENABLED && (
-                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setOfflineExpanded((v) => !v)}
-                  className="w-full flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 py-1"
-                >
-                  <span className="flex items-center gap-1.5 font-medium">
-                    <WifiOff className="w-3.5 h-3.5" />
-                    <span>Offline reservkod (skogsbruk utan nät)</span>
-                  </span>
-                  {offlineExpanded ? (
-                    <ChevronUp className="w-3.5 h-3.5" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  )}
-                </button>
-
-                {offlineExpanded && (
-                  <form onSubmit={handleOfflineSubmit} className="mt-2 space-y-2">
-                    <div className="flex gap-2">
-                      <input
-                        type="password"
-                        placeholder="Ange reservkod (okosteraker2026)"
-                        value={offlineCode}
-                        onChange={(e) => setOfflineCode(e.target.value)}
-                        className="flex-1 px-3 py-1.5 text-xs font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
-                      />
-                      <button
-                        type="submit"
-                        disabled={offlineBusy || !offlineCode}
-                        className="px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg whitespace-nowrap"
-                      >
-                        {offlineBusy ? '...' : 'Öppna'}
-                      </button>
-                    </div>
-                  </form>
-                )}
-                </div>
-              )}
             </div>
 
             <div className="text-[11px] text-slate-400 text-center">
