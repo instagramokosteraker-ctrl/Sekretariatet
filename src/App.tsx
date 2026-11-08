@@ -105,6 +105,7 @@ import {
   subscribeCoursesFromFirestore,
   saveClassToFirestore,
   deleteClassFromFirestore,
+  subscribeClassesFromFirestore,
   saveStationToFirestore,
   deleteStationFromFirestore,
   updateCompetitorInFirestore,
@@ -706,6 +707,27 @@ export default function App() {
     );
   }, [activeEventId, authSession?.user.sessionKind, firebaseUserUid]);
   useEffect(() => {
+    if (!firebaseUserUid || !activeEventId) return;
+    return subscribeClassesFromFirestore(
+      activeEventId,
+      setClasses,
+      (error) => {
+        console.error('Kunde inte prenumerera på klasser från Firestore:', error);
+      },
+      () => {
+        if (authSession?.user.sessionKind !== 'ADMIN') return;
+        void recalculateCompetitionFromFirestore(activeEventId)
+          .then((recalculated) => {
+            setCompetitors(recalculated.competitors);
+            setEmergency(recalculated.emergency);
+          })
+          .catch((error: unknown) => {
+            console.error('Kunde inte räkna om resultat efter klassändring:', error);
+          });
+      }
+    );
+  }, [activeEventId, authSession?.user.sessionKind, firebaseUserUid]);
+  useEffect(() => {
     if (
       !firebaseUserUid ||
       !activeEventId ||
@@ -1009,7 +1031,9 @@ export default function App() {
     if (!firebaseUserUid && !auth.currentUser) {
       setCourses(snap.courses);
     }
-    setClasses(snap.classes);
+    if (!firebaseUserUid && !auth.currentUser) {
+      setClasses(snap.classes);
+    }
     setStations(snap.stations);
     setCompetitors(snap.competitors);
     if (!firebaseUserUid && !auth.currentUser) {
@@ -2904,102 +2928,105 @@ export default function App() {
                     }
                   }}
                   onImportIofBatch={async (batch) => {
-                    const res = await apiFetch('/api/import/batch', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(batch),
-                    });
-                    const contentType = res.headers.get('content-type') || '';
-                    const responseBody = await res.text();
-                    interface ImportBatchResult {
-                      error?: string;
-                      addedCourses?: number;
-                      addedClasses?: number;
-                      addedEntries?: number;
-                      syncedRunnerDb?: number;
-                    }
-                    let responseData: ImportBatchResult | null = null;
-                    try {
-                      const parsedResponse: unknown = JSON.parse(responseBody);
-                      if (
-                        parsedResponse !== null &&
-                        typeof parsedResponse === 'object' &&
-                        !Array.isArray(parsedResponse)
-                      ) {
-                        responseData = parsedResponse as ImportBatchResult;
+                    if (!auth.currentUser) {
+                      const res = await apiFetch('/api/import/batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(batch),
+                      });
+                      const contentType = res.headers.get('content-type') || '';
+                      const responseBody = await res.text();
+                      interface ImportBatchResult {
+                        error?: string;
+                        addedCourses?: number;
+                        addedClasses?: number;
+                        addedEntries?: number;
+                        syncedRunnerDb?: number;
                       }
-                    } catch {
-                      responseData = null;
-                    }
-                    if (
-                      contentType.includes('application/json') &&
-                      res.status !== 404 &&
-                      !responseData
-                    ) {
-                      throw new Error('Importservern returnerade ett ogiltigt JSON-svar.');
-                    }
-                    if (res.ok && responseData) {
-                      if (
-                        typeof responseData.addedCourses !== 'number' ||
-                        !Number.isInteger(responseData.addedCourses) ||
-                        responseData.addedCourses < 0 ||
-                        typeof responseData.addedClasses !== 'number' ||
-                        !Number.isInteger(responseData.addedClasses) ||
-                        responseData.addedClasses < 0 ||
-                        typeof responseData.addedEntries !== 'number' ||
-                        !Number.isInteger(responseData.addedEntries) ||
-                        responseData.addedEntries < 0 ||
-                        (responseData.syncedRunnerDb !== undefined &&
-                          (typeof responseData.syncedRunnerDb !== 'number' ||
-                            !Number.isInteger(responseData.syncedRunnerDb) ||
-                            responseData.syncedRunnerDb < 0))
-                      ) {
-                        throw new Error('Importservern returnerade ofullständig statistik.');
+                      let responseData: ImportBatchResult | null = null;
+                      try {
+                        const parsedResponse: unknown = JSON.parse(responseBody);
+                        if (
+                          parsedResponse !== null &&
+                          typeof parsedResponse === 'object' &&
+                          !Array.isArray(parsedResponse)
+                        ) {
+                          responseData = parsedResponse as ImportBatchResult;
+                        }
+                      } catch {
+                        responseData = null;
                       }
-                      return {
-                        addedCourses: responseData.addedCourses,
-                        addedClasses: responseData.addedClasses,
-                        addedEntries: responseData.addedEntries,
-                        syncedRunnerDb: responseData.syncedRunnerDb,
-                      };
-                    }
-                    if (!res.ok && responseData && res.status !== 404) {
-                      throw new Error(responseData.error || 'Kunde inte importera XML-filen.');
-                    }
-                    if (!res.ok && res.status !== 404) {
-                      throw new Error(
-                        responseBody.trim().slice(0, 240) || 'Kunde inte importera XML-filen.'
-                      );
+                      if (
+                        contentType.includes('application/json') &&
+                        res.status !== 404 &&
+                        !responseData
+                      ) {
+                        throw new Error('Importservern returnerade ett ogiltigt JSON-svar.');
+                      }
+                      if (res.ok && responseData) {
+                        if (
+                          typeof responseData.addedCourses !== 'number' ||
+                          !Number.isInteger(responseData.addedCourses) ||
+                          responseData.addedCourses < 0 ||
+                          typeof responseData.addedClasses !== 'number' ||
+                          !Number.isInteger(responseData.addedClasses) ||
+                          responseData.addedClasses < 0 ||
+                          typeof responseData.addedEntries !== 'number' ||
+                          !Number.isInteger(responseData.addedEntries) ||
+                          responseData.addedEntries < 0 ||
+                          (responseData.syncedRunnerDb !== undefined &&
+                            (typeof responseData.syncedRunnerDb !== 'number' ||
+                              !Number.isInteger(responseData.syncedRunnerDb) ||
+                              responseData.syncedRunnerDb < 0))
+                        ) {
+                          throw new Error('Importservern returnerade ofullständig statistik.');
+                        }
+                        return {
+                          addedCourses: responseData.addedCourses,
+                          addedClasses: responseData.addedClasses,
+                          addedEntries: responseData.addedEntries,
+                          syncedRunnerDb: responseData.syncedRunnerDb,
+                        };
+                      }
+                      if (!res.ok && responseData && res.status !== 404) {
+                        throw new Error(responseData.error || 'Kunde inte importera XML-filen.');
+                      }
+                      if (!res.ok && res.status !== 404) {
+                        throw new Error(
+                          responseBody.trim().slice(0, 240) || 'Kunde inte importera XML-filen.'
+                        );
+                      }
                     }
 
                     const makeImportId = (prefix: string, index: number) =>
                       `${prefix}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
                     const normalizedName = (value: string) => value.trim().toLocaleLowerCase();
-                    const nextCourses = [...courses];
-                    const importedCourses: Course[] = [];
-                    for (const [index, parsed] of batch.courses.entries()) {
-                      const previous = nextCourses.find(
+                    const importedCourses: Course[] = batch.courses.map((parsed, index) => {
+                      const previous = courses.find(
                         (course) => normalizedName(course.name) === normalizedName(parsed.name)
                       );
-                      const course: Course = {
+                      return {
                         id: previous?.id || makeImportId('crs', index),
                         name: parsed.name.trim(),
                         lengthMeters: parsed.lengthMeters,
                         climbMeters: parsed.climbMeters,
                         controls: parsed.controls,
                       };
-                      if (previous) {
-                        nextCourses[nextCourses.indexOf(previous)] = course;
-                      } else {
-                        nextCourses.push(course);
-                      }
-                      importedCourses.push(course);
+                    });
+                    const nextCourses = [...courses];
+                    for (const course of importedCourses) {
+                      const existingIndex = nextCourses.findIndex(
+                        (existing) =>
+                          existing.id === course.id ||
+                          normalizedName(existing.name) === normalizedName(course.name)
+                      );
+                      if (existingIndex >= 0) nextCourses[existingIndex] = course;
+                      else nextCourses.push(course);
                     }
-
                     const nextClasses = [...classes];
                     const importedClasses: CompClass[] = [];
                     for (const [index, parsed] of batch.classes.entries()) {
-                      const previous = nextClasses.find(
+                      const previous = classes.find(
                         (cls) => normalizedName(cls.name) === normalizedName(parsed.name)
                       );
                       const forkCourseIds = (parsed.forkCourseNames || [])
@@ -3040,11 +3067,11 @@ export default function App() {
                             ),
                         feeSek: previous?.feeSek ?? clubSettings.defaultDirectEntryFeeSek,
                       };
-                      if (previous) {
-                        nextClasses[nextClasses.indexOf(previous)] = cls;
-                      } else {
-                        nextClasses.push(cls);
-                      }
+                      const existingIndex = nextClasses.findIndex(
+                        (existing) => existing.id === cls.id
+                      );
+                      if (existingIndex >= 0) nextClasses[existingIndex] = cls;
+                      else nextClasses.push(cls);
                       importedClasses.push(cls);
                     }
 
@@ -3167,12 +3194,34 @@ export default function App() {
 
                     await saveCompetitionImportToFirestore({
                       competitionId: activeEventId,
-                      courses: importedCourses,
-                      classes: importedClasses,
+                      courses: nextCourses,
+                      classes: nextClasses,
                       competitors: importedCompetitors,
                       runnerDbEntries: importedRunnerDbEntries,
                       competitorCount: nextCompetitors.length,
                     });
+                    try {
+                      const mirrorResponse = await apiFetch('/api/import/batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          courses: nextCourses,
+                          classes: nextClasses,
+                          entries: batch.entries,
+                          runnerDbEntries: batch.runnerDbEntries,
+                        }),
+                      });
+                      if (!mirrorResponse.ok) {
+                        console.warn(
+                          `Firestore-importen sparades, men Express-spegeln svarade HTTP ${mirrorResponse.status}: ${(await mirrorResponse.text()).slice(0, 240)}`
+                        );
+                      }
+                    } catch (error) {
+                      console.warn(
+                        'Firestore-importen sparades, men Express-spegeln kunde inte uppdateras:',
+                        error
+                      );
+                    }
                     setCourses(nextCourses);
                     setClasses(nextClasses);
                     setCompetitors(nextCompetitors);
@@ -3793,7 +3842,7 @@ export default function App() {
                         {
                           method: existingId ? 'PUT' : 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ ...payload, id: saved.id }),
+                          body: JSON.stringify(saved),
                         }
                       );
                       if (!response.ok) {
@@ -3838,18 +3887,10 @@ export default function App() {
                   }}
                   onSaveClass={async (payload, existingId) => {
                     let saved: CompClass | null = null;
-                    if (firebaseUserPresent || auth.currentUser) {
-                      try {
-                        saved = await saveClassToFirestore(
-                          activeEventId,
-                          payload,
-                          existingId
-                        );
-                      } catch (cloudErr) {
-                        console.warn('Firestore saveClass error:', cloudErr);
-                      }
-                    }
-                    if (!saved) {
+                    const firestoreOwned = Boolean(firebaseUserPresent || auth.currentUser);
+                    if (firestoreOwned) {
+                      saved = await saveClassToFirestore(activeEventId, payload, existingId);
+                    } else {
                       const prevClass = classes.find((c) => c.id === existingId);
                       saved = {
                         id: existingId || `cls-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3857,8 +3898,8 @@ export default function App() {
                         courseId: payload.courseId !== undefined ? payload.courseId : (prevClass?.courseId ?? null),
                         classFormat: payload.classFormat ?? prevClass?.classFormat ?? 'STANDARD',
                         forkCourseIds: payload.forkCourseIds ?? prevClass?.forkCourseIds ?? [],
-                        rogainingMaxTimeSec: null,
-                        rogainingPenaltyPerMin: null,
+                        rogainingMaxTimeSec: payload.rogainingMaxTimeSec ?? prevClass?.rogainingMaxTimeSec ?? null,
+                        rogainingPenaltyPerMin: payload.rogainingPenaltyPerMin ?? prevClass?.rogainingPenaltyPerMin ?? null,
                         allowDirectEntry: payload.allowDirectEntry ?? prevClass?.allowDirectEntry ?? true,
                         freeStart: payload.freeStart ?? prevClass?.freeStart ?? false,
                         autoMatchCourse: payload.autoMatchCourse ?? prevClass?.autoMatchCourse ?? false,
@@ -3870,26 +3911,54 @@ export default function App() {
                         ? current.map((cls) => (cls.id === existingId ? saved! : cls))
                         : [...current, saved!]
                     );
-                    if (firebaseUserPresent || auth.currentUser) {
-                      try {
-                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                        setCompetitors(recalculated.competitors);
-                        setEmergency(recalculated.emergency);
-                      } catch {
-                        // ignore
-                      }
-                    }
                     try {
-                      await apiFetch(
+                      const response = await apiFetch(
                         existingId ? `/api/classes/${existingId}` : '/api/classes',
                         {
                           method: existingId ? 'PUT' : 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify(payload),
+                          body: JSON.stringify({ ...payload, id: saved.id }),
                         }
                       );
-                    } catch {
-                      // offline fallback
+                      if (!response.ok) {
+                        console.warn(
+                          `Kunde inte uppdatera Express-kompatibilitetsspeglingen för klass ${saved.id} (HTTP ${response.status}).`
+                        );
+                      }
+                    } catch (error) {
+                      console.warn('Kunde inte nå Express-kompatibilitetsspeglingen för klasser:', error);
+                    }
+                  }}
+                  onDeleteClass={async (id) => {
+                    const firestoreOwned = Boolean(firebaseUserPresent || auth.currentUser);
+                    if (firestoreOwned) {
+                      await deleteClassFromFirestore(activeEventId, id);
+                    } else {
+                      const response = await apiFetch(`/api/classes/${id}`, {
+                        method: 'DELETE',
+                      });
+                      if (!response.ok) {
+                        const message = await response.text();
+                        throw new Error(message || 'Kunde inte ta bort klassen från servern.');
+                      }
+                    }
+                    setClasses((current) => current.filter((cls) => cls.id !== id));
+                    if (firestoreOwned) {
+                      try {
+                        const response = await apiFetch(`/api/classes/${id}`, {
+                          method: 'DELETE',
+                        });
+                        if (!response.ok) {
+                          console.warn(
+                            `Kunde inte uppdatera Express-kompatibilitetsspeglingen för borttagen klass ${id} (HTTP ${response.status}).`
+                          );
+                        }
+                      } catch (error) {
+                        console.warn(
+                          'Kunde inte nå Express-kompatibilitetsspeglingen för klasser:',
+                          error
+                        );
+                      }
                     }
                   }}
                   onImportCourseBatch={async (payload) => {
@@ -3988,8 +4057,8 @@ export default function App() {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                          courses: payload.courses,
-                          classes: payload.classes,
+                          courses: nextCourses,
+                          classes: nextClasses,
                           entries: [],
                           runnerDbEntries: [],
                           replaceExisting: payload.replaceExisting,

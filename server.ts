@@ -4930,9 +4930,10 @@ async function startServer() {
       return;
     }
     const created: CompClass = {
-      id: `cls-${Date.now()}`,
+      id: body.id?.trim() || `cls-${Date.now()}`,
       name: body.name.trim(),
-      courseId: body.courseId ?? db.courses[0]?.id ?? null,
+      courseId:
+        body.courseId !== undefined ? body.courseId : db.courses[0]?.id ?? null,
       classFormat: body.classFormat ?? 'STANDARD',
       forkCourseIds: Array.isArray(body.forkCourseIds) ? body.forkCourseIds : undefined,
       rogainingMaxTimeSec:
@@ -4944,7 +4945,12 @@ async function startServer() {
       autoMatchCourse: Boolean(body.autoMatchCourse),
       feeSek: Number(body.feeSek ?? 140),
     };
-    db.classes.push(created);
+    const existingIndex = db.classes.findIndex((compClass) => compClass.id === created.id);
+    if (existingIndex >= 0) {
+      db.classes[existingIndex] = created;
+    } else {
+      db.classes.push(created);
+    }
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
     res.status(201).json(created);
@@ -4953,45 +4959,65 @@ async function startServer() {
   app.put('/api/classes/:id', (req, res) => {
     const db = getActiveEvent();
     const idx = db.classes.findIndex((c) => c.id === req.params.id);
-    if (idx === -1) {
-      res.status(404).json({ error: 'Klass hittades ej.' });
-      return;
-    }
     const body = req.body as Partial<CompClass>;
-    db.classes[idx] = {
-      ...db.classes[idx],
-      name: body.name !== undefined ? body.name.trim() : db.classes[idx].name,
-      courseId: body.courseId !== undefined ? body.courseId : db.classes[idx].courseId,
+    const existing = idx >= 0 ? db.classes[idx] : null;
+    const saved: CompClass = {
+      id: req.params.id,
+      name: body.name !== undefined ? body.name.trim() : existing?.name ?? 'Klass',
+      courseId: body.courseId !== undefined ? body.courseId : existing?.courseId ?? db.courses[0]?.id ?? null,
       classFormat:
-        body.classFormat !== undefined ? body.classFormat : db.classes[idx].classFormat,
+        body.classFormat !== undefined ? body.classFormat : existing?.classFormat ?? 'STANDARD',
       forkCourseIds:
-        body.forkCourseIds !== undefined ? body.forkCourseIds : db.classes[idx].forkCourseIds,
+        body.forkCourseIds !== undefined ? body.forkCourseIds : existing?.forkCourseIds,
       rogainingMaxTimeSec:
         body.rogainingMaxTimeSec !== undefined
           ? body.rogainingMaxTimeSec
-          : db.classes[idx].rogainingMaxTimeSec,
+          : existing?.rogainingMaxTimeSec ?? null,
       rogainingPenaltyPerMin:
         body.rogainingPenaltyPerMin !== undefined
           ? body.rogainingPenaltyPerMin
-          : db.classes[idx].rogainingPenaltyPerMin,
+          : existing?.rogainingPenaltyPerMin ?? null,
       allowDirectEntry:
         body.allowDirectEntry !== undefined
           ? body.allowDirectEntry
-          : db.classes[idx].allowDirectEntry,
-      freeStart: body.freeStart !== undefined ? body.freeStart : db.classes[idx].freeStart,
+          : existing?.allowDirectEntry ?? true,
+      freeStart: body.freeStart !== undefined ? body.freeStart : existing?.freeStart ?? false,
       autoMatchCourse:
         body.autoMatchCourse !== undefined
           ? body.autoMatchCourse
-          : db.classes[idx].autoMatchCourse,
+          : existing?.autoMatchCourse ?? false,
       feeSek:
         body.feeSek !== undefined
           ? Math.max(0, Math.min(10000, Math.round(Number(body.feeSek) || 0)))
-          : db.classes[idx].feeSek,
+          : existing?.feeSek ?? 140,
     };
+    if (idx >= 0) {
+      db.classes[idx] = saved;
+    } else {
+      db.classes.push(saved);
+    }
     recalculateEventFromRawReadouts(db);
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
-    res.json(db.classes[idx]);
+    res.json(saved);
+  });
+
+  app.delete('/api/classes/:id', (req, res) => {
+    const db = getActiveEvent();
+    const referencingCompetitors = db.competitors
+      .filter((competitor) => competitor.classId === req.params.id)
+      .map((competitor) => competitor.fullName);
+    if (referencingCompetitors.length > 0) {
+      res.status(409).json({
+        error: `Klassen används av ${referencingCompetitors.slice(0, 8).join(', ')}.`,
+      });
+      return;
+    }
+    db.classes = db.classes.filter((compClass) => compClass.id !== req.params.id);
+    recalculateEventFromRawReadouts(db);
+    saveSeasonDatabase(seasonDb);
+    broadcastFullState(db.competition.shortCode);
+    res.status(204).end();
   });
 
   // 8. Stations CRUD
@@ -5076,14 +5102,27 @@ async function startServer() {
       replaceExisting = false,
       defaultFreeStart = false,
     } = req.body as {
-      courses?: { name: string; lengthMeters: number; climbMeters: number; controls: number[] }[];
-      classes?: {
+      courses?: {
+        id?: string;
         name: string;
+        lengthMeters: number;
+        climbMeters: number;
+        controls: number[];
+      }[];
+      classes?: {
+        id?: string;
+        name: string;
+        courseId?: string | null;
         courseName?: string;
         classFormat?: ClassCompetitionFormat;
+        forkCourseIds?: string[];
         forkCourseNames?: string[];
         freeStart?: boolean;
         autoMatchCourse?: boolean;
+        allowDirectEntry?: boolean;
+        feeSek?: number;
+        rogainingMaxTimeSec?: number | null;
+        rogainingPenaltyPerMin?: number | null;
       }[];
       entries?: { fullName: string; club: string; className: string; siNumber: number }[];
       runnerDbEntries?: {
@@ -5110,6 +5149,7 @@ async function startServer() {
           .filter((n) => Number.isFinite(n) && n >= 1 && n <= 511)
           .slice(0, 128);
         return {
+          id: String(c.id || '').trim().slice(0, 128) || undefined,
           name: String(c.name || '').trim().slice(0, 120) || `Bana ${idx + 1}`,
           lengthMeters: Math.max(0, Math.min(200000, Math.round(Number(c.lengthMeters) || 0))),
           climbMeters: Math.max(0, Math.min(20000, Math.round(Number(c.climbMeters) || 0))),
@@ -5125,7 +5165,10 @@ async function startServer() {
       db.courses = sanitizedCourses.map((c, idx) => {
         const prev = oldCoursesByName.get(c.name.toLowerCase());
         return {
-          id: prev?.id ?? `crs-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 5)}`,
+          id:
+            c.id ??
+            prev?.id ??
+            `crs-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 5)}`,
           name: c.name,
           lengthMeters: c.lengthMeters,
           climbMeters: c.climbMeters,
@@ -5135,14 +5178,18 @@ async function startServer() {
       addedCourses = db.courses.length;
     } else {
       for (const c of sanitizedCourses) {
-        const existing = db.courses.find((x) => x.name.toLowerCase() === c.name.toLowerCase());
+        const existing =
+          db.courses.find((course) => Boolean(c.id) && course.id === c.id) ??
+          db.courses.find((course) => course.name.toLowerCase() === c.name.toLowerCase());
         if (existing) {
           existing.controls = c.controls;
           existing.lengthMeters = c.lengthMeters;
           existing.climbMeters = c.climbMeters;
         } else {
           db.courses.push({
-            id: `crs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            id:
+              c.id ||
+              `crs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             name: c.name,
             lengthMeters: c.lengthMeters,
             climbMeters: c.climbMeters,
@@ -5155,40 +5202,67 @@ async function startServer() {
 
     const resolveClassSpec = (
       cl: {
+        id?: string;
         name: string;
+        courseId?: string | null;
         courseName?: string;
         classFormat?: ClassCompetitionFormat;
+        forkCourseIds?: string[];
         forkCourseNames?: string[];
         freeStart?: boolean;
         autoMatchCourse?: boolean;
+        allowDirectEntry?: boolean;
+        feeSek?: number;
+        rogainingMaxTimeSec?: number | null;
+        rogainingPenaltyPerMin?: number | null;
       },
       existingClass?: CompClass
     ): CompClass => {
-      const forkCourseIds = (Array.isArray(cl.forkCourseNames) ? cl.forkCourseNames : [])
-        .map((fn) => db.courses.find((x) => x.name.toLowerCase() === fn.toLowerCase())?.id)
-        .filter((id): id is string => Boolean(id))
-        .slice(0, 32);
-      const linkedCourse = cl.courseName
-        ? db.courses.find((x) => x.name.toLowerCase() === cl.courseName!.toLowerCase())
-        : undefined;
-      const isForked = cl.classFormat === 'FORKED' && forkCourseIds.length > 0;
+      const forkCourseIds = Array.isArray(cl.forkCourseIds)
+        ? cl.forkCourseIds.filter((id) => db.courses.some((course) => course.id === id)).slice(0, 32)
+        : (Array.isArray(cl.forkCourseNames) ? cl.forkCourseNames : [])
+            .map((name) =>
+              db.courses.find((course) => course.name.toLowerCase() === name.toLowerCase())?.id
+            )
+            .filter((id): id is string => Boolean(id))
+            .slice(0, 32);
+      const linkedCourse =
+        cl.courseId !== undefined
+          ? db.courses.find((course) => course.id === cl.courseId)
+          : cl.courseName
+            ? db.courses.find((course) => course.name.toLowerCase() === cl.courseName!.toLowerCase())
+            : undefined;
+      const classFormat: ClassCompetitionFormat =
+        cl.classFormat === 'FORKED' || cl.classFormat === 'ROGAINING'
+          ? cl.classFormat
+          : 'STANDARD';
+      const isForked = classFormat === 'FORKED' && forkCourseIds.length > 0;
       const freeStart = cl.freeStart ?? (existingClass?.freeStart ?? Boolean(defaultFreeStart));
       return {
-        id:
-          existingClass?.id ??
-          `cls-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: cl.id || existingClass?.id || `cls-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name: String(cl.name || '').trim().slice(0, 80),
-        courseId: isForked
-          ? forkCourseIds[0] ?? linkedCourse?.id ?? db.courses[0]?.id ?? null
-          : linkedCourse?.id ?? existingClass?.courseId ?? db.courses[0]?.id ?? null,
-        classFormat: isForked ? 'FORKED' : 'STANDARD',
-        forkCourseIds: isForked ? forkCourseIds : [],
-        allowDirectEntry: existingClass?.allowDirectEntry ?? true,
+        courseId:
+          cl.courseId !== undefined
+            ? cl.courseId
+            : isForked
+              ? forkCourseIds[0] ?? linkedCourse?.id ?? db.courses[0]?.id ?? null
+              : linkedCourse?.id ?? existingClass?.courseId ?? db.courses[0]?.id ?? null,
+        classFormat,
+        forkCourseIds: classFormat === 'FORKED' ? forkCourseIds : [],
+        rogainingMaxTimeSec:
+          cl.rogainingMaxTimeSec !== undefined
+            ? cl.rogainingMaxTimeSec
+            : existingClass?.rogainingMaxTimeSec ?? null,
+        rogainingPenaltyPerMin:
+          cl.rogainingPenaltyPerMin !== undefined
+            ? cl.rogainingPenaltyPerMin
+            : existingClass?.rogainingPenaltyPerMin ?? null,
+        allowDirectEntry: cl.allowDirectEntry ?? existingClass?.allowDirectEntry ?? true,
         freeStart,
         autoMatchCourse: isForked
           ? true
           : Boolean(cl.autoMatchCourse ?? existingClass?.autoMatchCourse ?? freeStart),
-        feeSek: existingClass?.feeSek ?? clubCfg.defaultDirectEntryFeeSek,
+        feeSek: cl.feeSek ?? existingClass?.feeSek ?? clubCfg.defaultDirectEntryFeeSek,
       };
     };
 
@@ -5197,11 +5271,16 @@ async function startServer() {
     );
 
     if (replaceExisting && validIncomingClasses.length > 0) {
+      const oldClassesById = new Map(db.classes.map((oc) => [oc.id, oc] as const));
       const oldClassesByName = new Map(
         db.classes.map((oc) => [oc.name.toLowerCase(), oc] as const)
       );
       db.classes = validIncomingClasses.map((cl) =>
-        resolveClassSpec(cl, oldClassesByName.get(cl.name.toLowerCase()))
+        resolveClassSpec(
+          cl,
+          (cl.id ? oldClassesById.get(cl.id) : undefined) ??
+            oldClassesByName.get(cl.name.toLowerCase())
+        )
       );
       addedClasses = db.classes.length;
 
@@ -5228,9 +5307,11 @@ async function startServer() {
         }
       }
       for (const cl of validIncomingClasses) {
-        const existing = db.classes.find(
-          (x) => x.name.toLowerCase() === cl.name.trim().toLowerCase()
-        );
+        const existing =
+          db.classes.find((compClass) => Boolean(cl.id) && compClass.id === cl.id) ??
+          db.classes.find(
+            (compClass) => compClass.name.toLowerCase() === cl.name.trim().toLowerCase()
+          );
         if (existing) {
           const updated = resolveClassSpec(cl, existing);
           existing.courseId = updated.courseId;

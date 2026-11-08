@@ -23,6 +23,7 @@ interface CoursesClassesViewProps {
   onSaveCourse: (payload: Partial<Course>, existingId?: string) => Promise<void>;
   onDeleteCourse: (id: string) => Promise<void>;
   onSaveClass: (payload: Partial<CompClass>, existingId?: string) => Promise<void>;
+  onDeleteClass: (id: string) => Promise<void>;
   onImportCourseBatch: (payload: {
     courses: ParsedIofCourse[];
     classes: ParsedIofClassAssignment[];
@@ -43,6 +44,7 @@ export function CoursesClassesView({
   onSaveCourse,
   onDeleteCourse,
   onSaveClass,
+  onDeleteClass,
   onImportCourseBatch,
 }: CoursesClassesViewProps) {
   const [courseModalOpen, setCourseModalOpen] = useState(false);
@@ -64,6 +66,7 @@ export function CoursesClassesView({
   const [freeStart, setFreeStart] = useState(true);
   const [autoMatchCourse, setAutoMatchCourse] = useState(false);
   const [classFeeSek, setClassFeeSek] = useState('100');
+  const [classActionError, setClassActionError] = useState<string | null>(null);
 
   const [importPanelOpen, setImportPanelOpen] = useState(false);
   const [importParsed, setImportParsed] = useState<ParsedIofDocument | null>(null);
@@ -137,6 +140,7 @@ export function CoursesClassesView({
   };
 
   const openNewClass = () => {
+    setClassActionError(null);
     setEditingClass(null);
     setClassName('');
     setClassFormat('STANDARD');
@@ -151,6 +155,7 @@ export function CoursesClassesView({
   };
 
   const openEditClass = (cls: CompClass) => {
+    setClassActionError(null);
     setEditingClass(cls);
     setClassName(cls.name);
     setClassFormat(cls.classFormat ?? 'STANDARD');
@@ -218,31 +223,38 @@ export function CoursesClassesView({
         ? null
         : classCourseId || null;
 
-    await onSaveClass(
-      {
-        name: className.trim(),
-        courseId: effectiveCourseId,
-        classFormat,
-        forkCourseIds: classFormat === 'FORKED' ? forkCourseIds : [],
-        rogainingMaxTimeSec:
-          classFormat === 'ROGAINING'
-            ? Math.max(60, (Number(rogainingMaxMin) || 45) * 60)
-            : null,
-        rogainingPenaltyPerMin:
-          classFormat === 'ROGAINING'
-            ? Math.max(1, Number(rogainingPenaltyPerMin) || 10)
-            : null,
-        allowDirectEntry: true,
-        freeStart,
-        autoMatchCourse: classFormat === 'FORKED' ? true : autoMatchCourse,
-        ...(feeTrackingEnabled
-          ? { feeSek: Math.max(0, Math.min(10000, Math.round(Number(classFeeSek) || 0))) }
-          : {}),
-      },
-      editingClass?.id
-    );
-    setClassName('');
-    setClassModalOpen(false);
+    setClassActionError(null);
+    try {
+      await onSaveClass(
+        {
+          name: className.trim(),
+          courseId: effectiveCourseId,
+          classFormat,
+          forkCourseIds: classFormat === 'FORKED' ? forkCourseIds : [],
+          rogainingMaxTimeSec:
+            classFormat === 'ROGAINING'
+              ? Math.max(60, (Number(rogainingMaxMin) || 45) * 60)
+              : null,
+          rogainingPenaltyPerMin:
+            classFormat === 'ROGAINING'
+              ? Math.max(1, Number(rogainingPenaltyPerMin) || 10)
+              : null,
+          allowDirectEntry: true,
+          freeStart,
+          autoMatchCourse: classFormat === 'FORKED' ? true : autoMatchCourse,
+          ...(feeTrackingEnabled
+            ? { feeSek: Math.max(0, Math.min(10000, Math.round(Number(classFeeSek) || 0))) }
+            : {}),
+        },
+        editingClass?.id
+      );
+      setClassName('');
+      setClassModalOpen(false);
+    } catch (error) {
+      setClassActionError(
+        error instanceof Error ? error.message : 'Kunde inte spara klassen.'
+      );
+    }
   };
 
   const loadCourseXmlText = (rawText: string, labelName: string) => {
@@ -395,6 +407,14 @@ export function CoursesClassesView({
           className="px-3.5 py-2 rounded-lg border text-xs bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-red-800 dark:text-red-300"
         >
           {courseActionError}
+        </div>
+      )}
+      {classActionError && (
+        <div
+          role="alert"
+          className="px-3.5 py-2 rounded-lg border text-xs bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-red-800 dark:text-red-300"
+        >
+          {classActionError}
         </div>
       )}
 
@@ -952,9 +972,14 @@ export function CoursesClassesView({
                           <select
                             value={cls.courseId ?? ''}
                             onChange={(e) =>
-                              void onSaveClass(
-                                { courseId: e.target.value || null },
-                                cls.id
+                              void onSaveClass({ courseId: e.target.value || null }, cls.id).catch(
+                                (error: unknown) => {
+                                  setClassActionError(
+                                    error instanceof Error
+                                      ? error.message
+                                      : 'Kunde inte uppdatera klassens bana.'
+                                  );
+                                }
                               )
                             }
                             aria-label={`Bana för ${cls.name}`}
@@ -995,6 +1020,23 @@ export function CoursesClassesView({
                           aria-label={`Redigera klass ${cls.name}`}
                         >
                           <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setClassActionError(null);
+                            void onDeleteClass(cls.id).catch((error: unknown) => {
+                              setClassActionError(
+                                error instanceof Error
+                                  ? error.message
+                                  : 'Kunde inte ta bort klassen.'
+                              );
+                            });
+                          }}
+                          className="p-1 text-slate-400 hover:text-red-600 rounded"
+                          aria-label={`Ta bort klass ${cls.name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </td>
                     </tr>

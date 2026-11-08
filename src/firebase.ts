@@ -1273,7 +1273,7 @@ export async function activateCompetitionInFirestore(
 }
 
 /**
- * Syncs legacy season data (clubSettings, competitions, classes, competitors, SI punches,
+ * Syncs legacy season data (clubSettings, competitions, competitors, SI punches,
  * and empty/demoCleared states) to Firestore under Zero-Trust rules.
  */
 export async function syncFullSeasonToFirestore(
@@ -1461,87 +1461,11 @@ export async function syncFullSeasonToFirestore(
       }
     }
 
-    // Courses are Firestore-owned and are intentionally excluded from legacy snapshots.
     const childOps: QueuedBatchOp[] = [];
 
-    // 2a. Classes
-    const existingClassIds = new Set<string>();
-    try {
-      const clsSnap = await getDocs(
-        query(
-          collection(db, 'competitions', competitionId, 'classes'),
-          where('ownerUid', '==', ownerUid)
-        )
-      );
-      clsSnap.docs.forEach((d) => existingClassIds.add(d.id));
-    } catch (err) {
-      handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/classes`);
-    }
+    // Courses and classes are Firestore-owned and excluded from legacy snapshots.
 
-    const nextClassIds = new Set<string>();
-    for (const cls of ev.classes) {
-      const classId = sanitizeFirestoreId(cls.id, 'cls');
-      nextClassIds.add(classId);
-      const clsRef = doc(db, 'competitions', competitionId, 'classes', classId);
-      const clsPath = `competitions/${competitionId}/classes/${classId}`;
-      const classFormat: ClassCompetitionFormat =
-        cls.classFormat === 'FORKED' || cls.classFormat === 'ROGAINING'
-          ? cls.classFormat
-          : 'STANDARD';
-      const clsMutable = {
-        name: (cls.name || 'Klass').trim().slice(0, 80) || 'Klass',
-        courseId: cls.courseId ? sanitizeFirestoreId(cls.courseId, 'crs') : '',
-        classFormat,
-        forkCourseIds: (cls.forkCourseIds || [])
-          .slice(0, 32)
-          .map((id) => sanitizeFirestoreId(id, 'crs')),
-        rogainingMaxTimeSec:
-          cls.rogainingMaxTimeSec !== null && cls.rogainingMaxTimeSec !== undefined
-            ? clampInt(cls.rogainingMaxTimeSec, 0, 86400, -1)
-            : -1,
-        rogainingPenaltyPerMin:
-          cls.rogainingPenaltyPerMin !== null && cls.rogainingPenaltyPerMin !== undefined
-            ? clampInt(cls.rogainingPenaltyPerMin, 0, 1000, -1)
-            : -1,
-        allowDirectEntry: Boolean(cls.allowDirectEntry),
-        freeStart: Boolean(cls.freeStart),
-        autoMatchCourse: Boolean(cls.autoMatchCourse),
-        feeSek: clampInt(cls.feeSek, 0, 10000, 100),
-      };
-      if (existingClassIds.has(classId)) {
-        childOps.push({
-          kind: 'update',
-          ref: clsRef,
-          path: clsPath,
-          data: { ...clsMutable, updatedAt: serverTimestamp() },
-        });
-      } else {
-        childOps.push({
-          kind: 'set',
-          ref: clsRef,
-          path: clsPath,
-          data: {
-            classId,
-            competitionId,
-            ...clsMutable,
-            ownerUid,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-        });
-      }
-    }
-    for (const oldId of existingClassIds) {
-      if (!nextClassIds.has(oldId)) {
-        childOps.push({
-          kind: 'delete',
-          ref: doc(db, 'competitions', competitionId, 'classes', oldId),
-          path: `competitions/${competitionId}/classes/${oldId}`,
-        });
-      }
-    }
-
-    // 2b. Competitors (including raw punches & rental/payment flags)
+    // 2a. Competitors (including raw punches & rental/payment flags)
     const existingCompIds = new Set<string>();
     try {
       const cmpSnap = await getDocs(
@@ -2312,6 +2236,7 @@ export async function saveCompetitionImportToFirestore(params: {
   }
 
   const competitionId = sanitizeFirestoreId(params.competitionId, 'evt');
+  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
   const competitionRef = doc(db, 'competitions', competitionId);
   const competitionSnap = await getDoc(competitionRef);
   if (!competitionSnap.exists()) {
@@ -2326,13 +2251,57 @@ export async function saveCompetitionImportToFirestore(params: {
     throw new Error('Import kan inte göras till en avslutad tävling.');
   }
 
+  if (params.replaceCoursesAndClasses) {
+    const retainedClassIds = new Set(
+      params.classes.map((cls) => sanitizeFirestoreId(cls.id, 'cls'))
+    );
+    const existingClasses = await getDocs(
+      collection(db, 'competitions', competitionId, 'classes')
+    );
+    const staleClassIds = existingClasses.docs
+      .filter(
+        (classDoc) =>
+          !retainedClassIds.has(classDoc.id) &&
+          (classDoc.data().ownerUid === ownerUid || isSuperAdmin)
+      )
+      .map((classDoc) => classDoc.id);
+    for (let offset = 0; offset < staleClassIds.length; offset += 30) {
+      const staleIds = staleClassIds.slice(offset, offset + 30);
+      const referencedCompetitors = await getDocs(
+        query(
+          collection(db, 'competitions', competitionId, 'competitors'),
+          where('classId', 'in', staleIds)
+        )
+      );
+      if (!referencedCompetitors.empty) {
+        const classNames = new Map(
+          existingClasses.docs.map((classDoc) => [
+            classDoc.id,
+            typeof classDoc.data().name === 'string' ? classDoc.data().name : classDoc.id,
+          ])
+        );
+        const referencedNames = Array.from(
+          new Set(
+            referencedCompetitors.docs.map(
+              (competitorDoc) =>
+                classNames.get(String(competitorDoc.data().classId)) ||
+                String(competitorDoc.data().classId)
+            )
+          )
+        );
+        throw new Error(
+          `Importen kan inte ta bort klasser som används av deltagare: ${referencedNames.join(', ')}.`
+        );
+      }
+    }
+  }
+
   const operations: Array<{
     ref: DocumentReference;
     existing: boolean;
     mutable: Record<string, unknown>;
     createData: Record<string, unknown>;
   }> = [];
-  const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
   const nowFields = { createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
 
   const addOperation = async (
@@ -2766,10 +2735,26 @@ export async function saveClassToFirestore(
     ? sanitizeFirestoreId(existingId, 'cls')
     : doc(collection(db, 'competitions', context.competitionId, 'classes')).id;
   const ref = doc(db, 'competitions', context.competitionId, 'classes', id);
+  const existing = await getDoc(ref);
+  const previous = existing.exists() ? existing.data() : {};
   const classFormat: ClassCompetitionFormat =
     payload.classFormat === 'FORKED' || payload.classFormat === 'ROGAINING'
       ? payload.classFormat
-      : 'STANDARD';
+      : previous.classFormat === 'FORKED' || previous.classFormat === 'ROGAINING'
+        ? previous.classFormat
+        : 'STANDARD';
+  const courseId =
+    payload.courseId !== undefined
+      ? payload.courseId
+      : typeof previous.courseId === 'string'
+        ? previous.courseId || null
+        : null;
+  const forkCourseIds =
+    payload.forkCourseIds !== undefined
+      ? payload.forkCourseIds
+      : Array.isArray(previous.forkCourseIds)
+        ? (previous.forkCourseIds as string[])
+        : [];
   const mutable: {
     name: string;
     courseId: string;
@@ -2782,36 +2767,69 @@ export async function saveClassToFirestore(
     autoMatchCourse: boolean;
     feeSek: number;
   } = {
-    name: (payload.name || '').trim().slice(0, 80),
-    courseId: payload.courseId ? sanitizeFirestoreId(payload.courseId, 'crs') : '',
+    name: (payload.name ?? (typeof previous.name === 'string' ? previous.name : '')).trim().slice(0, 80),
+    courseId: courseId ? sanitizeFirestoreId(courseId, 'crs') : '',
     classFormat,
-    forkCourseIds: (payload.forkCourseIds || [])
+    forkCourseIds: (forkCourseIds || [])
       .slice(0, 32)
       .map((courseId) => sanitizeFirestoreId(courseId, 'crs')),
     rogainingMaxTimeSec:
-      payload.rogainingMaxTimeSec !== null && payload.rogainingMaxTimeSec !== undefined
-        ? clampInt(payload.rogainingMaxTimeSec, 60, 86400, 2700)
-        : -1,
+      payload.rogainingMaxTimeSec !== undefined
+        ? payload.rogainingMaxTimeSec !== null
+          ? clampInt(payload.rogainingMaxTimeSec, 60, 86400, 2700)
+          : -1
+        : Number(previous.rogainingMaxTimeSec) >= 0
+          ? clampInt(previous.rogainingMaxTimeSec, 60, 86400, 2700)
+          : -1,
     rogainingPenaltyPerMin:
-      payload.rogainingPenaltyPerMin !== null && payload.rogainingPenaltyPerMin !== undefined
-        ? clampInt(payload.rogainingPenaltyPerMin, 0, 1000, 10)
-        : -1,
-    allowDirectEntry: payload.allowDirectEntry !== false,
-    freeStart: payload.freeStart !== false,
-    autoMatchCourse: Boolean(payload.autoMatchCourse),
-    feeSek: clampInt(payload.feeSek, 0, 10000, 100),
+      payload.rogainingPenaltyPerMin !== undefined
+        ? payload.rogainingPenaltyPerMin !== null
+          ? clampInt(payload.rogainingPenaltyPerMin, 0, 1000, 10)
+          : -1
+        : Number(previous.rogainingPenaltyPerMin) >= 0
+          ? clampInt(previous.rogainingPenaltyPerMin, 0, 1000, 10)
+          : -1,
+    allowDirectEntry:
+      payload.allowDirectEntry !== undefined
+        ? payload.allowDirectEntry
+        : previous.allowDirectEntry !== false,
+    freeStart:
+      payload.freeStart !== undefined ? payload.freeStart : previous.freeStart !== false,
+    autoMatchCourse:
+      payload.autoMatchCourse !== undefined
+        ? payload.autoMatchCourse
+        : Boolean(previous.autoMatchCourse),
+    feeSek:
+      payload.feeSek !== undefined
+        ? clampInt(payload.feeSek, 0, 10000, 100)
+        : clampInt(previous.feeSek, 0, 10000, 100),
   };
   if (!mutable.name) {
     throw new Error('Klassen måste ha ett namn.');
   }
 
-  const existing = await getDoc(ref);
+  const referencedCourseIds = [
+    ...(mutable.courseId ? [mutable.courseId] : []),
+    ...mutable.forkCourseIds,
+  ];
+  if (referencedCourseIds.length > 0) {
+    const courseSnapshots = await getDocs(
+      collection(db, 'competitions', context.competitionId, 'courses')
+    );
+    const existingCourseIds = new Set(courseSnapshots.docs.map((courseDoc) => courseDoc.id));
+    const missingCourseIds = Array.from(new Set(referencedCourseIds)).filter(
+      (courseId) => !existingCourseIds.has(courseId)
+    );
+    if (missingCourseIds.length > 0) {
+      throw new Error(
+        `Klassen refererar till banor som saknas i Firestore: ${missingCourseIds.join(', ')}.`
+      );
+    }
+  }
+
   if (existing.exists()) {
     if (existing.data().ownerUid !== context.ownerUid && !context.isSuperAdmin) {
       throw new Error('Klassen tillhör ett annat administratörskonto.');
-    }
-    if (payload.feeSek === undefined) {
-      mutable.feeSek = clampInt(existing.data().feeSek, 0, 10000, 100);
     }
     await updateDoc(ref, { ...mutable, updatedAt: serverTimestamp() });
   } else {
@@ -2840,7 +2858,73 @@ export async function deleteClassFromFirestore(
 ): Promise<void> {
   const context = await getCompetitionMutationContext(competitionId);
   const id = sanitizeFirestoreId(classId, 'cls');
+  const competitors = await getDocs(
+    query(
+      collection(db, 'competitions', context.competitionId, 'competitors'),
+      where('classId', '==', id)
+    )
+  );
+  if (!competitors.empty) {
+    const names = Array.from(
+      new Set(
+        competitors.docs.map((competitorDoc) => {
+          const fullName = competitorDoc.data().fullName;
+          return typeof fullName === 'string' ? fullName : competitorDoc.id;
+        })
+      )
+    );
+    throw new Error(
+      `Klassen kan inte tas bort eftersom ${names.length} deltagare använder den: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}.`
+    );
+  }
   await deleteDoc(doc(db, 'competitions', context.competitionId, 'classes', id));
+}
+
+export function subscribeClassesFromFirestore(
+  competitionId: string,
+  onClasses: (classes: CompClass[]) => void,
+  onError: (error: Error) => void,
+  onChanged?: () => void
+): () => void {
+  const id = sanitizeFirestoreId(competitionId, 'evt');
+  let initialized = false;
+  const unsubscribe = onSnapshot(
+    collection(db, 'competitions', id, 'classes'),
+    (snapshot) => {
+      onClasses(
+        snapshot.docs.map((classDoc) => {
+          const data = classDoc.data();
+          return {
+            id: typeof data.classId === 'string' ? data.classId : classDoc.id,
+            name: typeof data.name === 'string' ? data.name : 'Klass',
+            courseId: typeof data.courseId === 'string' && data.courseId ? data.courseId : null,
+            classFormat:
+              data.classFormat === 'FORKED' || data.classFormat === 'ROGAINING'
+                ? data.classFormat
+                : 'STANDARD',
+            forkCourseIds: Array.isArray(data.forkCourseIds)
+              ? data.forkCourseIds.filter((courseId): courseId is string => typeof courseId === 'string')
+              : [],
+            rogainingMaxTimeSec: decodeNullableSec(data.rogainingMaxTimeSec),
+            rogainingPenaltyPerMin:
+              Number(data.rogainingPenaltyPerMin) >= 0
+                ? Number(data.rogainingPenaltyPerMin)
+                : null,
+            allowDirectEntry: Boolean(data.allowDirectEntry),
+            freeStart: Boolean(data.freeStart),
+            autoMatchCourse: Boolean(data.autoMatchCourse),
+            feeSek: Number(data.feeSek ?? 100),
+          };
+        })
+      );
+      if (initialized && snapshot.docChanges().length > 0) {
+        onChanged?.();
+      }
+      initialized = true;
+    },
+    (error) => onError(error)
+  );
+  return unsubscribe;
 }
 
 export async function saveStationToFirestore(
