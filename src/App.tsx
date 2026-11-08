@@ -394,7 +394,7 @@ export default function App() {
   const [newEvtArena, setNewEvtArena] = useState('');
   const [newEvtSeriesName, setNewEvtSeriesName] = useState('');
   const [newEvtSelfReg, setNewEvtSelfReg] = useState(true);
-  const [newEvtFeesAndSwish, setNewEvtFeesAndSwish] = useState(false);
+  const [newEvtFeeTracking, setNewEvtFeeTracking] = useState(false);
   const [newEvtCopyCourses, setNewEvtCopyCourses] = useState(true);
   const [newEvtCourseParsed, setNewEvtCourseParsed] = useState<ParsedIofDocument | null>(null);
   const [newEvtCourseFileName, setNewEvtCourseFileName] = useState('');
@@ -530,8 +530,6 @@ export default function App() {
   const [clubSettings, setClubSettings] = useState<ClubSettings>({
     clubName: 'OK Österåker',
     eventorOrgId: '',
-    swishNumber: '',
-    swishRecipientName: '',
     defaultDirectEntryFeeSek: 0,
     rentalCardFeeSek: 0,
     missingRentalFeeSek: 0,
@@ -979,7 +977,7 @@ export default function App() {
               zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
               arenaInfo: e.competition.arenaInfo || '',
               seriesName: e.competition.seriesName,
-              enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
+              feeTrackingEnabled: Boolean(e.competition.feeTrackingEnabled),
               competitorCount: e.competitors.length,
               finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
               classCount: e.classes.length,
@@ -1169,14 +1167,14 @@ export default function App() {
       activeEventId,
       String(demoCleared),
       String(isEmptySeason),
-      `${clubSettings.clubName}:${clubSettings.swishNumber}:${clubSettings.defaultDirectEntryFeeSek}:${clubSettings.rentalCardFeeSek}:${clubSettings.missingRentalFeeSek}`,
+      `${clubSettings.clubName}:${clubSettings.defaultDirectEntryFeeSek}:${clubSettings.rentalCardFeeSek}:${clubSettings.missingRentalFeeSek}`,
       competitionsList
         .map(
           (c) =>
-            `${c.id}:${c.name}:${c.status}:${c.date}:${c.seriesName || ''}:${String(c.enableFeesAndSwish)}:${c.competitorCount}:${c.finishedCount}`
+            `${c.id}:${c.name}:${c.status}:${c.date}:${c.seriesName || ''}:${String(c.feeTrackingEnabled)}:${c.competitorCount}:${c.finishedCount}`
         )
         .join('|'),
-      `${competition.id}:${competition.zeroTimeStr}:${competition.arenaInfo || ''}:${String(competition.enableFeesAndSwish)}`,
+      `${competition.id}:${competition.zeroTimeStr}:${competition.arenaInfo || ''}:${String(competition.feeTrackingEnabled)}`,
       courses
         .map((cr) => `${cr.id}:${cr.name}:${cr.lengthMeters}:${cr.climbMeters}:${cr.controls.join(',')}`)
         .join('|'),
@@ -1299,7 +1297,7 @@ export default function App() {
       date?: string;
       zeroTimeStr?: string;
       seriesName?: string;
-      enableFeesAndSwish?: boolean;
+      feeTrackingEnabled?: boolean;
     }
   ) => {
     const useFirestore = await apiRequestUnavailable(
@@ -1359,7 +1357,7 @@ export default function App() {
         zeroTimeSec: competition.zeroTimeSec,
         arenaInfo: competition.arenaInfo,
         seriesName: competition.seriesName,
-        enableFeesAndSwish: competition.enableFeesAndSwish,
+        feeTrackingEnabled: competition.feeTrackingEnabled,
         courses,
         classes,
       });
@@ -1524,7 +1522,7 @@ export default function App() {
             zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
             arenaInfo: newEvtArena.trim(),
             seriesName: newEvtSeriesName.trim(),
-            enableFeesAndSwish: newEvtFeesAndSwish,
+            feeTrackingEnabled: newEvtFeeTracking,
             copyCoursesFromActive:
               !effectiveCourseImport && !isEmptySeason && newEvtCopyCourses,
             ...(effectiveCourseImport
@@ -1584,7 +1582,7 @@ export default function App() {
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
           allowSelfRegistration: newEvtSelfReg,
-          enableFeesAndSwish: newEvtFeesAndSwish,
+          feeTrackingEnabled: newEvtFeeTracking,
           courses: snap ? snap.courses : importedCourses,
           classes: snap ? snap.classes : importedClasses,
         });
@@ -1605,7 +1603,7 @@ export default function App() {
           arenaInfo: newEvtArena.trim(),
           seriesName: newEvtSeriesName.trim(),
           allowSelfRegistration: newEvtSelfReg,
-          enableFeesAndSwish: newEvtFeesAndSwish,
+          feeTrackingEnabled: newEvtFeeTracking,
         };
         setCompetition(newComp);
         setActiveEventId(compId);
@@ -1624,7 +1622,7 @@ export default function App() {
             zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
             arenaInfo: newEvtArena.trim(),
             seriesName: newEvtSeriesName.trim(),
-            enableFeesAndSwish: newEvtFeesAndSwish,
+            feeTrackingEnabled: newEvtFeeTracking,
             competitorCount: 0,
             finishedCount: 0,
             classCount: importedClasses.length,
@@ -1637,7 +1635,7 @@ export default function App() {
       setPendingUnknownReadout(null);
       setNewEvtName('');
       setNewEvtSeriesName('');
-      setNewEvtFeesAndSwish(false);
+      setNewEvtFeeTracking(false);
       setNewEvtCourseParsed(null);
       setNewEvtCourseFileName('');
       setNewEvtAutoClasses(true);
@@ -2587,11 +2585,11 @@ export default function App() {
                     <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={newEvtFeesAndSwish}
-                        onChange={(e) => setNewEvtFeesAndSwish(e.target.checked)}
+                        checked={newEvtFeeTracking}
+                        onChange={(e) => setNewEvtFeeTracking(e.target.checked)}
                         className="rounded border-slate-300 dark:border-slate-700"
                       />
-                      <span>Avgift / Swish-QR</span>
+                      <span>Avgiftsuppföljning</span>
                     </label>
                     {!isEmptySeason && !newEvtCourseParsed && (
                       <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
@@ -2658,7 +2656,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => {
-                        setNewEvtFeesAndSwish(false);
+                        setNewEvtFeeTracking(false);
                         setCreateEventModalOpen(true);
                       }}
                       className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
@@ -3305,7 +3303,7 @@ export default function App() {
                   competitors={competitors}
                   runnerDb={runnerDb}
                   clubSettings={clubSettings}
-                  enableFeesAndSwish={Boolean(competition.enableFeesAndSwish)}
+                  feeTrackingEnabled={Boolean(competition.feeTrackingEnabled)}
                   serialStatus={serialStatus}
                   onConnectUsb={async () => {
                     await sportidentSerial.connect();
@@ -3549,7 +3547,7 @@ export default function App() {
                   courses={courses}
                   classes={classes}
                   competitors={competitors}
-                  enableFeesAndSwish={Boolean(competition.enableFeesAndSwish)}
+                  feeTrackingEnabled={Boolean(competition.feeTrackingEnabled)}
                   onSaveCourse={async (payload, existingId) => {
                     let saved: Course | null = null;
                     if (firebaseUserPresent || auth.currentUser) {
@@ -4058,7 +4056,7 @@ export default function App() {
                   view={activeTab === 'season' ? 'events' : 'admin'}
                   activeEventId={activeEventId}
                   competitionName={isEmptySeason ? 'Ingen aktiv tävling' : competition.name}
-                  enableFeesAndSwish={!isEmptySeason && Boolean(competition.enableFeesAndSwish)}
+                  feeTrackingEnabled={!isEmptySeason && Boolean(competition.feeTrackingEnabled)}
                   competitionsList={competitionsList}
                   competitors={competitors}
                   classes={classes}
@@ -4069,7 +4067,7 @@ export default function App() {
                   onActivateCompetition={handleActivateCompetition}
                   onUpdateCompetitionMeta={handleUpdateCompetitionMetadata}
                   onOpenCreateCompetition={() => {
-                    setNewEvtFeesAndSwish(false);
+                    setNewEvtFeeTracking(false);
                     setCreateEventModalOpen(true);
                   }}
                   onOpenPublicEvent={(code) => navigatePublicPortal(code)}

@@ -19,7 +19,7 @@ interface CoursesClassesViewProps {
   courses: Course[];
   classes: CompClass[];
   competitors: Competitor[];
-  enableFeesAndSwish?: boolean;
+  feeTrackingEnabled?: boolean;
   onSaveCourse: (payload: Partial<Course>, existingId?: string) => Promise<void>;
   onDeleteCourse: (id: string) => Promise<void>;
   onSaveClass: (payload: Partial<CompClass>, existingId?: string) => Promise<void>;
@@ -39,7 +39,7 @@ export function CoursesClassesView({
   courses,
   classes,
   competitors,
-  enableFeesAndSwish = false,
+  feeTrackingEnabled = false,
   onSaveCourse,
   onDeleteCourse,
   onSaveClass,
@@ -225,7 +225,7 @@ export function CoursesClassesView({
         allowDirectEntry: true,
         freeStart,
         autoMatchCourse: classFormat === 'FORKED' ? true : autoMatchCourse,
-        ...(enableFeesAndSwish
+        ...(feeTrackingEnabled
           ? { feeSek: Math.max(0, Math.min(10000, Math.round(Number(classFeeSek) || 0))) }
           : {}),
       },
@@ -708,7 +708,7 @@ export function CoursesClassesView({
                 </div>
               )}
 
-              {enableFeesAndSwish && (
+              {feeTrackingEnabled && (
                 <div>
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                     Startavgift (kr)
@@ -896,7 +896,7 @@ export function CoursesClassesView({
                   <th className="py-1.5 pl-3.5 pr-2">Klass</th>
                   <th className="py-1.5 px-2">Format / Bana</th>
                   <th className="hidden sm:table-cell py-1.5 px-2">Regler</th>
-                  {enableFeesAndSwish && <th className="py-1.5 px-2 text-right">Avgift</th>}
+                  {feeTrackingEnabled && <th className="py-1.5 px-2 text-right">Avgift</th>}
                   <th className="py-1.5 pl-2 pr-3.5 text-right">Ändra</th>
                 </tr>
               </thead>
@@ -955,7 +955,7 @@ export function CoursesClassesView({
                           .filter(Boolean)
                           .join(' · ')}
                       </td>
-                      {enableFeesAndSwish && (
+                      {feeTrackingEnabled && (
                         <td className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap text-slate-700 dark:text-slate-300">
                           {cls.feeSek} kr
                         </td>

@@ -149,7 +149,7 @@ export function PublicPortalView({
                   zeroTimeStr: event.competition.zeroTimeStr,
                   arenaInfo: event.competition.arenaInfo,
                   seriesName: event.competition.seriesName,
-                  enableFeesAndSwish: event.competition.enableFeesAndSwish,
+                  feeTrackingEnabled: event.competition.feeTrackingEnabled,
                   competitorCount: event.competitors.length,
                   finishedCount: event.competitors.filter(
                     (competitor) =>

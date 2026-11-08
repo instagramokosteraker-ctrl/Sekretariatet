@@ -53,8 +53,6 @@ export type OfficialRoleMode =
 export interface ClubSettings {
   clubName: string;
   eventorOrgId: string;
-  swishNumber: string;
-  swishRecipientName: string;
   defaultDirectEntryFeeSek: number;
   rentalCardFeeSek: number;
   missingRentalFeeSek: number;
@@ -79,7 +77,7 @@ export interface CompetitionMeta {
   arenaInfo?: string;
   seriesName?: string;
   allowSelfRegistration?: boolean;
-  enableFeesAndSwish?: boolean;
+  feeTrackingEnabled?: boolean;
 }
 
 export interface CompetitionSummary {
@@ -94,7 +92,7 @@ export interface CompetitionSummary {
   arenaInfo: string;
   seriesName?: string;
   allowSelfRegistration?: boolean;
-  enableFeesAndSwish: boolean;
+  feeTrackingEnabled: boolean;
   competitorCount: number;
   finishedCount: number;
   classCount: number;
@@ -234,7 +232,7 @@ export interface RentalCardOverviewItem {
   cardSeries: SICardSeries;
   rentalReturned: boolean;
   feePaid: boolean;
-  enableFeesAndSwish: boolean;
+  feeTrackingEnabled: boolean;
   status: RunnerStatus;
 }
 
@@ -486,7 +484,7 @@ export interface CloudCompetitionRecord {
   date: string;
   status: EventLifecycleStatus;
   seriesName?: string;
-  enableFeesAndSwish?: boolean;
+  feeTrackingEnabled?: boolean;
   competitorCount: number;
   finishedCount: number;
   ownerUid: string;
@@ -506,7 +504,7 @@ export interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
-    enableFeesAndSwish: boolean;
+    feeTrackingEnabled: boolean;
   };
   courses: Course[];
   classes: CompClass[];

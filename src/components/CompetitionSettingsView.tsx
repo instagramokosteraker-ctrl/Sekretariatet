@@ -89,8 +89,8 @@ export function CompetitionSettingsView({
   const [compStatus, setCompStatus] = useState(competition.status ?? 'UPCOMING');
   const [statusSaving, setStatusSaving] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [compFeesAndSwish, setCompFeesAndSwish] = useState(
-    Boolean(competition.enableFeesAndSwish)
+  const [compFeeTracking, setCompFeeTracking] = useState(
+    Boolean(competition.feeTrackingEnabled)
   );
   const [compSavedMsg, setCompSavedMsg] = useState<string | null>(null);
 
@@ -112,7 +112,7 @@ export function CompetitionSettingsView({
     setCompZero(competition.zeroTimeStr);
     setCompArena(competition.arenaInfo ?? '');
     setCompSeries(competition.seriesName ?? '');
-    setCompFeesAndSwish(Boolean(competition.enableFeesAndSwish));
+    setCompFeeTracking(Boolean(competition.feeTrackingEnabled));
   }, [
     competition.name,
     competition.organizer,
@@ -120,7 +120,7 @@ export function CompetitionSettingsView({
     competition.zeroTimeStr,
     competition.arenaInfo,
     competition.seriesName,
-    competition.enableFeesAndSwish,
+    competition.feeTrackingEnabled,
   ]);
 
   useEffect(() => {
@@ -153,7 +153,7 @@ export function CompetitionSettingsView({
       zeroTimeStr: compZero.trim(),
       arenaInfo: compArena.trim(),
       seriesName: compSeries.trim(),
-      enableFeesAndSwish: compFeesAndSwish,
+      feeTrackingEnabled: compFeeTracking,
     });
     setCompSavedMsg('Inställningar sparade!');
     setTimeout(() => setCompSavedMsg(null), 3000);
@@ -459,11 +459,11 @@ export function CompetitionSettingsView({
               <label className="inline-flex items-center gap-2.5 text-xs text-slate-800 dark:text-slate-200 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={compFeesAndSwish}
-                  onChange={(e) => setCompFeesAndSwish(e.target.checked)}
+                  checked={compFeeTracking}
+                  onChange={(e) => setCompFeeTracking(e.target.checked)}
                   className="w-4 h-4 rounded border-slate-300 text-red-600 focus:ring-red-500"
                 />
-                <span className="font-medium">Avgift & Swish-betalning vid direktanmälan</span>
+                <span className="font-medium">Avgiftsuppföljning vid direktanmälan</span>
               </label>
             </div>
 

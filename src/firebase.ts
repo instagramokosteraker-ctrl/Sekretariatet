@@ -11,6 +11,7 @@ import {
   Timestamp,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocFromServer,
@@ -1149,6 +1150,8 @@ export async function deleteCompetitionFromFirestore(rawCompetitionId: string): 
             ? clubData.activeEventId
             : '',
       competitionIds: remainingIds,
+      swishNumber: deleteField(),
+      swishRecipientName: deleteField(),
       updatedAt: serverTimestamp(),
     });
   }
@@ -1165,7 +1168,7 @@ export async function updateCompetitionMetadataInFirestore(
     zeroTimeSec?: number;
     arenaInfo?: string;
     seriesName?: string;
-    enableFeesAndSwish?: boolean;
+    feeTrackingEnabled?: boolean;
   }
 ): Promise<void> {
   const statusOnlyUpdate =
@@ -1208,8 +1211,8 @@ export async function updateCompetitionMetadataInFirestore(
   }
   if ('arenaInfo' in patch) mutable.arenaInfo = (patch.arenaInfo || '').trim().slice(0, 500);
   if ('seriesName' in patch) mutable.seriesName = (patch.seriesName || '').trim().slice(0, 80);
-  if ('enableFeesAndSwish' in patch) {
-    mutable.enableFeesAndSwish = Boolean(patch.enableFeesAndSwish);
+  if ('feeTrackingEnabled' in patch) {
+    mutable.feeTrackingEnabled = Boolean(patch.feeTrackingEnabled);
   }
   if (Object.keys(mutable).length === 0) return;
   await updateDoc(doc(db, 'competitions', context.competitionId), {
@@ -1263,6 +1266,8 @@ export async function activateCompetitionInFirestore(
   await updateDoc(clubRef, {
     activeEventId: competitionId,
     competitionIds: Array.from(new Set([...competitionIds, competitionId])),
+    swishNumber: deleteField(),
+    swishRecipientName: deleteField(),
     updatedAt: serverTimestamp(),
   });
 }
@@ -1290,8 +1295,6 @@ export async function syncFullSeasonToFirestore(
   const clubMutable = {
     clubName: (snapshot.clubSettings.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
     eventorOrgId: (snapshot.clubSettings.eventorOrgId || '').trim().slice(0, 32),
-    swishNumber: (snapshot.clubSettings.swishNumber || '').trim().slice(0, 20),
-    swishRecipientName: (snapshot.clubSettings.swishRecipientName || '').trim().slice(0, 100),
     defaultDirectEntryFeeSek: clampInt(
       snapshot.clubSettings.defaultDirectEntryFeeSek,
       0,
@@ -1356,6 +1359,8 @@ export async function syncFullSeasonToFirestore(
             : '';
       await updateDoc(doc(db, 'clubSettings', 'default'), {
         ...clubMutable,
+        swishNumber: deleteField(),
+        swishRecipientName: deleteField(),
         ...(existingClubDoc?.activeEventId === undefined ? { activeEventId } : {}),
         updatedAt: serverTimestamp(),
       });
@@ -1398,7 +1403,7 @@ export async function syncFullSeasonToFirestore(
       statusOverride: Boolean(ev.competition.statusOverride),
       arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
       seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
-      enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
+      feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       competitorCount,
       finishedCount,
       brokenControls: (ev.brokenControls || [])
@@ -1792,8 +1797,6 @@ export async function loadFullSeasonFromFirestore(options?: {
   interface CloudClubDocData {
     clubName?: string;
     eventorOrgId?: string;
-    swishNumber?: string;
-    swishRecipientName?: string;
     defaultDirectEntryFeeSek?: number;
     rentalCardFeeSek?: number;
     missingRentalFeeSek?: number;
@@ -1829,8 +1832,6 @@ export async function loadFullSeasonFromFirestore(options?: {
   const clubSettings: ClubSettings = {
     clubName: (clubData?.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
     eventorOrgId: clubData?.eventorOrgId || '',
-    swishNumber: clubData?.swishNumber || '',
-    swishRecipientName: clubData?.swishRecipientName || '',
     defaultDirectEntryFeeSek: Number(clubData?.defaultDirectEntryFeeSek ?? 0),
     rentalCardFeeSek: Number(clubData?.rentalCardFeeSek ?? 0),
     missingRentalFeeSek: Number(clubData?.missingRentalFeeSek ?? 0),
@@ -2207,7 +2208,9 @@ export async function loadFullSeasonFromFirestore(options?: {
         zeroTimeSec: Number(compDocData.zeroTimeSec ?? 36000),
         arenaInfo: String(compDocData.arenaInfo || ''),
         seriesName: String(compDocData.seriesName || ''),
-        enableFeesAndSwish: Boolean(compDocData.enableFeesAndSwish),
+        feeTrackingEnabled: Boolean(
+          compDocData.feeTrackingEnabled ?? compDocData.enableFeesAndSwish
+        ),
       },
       courses,
       classes,
@@ -4030,7 +4033,7 @@ export async function loadPublicRaceFromFirestore(
       zeroTimeStr: event.competition.zeroTimeStr,
       arenaInfo: event.competition.arenaInfo,
       seriesName: event.competition.seriesName,
-      enableFeesAndSwish: Boolean(event.competition.enableFeesAndSwish),
+      feeTrackingEnabled: Boolean(event.competition.feeTrackingEnabled),
       competitorCount: event.competitors.length,
       finishedCount: event.competitors.filter(
         (competitor) => competitor.status === 'OK' || competitor.status === 'MP'
@@ -4039,13 +4042,11 @@ export async function loadPublicRaceFromFirestore(
     }))
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  const feesEnabled = Boolean(target.competition.enableFeesAndSwish);
+  const feesEnabled = Boolean(target.competition.feeTrackingEnabled);
   const clubSettings = feesEnabled
     ? season.clubSettings
     : {
         ...season.clubSettings,
-        swishNumber: '',
-        swishRecipientName: '',
         defaultDirectEntryFeeSek: 0,
         rentalCardFeeSek: 0,
         missingRentalFeeSek: 0,
@@ -4113,6 +4114,7 @@ export async function listClubCloudCompetitionsFromFirestore(): Promise<
         date: string;
         status: EventLifecycleStatus;
         seriesName?: string;
+        feeTrackingEnabled?: boolean;
         enableFeesAndSwish?: boolean;
         competitorCount: number;
         finishedCount: number;
@@ -4127,7 +4129,7 @@ export async function listClubCloudCompetitionsFromFirestore(): Promise<
       date: data.date,
       status: data.status,
       seriesName: data.seriesName || '',
-      enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
+      feeTrackingEnabled: Boolean(data.feeTrackingEnabled ?? data.enableFeesAndSwish),
       competitorCount: data.competitorCount,
       finishedCount: data.finishedCount,
       ownerUid: data.ownerUid,
@@ -4156,6 +4158,7 @@ export async function listClubCloudCompetitionsFromFirestore(): Promise<
               date: string;
               status: EventLifecycleStatus;
               seriesName?: string;
+              feeTrackingEnabled?: boolean;
               enableFeesAndSwish?: boolean;
               competitorCount: number;
               finishedCount: number;
@@ -4182,6 +4185,7 @@ export async function listClubCloudCompetitionsFromFirestore(): Promise<
             date: string;
             status: EventLifecycleStatus;
             seriesName?: string;
+            feeTrackingEnabled?: boolean;
             enableFeesAndSwish?: boolean;
             competitorCount: number;
             finishedCount: number;
@@ -4237,7 +4241,10 @@ export function subscribePublicCompetitionSummaries(
       arenaInfo: data.arenaInfo ?? '',
       seriesName: data.seriesName,
       allowSelfRegistration: Boolean((data as { allowSelfRegistration?: boolean }).allowSelfRegistration),
-      enableFeesAndSwish: Boolean(data.enableFeesAndSwish),
+      feeTrackingEnabled: Boolean(
+        data.feeTrackingEnabled ??
+          (data as { enableFeesAndSwish?: boolean }).enableFeesAndSwish
+      ),
       competitorCount: data.competitorCount ?? 0,
       finishedCount: data.finishedCount ?? 0,
       classCount: data.classCount ?? 0,
@@ -4337,8 +4344,6 @@ export function subscribePublicCompetitionSummaries(
 export const DEFAULT_CLUB_SETTINGS: ClubSettings = {
   clubName: 'OK Österåker',
   eventorOrgId: '',
-  swishNumber: '',
-  swishRecipientName: '',
   defaultDirectEntryFeeSek: 0,
   rentalCardFeeSek: 0,
   missingRentalFeeSek: 0,
@@ -4368,8 +4373,6 @@ export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
     return {
       clubName: (data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) || DEFAULT_CLUB_SETTINGS.clubName,
       eventorOrgId: (data.eventorOrgId || '').trim().slice(0, 32),
-      swishNumber: (data.swishNumber || '').trim().slice(0, 20),
-      swishRecipientName: (data.swishRecipientName || data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100),
       defaultDirectEntryFeeSek: clampInt(data.defaultDirectEntryFeeSek, 0, 10000, DEFAULT_CLUB_SETTINGS.defaultDirectEntryFeeSek),
       rentalCardFeeSek: clampInt(data.rentalCardFeeSek, 0, 5000, DEFAULT_CLUB_SETTINGS.rentalCardFeeSek),
       missingRentalFeeSek: clampInt(data.missingRentalFeeSek, 0, 20000, DEFAULT_CLUB_SETTINGS.missingRentalFeeSek),
@@ -4400,8 +4403,7 @@ export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
 }
 
 /**
- * Subscribes to /clubSettings/default in real-time so custom themes, branding, and Swish
- * updates automatically propagate across all views and open browser tabs.
+ * Subscribes to /clubSettings/default so club settings and branding update across views and tabs.
  */
 export function subscribeClubSettingsFromFirestore(
   onUpdate: (settings: ClubSettings) => void
@@ -4418,8 +4420,6 @@ export function subscribeClubSettingsFromFirestore(
       onUpdate({
         clubName: (data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) || DEFAULT_CLUB_SETTINGS.clubName,
         eventorOrgId: (data.eventorOrgId || '').trim().slice(0, 32),
-        swishNumber: (data.swishNumber || '').trim().slice(0, 20),
-        swishRecipientName: (data.swishRecipientName || data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100),
         defaultDirectEntryFeeSek: clampInt(data.defaultDirectEntryFeeSek, 0, 10000, DEFAULT_CLUB_SETTINGS.defaultDirectEntryFeeSek),
         rentalCardFeeSek: clampInt(data.rentalCardFeeSek, 0, 5000, DEFAULT_CLUB_SETTINGS.rentalCardFeeSek),
         missingRentalFeeSek: clampInt(data.missingRentalFeeSek, 0, 20000, DEFAULT_CLUB_SETTINGS.missingRentalFeeSek),
@@ -4470,7 +4470,7 @@ export interface CreateCompetitionInFirestoreParams {
   arenaInfo?: string;
   seriesName?: string;
   allowSelfRegistration?: boolean;
-  enableFeesAndSwish?: boolean;
+  feeTrackingEnabled?: boolean;
   courses?: Course[];
   classes?: CompClass[];
 }
@@ -4520,7 +4520,7 @@ export async function createCompetitionInFirestore(
   const arenaInfo = (params.arenaInfo ?? '').trim().slice(0, 500);
   const seriesName = (params.seriesName ?? '').trim().slice(0, 80);
   const allowSelfRegistration = Boolean(params.allowSelfRegistration);
-  const enableFeesAndSwish = Boolean(params.enableFeesAndSwish);
+  const feeTrackingEnabled = Boolean(params.feeTrackingEnabled);
 
   // Required keys per firestore.rules isValidCloudCompetition.
   const compDocData = {
@@ -4535,7 +4535,7 @@ export async function createCompetitionInFirestore(
     arenaInfo,
     seriesName,
     allowSelfRegistration,
-    enableFeesAndSwish,
+    feeTrackingEnabled,
     competitorCount: 0,
     finishedCount: 0,
     brokenControls: [] as number[],
@@ -4630,6 +4630,8 @@ export async function createCompetitionInFirestore(
         activeEventId: competitionId,
         competitionIds: updatedIds,
         demoCleared: false,
+        swishNumber: deleteField(),
+        swishRecipientName: deleteField(),
         updatedAt: serverTimestamp(),
       });
     } else {
@@ -4637,8 +4639,6 @@ export async function createCompetitionInFirestore(
         settingId: 'default',
         clubName: organizer,
         eventorOrgId: '',
-        swishNumber: '',
-        swishRecipientName: '',
         defaultDirectEntryFeeSek: 0,
         rentalCardFeeSek: 0,
         missingRentalFeeSek: 0,
@@ -4659,7 +4659,7 @@ export async function createCompetitionInFirestore(
 }
 
 /**
- * Saves club profile, branding, and Swish settings directly to Firestore (/clubSettings/default)
+ * Saves club profile, branding, and fee settings directly to Firestore (/clubSettings/default)
  * ensuring all keys conform strictly to isValidClubSettings rules.
  */
 export async function saveClubSettingsToFirestore(
@@ -4685,14 +4685,6 @@ export async function saveClubSettingsToFirestore(
     settings.eventorOrgId !== undefined
       ? settings.eventorOrgId.trim().slice(0, 32)
       : (typeof existingData?.eventorOrgId === 'string' ? existingData.eventorOrgId : '');
-  const swishNumber =
-    settings.swishNumber !== undefined
-      ? settings.swishNumber.trim().slice(0, 20)
-      : (typeof existingData?.swishNumber === 'string' ? existingData.swishNumber : '');
-  const swishRecipientName =
-    settings.swishRecipientName !== undefined
-      ? settings.swishRecipientName.trim().slice(0, 100)
-      : (typeof existingData?.swishRecipientName === 'string' ? existingData.swishRecipientName : clubName);
   const defaultDirectEntryFeeSek =
     settings.defaultDirectEntryFeeSek !== undefined
       ? clampInt(settings.defaultDirectEntryFeeSek, 0, 10000, 100)
@@ -4745,11 +4737,11 @@ export async function saveClubSettingsToFirestore(
     await updateDoc(clubRef, {
       clubName,
       eventorOrgId,
-      swishNumber,
-      swishRecipientName,
       defaultDirectEntryFeeSek,
       rentalCardFeeSek,
       missingRentalFeeSek,
+      swishNumber: deleteField(),
+      swishRecipientName: deleteField(),
       ...brandingPatch,
       ...(seriesScoringSettings === undefined ? {} : { seriesScoringSettings }),
       updatedAt: serverTimestamp(),
@@ -4759,8 +4751,6 @@ export async function saveClubSettingsToFirestore(
       settingId: 'default',
       clubName,
       eventorOrgId,
-      swishNumber,
-      swishRecipientName,
       defaultDirectEntryFeeSek,
       rentalCardFeeSek,
       missingRentalFeeSek,
@@ -4793,6 +4783,8 @@ export async function seedDemoSeasonToFirestore(_ownerUidParam?: string): Promis
       activeEventId: '',
       competitionIds: [],
       demoCleared: true,
+      swishNumber: deleteField(),
+      swishRecipientName: deleteField(),
       updatedAt: serverTimestamp(),
     });
   }

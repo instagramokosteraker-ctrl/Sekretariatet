@@ -192,8 +192,6 @@ service cloud.firestore {
           'settingId',
           'clubName',
           'eventorOrgId',
-          'swishNumber',
-          'swishRecipientName',
           'defaultDirectEntryFeeSek',
           'rentalCardFeeSek',
           'missingRentalFeeSek',
@@ -208,8 +206,6 @@ service cloud.firestore {
           'settingId',
           'clubName',
           'eventorOrgId',
-          'swishNumber',
-          'swishRecipientName',
           'defaultDirectEntryFeeSek',
           'rentalCardFeeSek',
           'missingRentalFeeSek',
@@ -229,8 +225,6 @@ service cloud.firestore {
         data.settingId is string && data.settingId.size() >= 1 && data.settingId.size() <= 64 && data.settingId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.clubName is string && data.clubName.size() >= 1 && data.clubName.size() <= 100 &&
         data.eventorOrgId is string && data.eventorOrgId.size() <= 32 &&
-        data.swishNumber is string && data.swishNumber.size() <= 20 &&
-        data.swishRecipientName is string && data.swishRecipientName.size() <= 100 &&
         data.defaultDirectEntryFeeSek is int && data.defaultDirectEntryFeeSek >= 0 && data.defaultDirectEntryFeeSek <= 10000 &&
         data.rentalCardFeeSek is int && data.rentalCardFeeSek >= 0 && data.rentalCardFeeSek <= 5000 &&
         data.missingRentalFeeSek is int && data.missingRentalFeeSek >= 0 && data.missingRentalFeeSek <= 20000 &&
@@ -262,7 +256,6 @@ service cloud.firestore {
           'zeroTimeSec',
           'arenaInfo',
           'seriesName',
-          'enableFeesAndSwish',
           'competitorCount',
           'finishedCount',
           'brokenControls',
@@ -283,6 +276,7 @@ service cloud.firestore {
           'arenaInfo',
           'seriesName',
           'allowSelfRegistration',
+          'feeTrackingEnabled',
           'enableFeesAndSwish',
           'competitorCount',
           'finishedCount',
@@ -316,7 +310,11 @@ service cloud.firestore {
           !data.keys().hasAny(['statusOverride']) ||
           data.statusOverride is bool
         ) &&
-        data.enableFeesAndSwish is bool &&
+        (
+          ('feeTrackingEnabled' in data && data.feeTrackingEnabled is bool) ||
+          // Read existing competitions created before the field was renamed.
+          ('enableFeesAndSwish' in data && data.enableFeesAndSwish is bool)
+        ) &&
         data.competitorCount is int && data.competitorCount >= 0 && data.competitorCount <= 50000 &&
         data.finishedCount is int && data.finishedCount >= 0 && data.finishedCount <= 50000 &&
         data.finishedCount <= data.competitorCount &&
@@ -815,7 +813,7 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 3. /clubSettings/{settingId} — Singleton Club & Swish Configuration
+    // 3. /clubSettings/{settingId} — Singleton Club Configuration
     // =========================================================================
     match /clubSettings/{settingId} {
       allow get: if isValidId(settingId) && settingId == 'default';
@@ -849,6 +847,7 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly([
               'clubName',
               'eventorOrgId',
+              // Permit cleanup of these fields from pre-existing club documents.
               'swishNumber',
               'swishRecipientName',
               'defaultDirectEntryFeeSek',
@@ -964,6 +963,8 @@ service cloud.firestore {
       allow create: if isVerifiedUser() &&
         isValidId(competitionId) &&
         isValidCloudCompetition(incoming()) &&
+        incoming().keys().hasAll(['feeTrackingEnabled']) &&
+        !incoming().keys().hasAny(['enableFeesAndSwish']) &&
         incoming().competitionId == competitionId &&
         incoming().ownerUid == request.auth.uid &&
         incoming().createdAt == request.time &&
@@ -999,7 +1000,7 @@ service cloud.firestore {
               'arenaInfo',
               'seriesName',
               'allowSelfRegistration',
-              'enableFeesAndSwish',
+              'feeTrackingEnabled',
               'competitorCount',
               'finishedCount',
               'brokenControls',
@@ -1028,7 +1029,7 @@ service cloud.firestore {
               'arenaInfo',
               'seriesName',
               'allowSelfRegistration',
-              'enableFeesAndSwish',
+              'feeTrackingEnabled',
               'competitorCount',
               'finishedCount',
               'brokenControls',

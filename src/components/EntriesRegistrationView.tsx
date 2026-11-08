@@ -46,7 +46,7 @@ interface EntriesRegistrationViewProps {
   competitors: Competitor[];
   runnerDb: RunnerDbEntry[];
   clubSettings?: ClubSettings;
-  enableFeesAndSwish?: boolean;
+  feeTrackingEnabled?: boolean;
   serialStatus: SerialConnectionStatus;
   onConnectUsb: () => Promise<void>;
   onConnectWebUsb: () => Promise<void>;
@@ -90,7 +90,7 @@ export function EntriesRegistrationView({
   competitors,
   runnerDb,
   clubSettings,
-  enableFeesAndSwish = false,
+  feeTrackingEnabled = false,
   serialStatus,
   onConnectUsb,
   onConnectWebUsb,
@@ -274,7 +274,7 @@ export function EntriesRegistrationView({
       classId: classId || classes[0]?.id,
       isRentalCard,
       isBorrowedCard,
-      feePaid: enableFeesAndSwish ? feePaid : false,
+      feePaid: feeTrackingEnabled ? feePaid : false,
       allocatedStartSec: allocSec,
       pendingReadout: isLinkingUnknown ? pendingUnknownReadout : undefined,
     });
@@ -607,7 +607,7 @@ export function EntriesRegistrationView({
               {classes.map((cls) => (
                 <option key={cls.id} value={cls.id}>
                   {cls.name}
-                  {enableFeesAndSwish ? ` (${cls.feeSek} kr)` : ''}
+                  {feeTrackingEnabled ? ` (${cls.feeSek} kr)` : ''}
                   {cls.freeStart ? ' · Fri start' : ''}
                 </option>
               ))}
@@ -634,7 +634,7 @@ export function EntriesRegistrationView({
                 className="w-3.5 h-3.5 rounded border-slate-300 text-red-600 focus:ring-red-600"
               />
               <span>
-                {enableFeesAndSwish ? (
+                {feeTrackingEnabled ? (
                   <>
                     Klubbens hyrbricka (
                     <span className="font-mono tabular-nums">+{rentalFeeExtra} kr</span> · flaggar
@@ -656,7 +656,7 @@ export function EntriesRegistrationView({
               <span>Lånad privatbricka (ändra ej ägare i Löpardatabas)</span>
             </label>
 
-            {enableFeesAndSwish && (
+            {feeTrackingEnabled && (
               <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -665,8 +665,7 @@ export function EntriesRegistrationView({
                   className="w-3.5 h-3.5 rounded border-slate-300 text-red-600 focus:ring-red-600"
                 />
                 <span>
-                  Betald (<span className="font-mono tabular-nums">{formCalculatedFeeSek} kr</span>{' '}
-                  Swish/kontant)
+                  Betald (<span className="font-mono tabular-nums">{formCalculatedFeeSek} kr</span>)
                 </span>
               </label>
             )}
@@ -711,7 +710,7 @@ export function EntriesRegistrationView({
                   <th className="py-1.5 px-2">Klass</th>
                   <th className="hidden md:table-cell py-1.5 px-2">SI-bricka</th>
                   <th className="hidden lg:table-cell py-1.5 px-2">Starttid</th>
-                  {enableFeesAndSwish && <th className="hidden sm:table-cell py-1.5 px-2">Avgift</th>}
+                  {feeTrackingEnabled && <th className="hidden sm:table-cell py-1.5 px-2">Avgift</th>}
                   <th className="hidden sm:table-cell py-1.5 px-2">Status</th>
                   <th className="py-1.5 pl-2 pr-3.5 text-right">Hantera</th>
                 </tr>
@@ -770,7 +769,7 @@ export function EntriesRegistrationView({
                       <td className="hidden lg:table-cell py-1.5 px-2 font-mono tabular-nums whitespace-nowrap text-slate-600 dark:text-slate-400">
                         {formatSecondsAsClock(c.startTimeSec ?? c.allocatedStartSec)}
                       </td>
-                      {enableFeesAndSwish && (
+                      {feeTrackingEnabled && (
                         <td className="hidden sm:table-cell py-1.5 px-2 whitespace-nowrap">
                           <button
                             type="button"

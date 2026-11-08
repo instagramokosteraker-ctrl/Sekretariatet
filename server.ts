@@ -54,8 +54,6 @@ type EventLifecycleStatus = 'LIVE' | 'UPCOMING' | 'COMPLETED';
 interface ClubSettings {
   clubName: string;
   eventorOrgId: string;
-  swishNumber: string;
-  swishRecipientName: string;
   defaultDirectEntryFeeSek: number;
   rentalCardFeeSek: number;
   missingRentalFeeSek: number;
@@ -86,7 +84,7 @@ interface CompetitionMeta {
   zeroTimeSec: number;
   arenaInfo: string;
   seriesName?: string;
-  enableFeesAndSwish?: boolean;
+  feeTrackingEnabled?: boolean;
 }
 
 interface CompetitionSummary {
@@ -99,7 +97,7 @@ interface CompetitionSummary {
   zeroTimeStr: string;
   arenaInfo: string;
   seriesName?: string;
-  enableFeesAndSwish: boolean;
+  feeTrackingEnabled: boolean;
   competitorCount: number;
   finishedCount: number;
   classCount: number;
@@ -241,7 +239,7 @@ interface RentalCardOverviewItem {
   cardSeries: SICardSeries;
   rentalReturned: boolean;
   feePaid: boolean;
-  enableFeesAndSwish: boolean;
+  feeTrackingEnabled: boolean;
   status: RunnerStatus;
 }
 
@@ -401,7 +399,7 @@ interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
-    enableFeesAndSwish: boolean;
+    feeTrackingEnabled: boolean;
   };
   courses: Course[];
   classes: CompClass[];
@@ -1529,8 +1527,6 @@ function buildDefaultClubSettings(): ClubSettings {
   return {
     clubName: 'OK Österåker',
     eventorOrgId: '',
-    swishNumber: '',
-    swishRecipientName: '',
     defaultDirectEntryFeeSek: 0,
     rentalCardFeeSek: 0,
     missingRentalFeeSek: 0,
@@ -1552,8 +1548,6 @@ function ensureClubSettings(seasonDb: SeasonDatabase): ClubSettings {
   seasonDb.clubSettings = {
     clubName: (c.clubName || 'OK Österåker').trim() || 'OK Österåker',
     eventorOrgId: (c.eventorOrgId || '').trim(),
-    swishNumber: (c.swishNumber ?? '').trim(),
-    swishRecipientName: (c.swishRecipientName || '').trim(),
     defaultDirectEntryFeeSek: Number.isFinite(Number(c.defaultDirectEntryFeeSek))
       ? Math.max(0, Math.round(Number(c.defaultDirectEntryFeeSek)))
       : 0,
@@ -2116,14 +2110,23 @@ function loadSeasonDatabase(): SeasonDatabase {
             delete legacyPinFields.pinsCustomized;
             normalizedAnyEventMeta = true;
           }
-          if (ev.competition.enableFeesAndSwish === undefined) {
+          const legacyCompetition = ev.competition as typeof ev.competition & {
+            enableFeesAndSwish?: boolean;
+          };
+          if (
+            ev.competition.feeTrackingEnabled === undefined ||
+            legacyCompetition.enableFeesAndSwish !== undefined
+          ) {
             normalizedAnyEventMeta = true;
           }
           if (loadedClubCfg.clubName && ev.competition.organizer !== loadedClubCfg.clubName) {
             ev.competition.organizer = loadedClubCfg.clubName;
             normalizedAnyEventMeta = true;
           }
-          ev.competition.enableFeesAndSwish = Boolean(ev.competition.enableFeesAndSwish);
+          ev.competition.feeTrackingEnabled = Boolean(
+            ev.competition.feeTrackingEnabled ?? legacyCompetition.enableFeesAndSwish
+          );
+          delete legacyCompetition.enableFeesAndSwish;
           if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
           if (!ev.roc) ev.roc = buildDefaultRocStatus('1042');
           if (!Array.isArray(ev.processedClientIds)) ev.processedClientIds = [];
@@ -2178,7 +2181,7 @@ function listAllRentalCards(seasonDb: SeasonDatabase): RentalCardOverviewItem[] 
         cardSeries: cmp.cardSeries,
         rentalReturned: Boolean(cmp.rentalReturned),
         feePaid: Boolean(cmp.feePaid),
-        enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
+        feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
         status: cmp.status,
       });
     }
@@ -2278,7 +2281,7 @@ function buildCompetitionsSummaryList(seasonDb: SeasonDatabase): CompetitionSumm
       zeroTimeStr: ev.competition.zeroTimeStr,
       arenaInfo: ev.competition.arenaInfo || '',
       seriesName: ev.competition.seriesName || '',
-      enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
+      feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       competitorCount: ev.competitors.length,
       finishedCount: ev.competitors.filter(
         (c) => c.status === 'OK' || c.status === 'MP' || c.status === 'PRELIMINARY_FIN'
@@ -2394,7 +2397,7 @@ async function startServer() {
         arenaInfo: '',
         seriesName: '',
 
-        enableFeesAndSwish: false,
+        feeTrackingEnabled: false,
       },
       courses: [],
       classes: [],
@@ -2479,13 +2482,11 @@ async function startServer() {
 
   function buildPublicRacePayload(ev: SingleEventRecord) {
     const rawClub = ensureClubSettings(seasonDb);
-    const feesEnabled = Boolean(ev.competition.enableFeesAndSwish);
+    const feesEnabled = Boolean(ev.competition.feeTrackingEnabled);
     const publicClub: ClubSettings = feesEnabled
       ? rawClub
       : {
           ...rawClub,
-          swishNumber: '',
-          swishRecipientName: '',
           defaultDirectEntryFeeSek: 0,
           rentalCardFeeSek: 0,
           missingRentalFeeSek: 0,
@@ -2494,7 +2495,7 @@ async function startServer() {
       competition: {
         ...ev.competition,
         status: resolveEffectiveCompetitionStatus(ev),
-        enableFeesAndSwish: feesEnabled,
+        feeTrackingEnabled: feesEnabled,
       },
       courses: ev.courses,
       classes: feesEnabled ? ev.classes : ev.classes.map((cls) => ({ ...cls, feeSek: 0 })),
@@ -3336,14 +3337,6 @@ async function startServer() {
         body.eventorOrgId !== undefined
           ? body.eventorOrgId.trim().slice(0, 32)
           : current.eventorOrgId,
-      swishNumber:
-        body.swishNumber !== undefined
-          ? body.swishNumber.trim().slice(0, 20)
-          : current.swishNumber,
-      swishRecipientName:
-        body.swishRecipientName !== undefined
-          ? body.swishRecipientName.trim().slice(0, 100)
-          : current.swishRecipientName,
       defaultDirectEntryFeeSek:
         body.defaultDirectEntryFeeSek !== undefined
           ? Math.max(0, Math.min(10000, Math.round(Number(body.defaultDirectEntryFeeSek) || 0)))
@@ -3432,7 +3425,7 @@ async function startServer() {
         zeroTimeSec: ev.competition.zeroTimeSec,
         arenaInfo: ev.competition.arenaInfo || '',
         seriesName: ev.competition.seriesName || '',
-        enableFeesAndSwish: Boolean(ev.competition.enableFeesAndSwish),
+        feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       },
       courses: ev.courses,
       classes: ev.classes,
@@ -3489,7 +3482,12 @@ async function startServer() {
           zeroTimeSec: zeroSec,
           arenaInfo: item.competition.arenaInfo || '',
           seriesName: item.competition.seriesName || '',
-          enableFeesAndSwish: Boolean(item.competition.enableFeesAndSwish),
+          feeTrackingEnabled: Boolean(
+            item.competition.feeTrackingEnabled ??
+              (item.competition as typeof item.competition & {
+                enableFeesAndSwish?: boolean;
+              }).enableFeesAndSwish
+          ),
         },
         courses: Array.isArray(item.courses) ? item.courses : [],
         classes: Array.isArray(item.classes) ? item.classes : [],
@@ -3567,7 +3565,7 @@ async function startServer() {
       status?: EventLifecycleStatus;
       arenaInfo?: string;
       seriesName?: string;
-      enableFeesAndSwish?: boolean;
+      feeTrackingEnabled?: boolean;
       copyCoursesFromActive?: boolean;
       importedCourses?: {
         name: string;
@@ -3745,7 +3743,7 @@ async function startServer() {
         zeroTimeSec: zeroSec,
         arenaInfo: body.arenaInfo?.trim() || '',
         seriesName: body.seriesName?.trim() || '',
-        enableFeesAndSwish: Boolean(body.enableFeesAndSwish),
+        feeTrackingEnabled: Boolean(body.feeTrackingEnabled),
       },
       courses,
       classes,
@@ -3815,8 +3813,8 @@ async function startServer() {
     if (body.seriesName !== undefined) {
       target.competition.seriesName = body.seriesName.trim();
     }
-    if (body.enableFeesAndSwish !== undefined) {
-      target.competition.enableFeesAndSwish = Boolean(body.enableFeesAndSwish);
+    if (body.feeTrackingEnabled !== undefined) {
+      target.competition.feeTrackingEnabled = Boolean(body.feeTrackingEnabled);
     }
     persistUserMutation();
     broadcastFullState(target.competition.shortCode);
@@ -3876,7 +3874,7 @@ async function startServer() {
         zeroTimeSec: src.competition.zeroTimeSec,
         arenaInfo: src.competition.arenaInfo || '',
         seriesName: src.competition.seriesName || '',
-        enableFeesAndSwish: Boolean(src.competition.enableFeesAndSwish),
+        feeTrackingEnabled: Boolean(src.competition.feeTrackingEnabled),
       },
       courses: clonedCourses,
       classes: clonedClasses,
@@ -5862,8 +5860,8 @@ async function startServer() {
     }
     if (body.arenaInfo !== undefined) db.competition.arenaInfo = body.arenaInfo.trim();
     if (body.seriesName !== undefined) db.competition.seriesName = body.seriesName.trim();
-    if (body.enableFeesAndSwish !== undefined) {
-      db.competition.enableFeesAndSwish = Boolean(body.enableFeesAndSwish);
+    if (body.feeTrackingEnabled !== undefined) {
+      db.competition.feeTrackingEnabled = Boolean(body.feeTrackingEnabled);
     }
     persistUserMutation();
     broadcastFullState(db.competition.shortCode);
@@ -5930,7 +5928,7 @@ async function startServer() {
 
     const eventsMap = candidate.eventsMap as Record<string, SingleEventRecord>;
     for (const ev of Object.values(eventsMap)) {
-      ev.competition.enableFeesAndSwish = Boolean(ev.competition.enableFeesAndSwish);
+      ev.competition.feeTrackingEnabled = Boolean(ev.competition.feeTrackingEnabled);
       if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
       if (!ev.roc) ev.roc = buildDefaultRocStatus('1042');
       if (!Array.isArray(ev.processedClientIds)) ev.processedClientIds = [];

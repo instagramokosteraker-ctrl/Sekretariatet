@@ -85,7 +85,7 @@ interface AccessControlViewProps {
   view?: 'events' | 'admin';
   activeEventId: string;
   competitionName: string;
-  enableFeesAndSwish?: boolean;
+  feeTrackingEnabled?: boolean;
   competitionsList: CompetitionSummary[];
   competitors: Competitor[];
   classes: CompClass[];
@@ -101,7 +101,7 @@ interface AccessControlViewProps {
       date?: string;
       zeroTimeStr?: string;
       seriesName?: string;
-      enableFeesAndSwish?: boolean;
+      feeTrackingEnabled?: boolean;
     }
   ) => Promise<void>;
   onOpenCreateCompetition: () => void;
@@ -126,7 +126,7 @@ export function AccessControlView({
   view = 'admin',
   activeEventId,
   competitionName,
-  enableFeesAndSwish = false,
+  feeTrackingEnabled = false,
   competitionsList,
   competitors,
   classes,
@@ -195,7 +195,7 @@ export function AccessControlView({
     };
   }, []);
 
-  // Club, Appearance & Swish settings state
+  // Club, appearance, and fee settings state
   const [clubForm, setClubForm] = useState<ClubSettings>(clubSettings);
   const [clubBusy, setClubBusy] = useState<boolean>(false);
   const [logoBusy, setLogoBusy] = useState<boolean>(false);
@@ -236,7 +236,7 @@ export function AccessControlView({
   } | null>(null);
 
   const isSuperAdmin = currentUser.adminTier === 'SUPER_ADMIN';
-  const anyEventHasFees = Boolean(enableFeesAndSwish);
+  const anyEventHasFees = Boolean(feeTrackingEnabled);
 
   useEffect(() => {
     setClubForm(clubSettings);
@@ -386,7 +386,7 @@ export function AccessControlView({
               cardSeries: c.cardSeries || 'SI-Card 10',
               rentalReturned: c.rentalReturned,
               feePaid: Boolean(c.feePaid),
-              enableFeesAndSwish: true,
+              feeTrackingEnabled: true,
               status: c.status,
             }));
           setRentals(localRentals);
@@ -494,7 +494,7 @@ export function AccessControlView({
       date?: string;
       zeroTimeStr?: string;
       seriesName?: string;
-      enableFeesAndSwish?: boolean;
+      feeTrackingEnabled?: boolean;
     }
   ) => {
     setEventBusyId(eventId);
@@ -551,7 +551,7 @@ export function AccessControlView({
           zeroTimeSec: source.competition.zeroTimeSec,
           arenaInfo: source.competition.arenaInfo,
           seriesName: source.competition.seriesName,
-          enableFeesAndSwish: source.competition.enableFeesAndSwish,
+          feeTrackingEnabled: source.competition.feeTrackingEnabled,
           courses: source.courses,
           classes: source.classes,
         });
@@ -715,7 +715,7 @@ export function AccessControlView({
             zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
             arenaInfo: e.competition.arenaInfo || '',
             seriesName: e.competition.seriesName,
-            enableFeesAndSwish: Boolean(e.competition.enableFeesAndSwish),
+            feeTrackingEnabled: Boolean(e.competition.feeTrackingEnabled),
             competitorCount: e.competitors.length,
             finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
             classCount: e.classes.length,
@@ -1327,7 +1327,7 @@ export function AccessControlView({
     }));
   };
 
-  // Club, Appearance & Swish settings save
+  // Club, appearance, and fee settings save
   const handleSaveClubSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setClubBusy(true);
@@ -1359,7 +1359,7 @@ export function AccessControlView({
 
       setClubNotice({
         ok: true,
-        msg: 'Sparade klubbprofil, logotyp, utseende och Swish-inställningar i Firestore.',
+        msg: 'Sparade klubbprofil, logotyp, utseende och avgiftsinställningar i Firestore.',
       });
     } catch (err) {
       setClubNotice({
@@ -1426,13 +1426,13 @@ export function AccessControlView({
       if (c.feePaid) {
         paidCount += 1;
         totalPaidSek += fee;
-      } else if (enableFeesAndSwish) {
+      } else if (feeTrackingEnabled) {
         unpaidCount += 1;
         totalOutstandingSek += fee;
       }
     }
     return { paidCount, unpaidCount, totalPaidSek, totalOutstandingSek };
-  }, [competitors, classes, clubSettings, enableFeesAndSwish]);
+  }, [competitors, classes, clubSettings, feeTrackingEnabled]);
 
   const activeSeriesBundle = useMemo(
     () =>
@@ -1949,7 +1949,7 @@ export function AccessControlView({
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              {anyEventHasFees ? 'Klubb, Utseende & Swish' : 'Klubbprofil & Utseende'}
+              {anyEventHasFees ? 'Klubb, utseende & avgifter' : 'Klubbprofil & utseende'}
             </button>
             <button
               type="button"
@@ -2209,11 +2209,11 @@ export function AccessControlView({
                         >
                           <input
                             type="checkbox"
-                            checked={Boolean(ev.enableFeesAndSwish)}
+                            checked={Boolean(ev.feeTrackingEnabled)}
                             disabled={isBusy}
                             onChange={(e) =>
                               void handleUpdateEventMeta(ev.id, {
-                                enableFeesAndSwish: e.target.checked,
+                                feeTrackingEnabled: e.target.checked,
                               })
                             }
                             className="w-3.5 h-3.5 rounded border-slate-300 text-red-600"
@@ -3097,40 +3097,11 @@ export function AccessControlView({
               <section className="lg:col-span-12 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3">
                 <div>
                   <h3 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">
-                    Swish-betalning & Hyrbricksavgifter
+                    Avgifter & hyrbrickor
                   </h3>
                   <p className="text-[11px] club-muted text-slate-500 dark:text-slate-400">
                     Används för avgiftsuppföljning vid sekretariatets direktanmälan.
                   </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Swish-nummer
-                    </label>
-                    <input
-                      type="text"
-                      value={clubForm.swishNumber}
-                      onChange={(e) => setClubForm((p) => ({ ...p, swishNumber: e.target.value }))}
-                      placeholder="t.ex. 123 481 92 04"
-                      className="w-full px-3 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Swish-mottagare
-                    </label>
-                    <input
-                      type="text"
-                      value={clubForm.swishRecipientName}
-                      onChange={(e) =>
-                        setClubForm((p) => ({ ...p, swishRecipientName: e.target.value }))
-                      }
-                      placeholder="t.ex. OK Österåker Tävlingskassa"
-                      className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                    />
-                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -3192,7 +3163,7 @@ export function AccessControlView({
               </section>
 
               <section className="lg:col-span-12 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
-                {enableFeesAndSwish && (
+                {feeTrackingEnabled && (
                   <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800 space-y-1 text-xs">
                     <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
                       Betalningsstatus ({competitionName})
@@ -3445,7 +3416,7 @@ export function AccessControlView({
                           </span>
                         ) : (
                           <span className="text-[11px] text-amber-700 dark:text-amber-400 font-semibold whitespace-nowrap">
-                            {r.enableFeesAndSwish
+                            {r.feeTrackingEnabled
                               ? `Ute (${clubSettings.missingRentalFeeSek} kr)`
                               : 'Ej inlämnad'}
                           </span>
