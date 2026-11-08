@@ -48,6 +48,9 @@ import type {
   EmergencySettings,
   EventLifecycleStatus,
   FullCardReadoutPayload,
+  OfficialRole,
+  OfficialRoleAssignment,
+  OfficialRoleInvite,
   PublicRacePayload,
   RunnerDbEntry,
   RunnerStatus,
@@ -820,6 +823,201 @@ export async function removeAdminInviteFromFirestore(email: string): Promise<voi
   } catch (err) {
     handleWriteOrOfflineError(err, OperationType.DELETE, path);
   }
+}
+
+function isOfficialRole(value: unknown): value is OfficialRole {
+  return value === 'START' || value === 'READOUT' || value === 'FOREST' || value === 'SPEAKER';
+}
+
+export async function claimOfficialRoleInvite(
+  user: User
+): Promise<OfficialRoleAssignment | null> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || current.uid !== user.uid || !current.emailVerified || !current.email) {
+    return null;
+  }
+  const normalizedEmail = current.email.trim().toLowerCase();
+  const inviteId = emailToInviteId(normalizedEmail);
+  const inviteRef = doc(db, 'roleInvites', inviteId);
+  const assignmentRef = doc(db, 'roleAssignments', sanitizeFirestoreId(current.uid, 'usr'));
+
+  const assignmentSnap = await getDoc(assignmentRef);
+  if (assignmentSnap.exists()) {
+    const data = assignmentSnap.data();
+    if (data.uid === current.uid && data.email === normalizedEmail && isOfficialRole(data.role)) {
+      return data as OfficialRoleAssignment;
+    }
+    throw new Error('Firestore-rolltilldelningen för kontot är ogiltig.');
+  }
+
+  const inviteSnap = await getDoc(inviteRef);
+  if (!inviteSnap.exists()) return null;
+  const invite = inviteSnap.data();
+  if (
+    invite.email !== normalizedEmail ||
+    invite.active !== true ||
+    !isOfficialRole(invite.role)
+  ) {
+    return null;
+  }
+
+  const batch = writeBatch(db);
+  batch.set(assignmentRef, {
+    uid: current.uid,
+    inviteId,
+    email: normalizedEmail,
+    displayName: current.displayName || invite.displayName || normalizedEmail,
+    role: invite.role,
+    createdByUid: invite.createdByUid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  batch.update(inviteRef, {
+    active: false,
+    claimedUid: current.uid,
+    updatedAt: serverTimestamp(),
+  });
+  try {
+    await batch.commit();
+  } catch (error) {
+    const concurrentClaim = await getDoc(assignmentRef);
+    if (concurrentClaim.exists()) {
+      const data = concurrentClaim.data();
+      if (data.uid === current.uid && data.email === normalizedEmail && isOfficialRole(data.role)) {
+        return data as OfficialRoleAssignment;
+      }
+    }
+    throw error;
+  }
+  const claimed = await getDoc(assignmentRef);
+  return claimed.exists() ? (claimed.data() as OfficialRoleAssignment) : null;
+}
+
+export async function resolveFirebaseUserRole(
+  user: User
+): Promise<
+  | { kind: 'ADMIN'; adminTier: ClubAdminTier; officialRole: null }
+  | { kind: 'OFFICIAL'; adminTier: null; officialRole: OfficialRole }
+  | null
+> {
+  const admin = await ensureAdminRoleInFirestore(user);
+  if (admin.claimed && admin.role) {
+    return { kind: 'ADMIN', adminTier: admin.role, officialRole: null };
+  }
+  const assignment = await claimOfficialRoleInvite(user);
+  if (assignment && isOfficialRole(assignment.role)) {
+    return { kind: 'OFFICIAL', adminTier: null, officialRole: assignment.role };
+  }
+  return null;
+}
+
+export async function listOfficialRoleAssignmentsFromFirestore(): Promise<OfficialRoleAssignment[]> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) return [];
+  const snap = await getDocs(collection(db, 'roleAssignments'));
+  return snap.docs.map((item) => item.data() as OfficialRoleAssignment);
+}
+
+export async function listOfficialRoleInvitesFromFirestore(): Promise<OfficialRoleInvite[]> {
+  const current = await ensureValidFirestoreUser();
+  if (!current) return [];
+  const snap = await getDocs(collection(db, 'roleInvites'));
+  return snap.docs.map((item) => {
+    const data = item.data();
+    return {
+      inviteId: item.id,
+      email: String(data.email || ''),
+      displayName: String(data.displayName || ''),
+      role: data.role as OfficialRole,
+      active: data.active === true,
+      createdByUid: String(data.createdByUid || ''),
+      claimedUid: typeof data.claimedUid === 'string' ? data.claimedUid : undefined,
+      addedAt:
+        data.createdAt instanceof Timestamp
+          ? data.createdAt.toDate().toISOString()
+          : new Date().toISOString(),
+    };
+  });
+}
+
+export async function upsertOfficialRoleInviteInFirestore(params: {
+  email: string;
+  displayName: string;
+  role: OfficialRole;
+}): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) {
+    throw new Error('En verifierad Google-administratör måste vara inloggad.');
+  }
+  const normalizedEmail = params.email.trim().toLowerCase();
+  if (!SAFE_EMAIL_REGEX.test(normalizedEmail) || !isOfficialRole(params.role)) {
+    throw new Error('Ange en giltig e-postadress och funktionärsroll.');
+  }
+  const inviteId = emailToInviteId(normalizedEmail);
+  const inviteRef = doc(db, 'roleInvites', inviteId);
+  const existing = await getDoc(inviteRef);
+  const displayName = (params.displayName.trim() || normalizedEmail.split('@')[0]).slice(0, 100);
+  const now = serverTimestamp();
+
+  if (existing.exists()) {
+    const prior = existing.data();
+    if (prior.email !== normalizedEmail) {
+      throw new Error('Rollinbjudans e-postadress stämmer inte med dokumentet.');
+    }
+    const batch = writeBatch(db);
+    batch.set(
+      inviteRef,
+      {
+        inviteId,
+        email: normalizedEmail,
+        displayName,
+        role: params.role,
+        active: !prior.claimedUid,
+        createdByUid: prior.createdByUid,
+        ...(typeof prior.claimedUid === 'string' ? { claimedUid: prior.claimedUid } : {}),
+        createdAt: prior.createdAt,
+        updatedAt: now,
+      },
+      { merge: false }
+    );
+    if (typeof prior.claimedUid === 'string') {
+      batch.update(doc(db, 'roleAssignments', sanitizeFirestoreId(prior.claimedUid, 'usr')), {
+        role: params.role,
+        displayName,
+        updatedAt: now,
+      });
+    }
+    await batch.commit();
+    return;
+  }
+
+  await setDoc(inviteRef, {
+    inviteId,
+    email: normalizedEmail,
+    displayName,
+    role: params.role,
+    active: true,
+    createdByUid: current.uid,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+export async function removeOfficialRoleFromFirestore(email: string): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) {
+    throw new Error('En verifierad Google-administratör måste vara inloggad.');
+  }
+  const inviteRef = doc(db, 'roleInvites', emailToInviteId(email));
+  const invite = await getDoc(inviteRef);
+  if (!invite.exists()) return;
+  const data = invite.data();
+  const batch = writeBatch(db);
+  if (typeof data.claimedUid === 'string') {
+    batch.delete(doc(db, 'roleAssignments', sanitizeFirestoreId(data.claimedUid, 'usr')));
+  }
+  batch.delete(inviteRef);
+  await batch.commit();
 }
 
 type QueuedBatchOp =
@@ -2356,6 +2554,40 @@ interface CompetitionMutationContext {
   isSuperAdmin: boolean;
 }
 
+async function getCurrentFirebaseRoles(): Promise<{
+  user: User;
+  adminTier: ClubAdminTier | null;
+  officialRole: OfficialRole | null;
+}> {
+  const user = await ensureValidFirestoreUser();
+  if (
+    !user ||
+    !user.emailVerified ||
+    !user.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Åtgärden kräver ett verifierat Google-konto.');
+  }
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
+    (user.email || '').trim().toLowerCase()
+  );
+  const [adminSnap, officialSnap] = await Promise.all([
+    isBootstrapAdmin ? Promise.resolve(null) : getDoc(doc(db, 'admins', user.uid)),
+    getDoc(doc(db, 'roleAssignments', sanitizeFirestoreId(user.uid, 'usr'))),
+  ]);
+  const adminRole = isBootstrapAdmin
+    ? 'SUPER_ADMIN'
+    : adminSnap?.exists()
+      ? adminSnap.data().role
+      : null;
+  const officialRole = officialSnap?.exists() ? officialSnap.data().role : null;
+  return {
+    user,
+    adminTier:
+      adminRole === 'SUPER_ADMIN' || adminRole === 'RACE_ADMIN' ? adminRole : null,
+    officialRole: isOfficialRole(officialRole) ? officialRole : null,
+  };
+}
+
 async function getCompetitionMutationContext(
   rawCompetitionId: string,
   statusOnlyUpdate?: EventLifecycleStatus
@@ -3076,7 +3308,17 @@ export async function submitOnlinePunchToFirestore(
     timeOffsetSec?: number;
   }
 ): Promise<{ deduplicated: boolean }> {
-  const context = await getCompetitionMutationContext(competitionId);
+  const authorization = await getCurrentFirebaseRoles();
+  if (
+    !authorization.adminTier &&
+    !['START', 'READOUT', 'FOREST'].includes(authorization.officialRole || '')
+  ) {
+    throw new Error('Ditt Google-konto saknar roll för radiokontroller och online-stämplingar.');
+  }
+  const context = {
+    competitionId: sanitizeFirestoreId(competitionId, 'evt'),
+    ownerUid: authorization.user.uid,
+  };
   if (!Number.isInteger(punch.siNumber) || punch.siNumber < 1 || punch.siNumber > 99999999) {
     throw new Error('Ogiltigt SI-nummer vid online-stämpling.');
   }
@@ -3240,21 +3482,14 @@ export async function submitReadoutToFirestore(
     punches?: FullCardReadoutPayload['punches'];
   };
 }> {
-  const current = await ensureValidFirestoreUser();
+  const authorization = await getCurrentFirebaseRoles();
   if (
-    !current ||
-    !current.emailVerified ||
-    !current.providerData.some((provider) => provider.providerId === 'google.com')
+    !authorization.adminTier &&
+    !['READOUT', 'FOREST', 'SPEAKER'].includes(authorization.officialRole || '')
   ) {
-    throw new Error('Synkning kräver ett inloggat, verifierat Google-administratörskonto.');
+    throw new Error('Ditt Google-konto saknar funktionärsroll för avläsningssynkning.');
   }
-  if (!BOOTSTRAP_SUPER_ADMIN_EMAILS.includes((current.email || '').toLowerCase())) {
-    const adminSnap = await getDoc(doc(db, 'admins', current.uid));
-    const role = adminSnap.exists() ? adminSnap.data().role : null;
-    if (role !== 'RACE_ADMIN' && role !== 'SUPER_ADMIN') {
-      throw new Error('Ditt Google-konto saknar administratörsbehörighet för Firestore-synkning.');
-    }
-  }
+  const current = authorization.user;
   if (!eventId) {
     throw new Error('Tävlingen för den köade avläsningen saknas.');
   }
@@ -3415,9 +3650,6 @@ export async function submitReadoutToFirestore(
       throw new Error('Tävlingen finns inte längre i Firestore.');
     }
     const competitionData = competitionSnap.data();
-    if (competitionData.ownerUid !== current.uid) {
-      throw new Error('Du saknar behörighet att synka till den här tävlingen.');
-    }
     if (receiptSnap.exists()) {
       const receipt = receiptSnap.data();
       return {
@@ -3494,7 +3726,10 @@ export async function submitReadoutToFirestore(
       updatedAt: serverTimestamp(),
     });
     transaction.update(competitionRef, {
-      finishedCount: finishedCount + (wasFinished ? 0 : 1),
+      finishedCount: Math.min(
+        Number(competitionData.competitorCount) || 0,
+        finishedCount + (wasFinished ? 0 : 1)
+      ),
       updatedAt: serverTimestamp(),
     });
     transaction.set(receiptRef, {

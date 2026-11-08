@@ -31,6 +31,9 @@ import type {
   Competitor,
   EventLifecycleStatus,
   MeosAppState,
+  OfficialRole,
+  OfficialRoleAssignment,
+  OfficialRoleInvite,
   OfficialPinRole,
   RentalCardOverviewItem,
   RolePinMap,
@@ -44,6 +47,7 @@ import {
 import {
   apiFetch,
   ensureApiResponseOk,
+  LEGACY_PIN_AUTH_ENABLED,
   readApiResponseJson,
 } from '../services/authClient';
 import {
@@ -58,10 +62,13 @@ import {
   getStockholmTodayIso,
   isTokenServiceApiDisabled,
   listMyAdminInvitesFromFirestore,
+  listOfficialRoleAssignmentsFromFirestore,
+  listOfficialRoleInvitesFromFirestore,
   listClubCloudCompetitionsFromFirestore,
   loadClubSettingsFromFirestore,
   loadFullSeasonFromFirestore,
   removeAdminInviteFromFirestore,
+  removeOfficialRoleFromFirestore,
   saveClubSettingsToFirestore,
   seedDemoSeasonToFirestore,
   signInWithGooglePopup,
@@ -69,6 +76,7 @@ import {
   subscribeTokenServiceStatus,
   syncFullSeasonToFirestore,
   upsertAdminInviteInFirestore,
+  upsertOfficialRoleInviteInFirestore,
 } from '../firebase';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { EventorIntegrationSettingsView } from './EventorIntegrationSettingsView';
@@ -138,6 +146,13 @@ const PIN_ROLE_META: {
     allowedViews: 'Speaker & Resultat · Förvarning · Kvar i skogen · Startfålla',
   },
 ];
+
+const OFFICIAL_ROLE_LABELS: Record<OfficialRole, string> = {
+  START: 'Start',
+  READOUT: 'Avläsning',
+  FOREST: 'Skog',
+  SPEAKER: 'Speaker',
+};
 
 function generateUniqueRandomPins(): RolePinMap {
   const used = new Set<string>();
@@ -213,6 +228,14 @@ export function AccessControlView({
   const [adminBusy, setAdminBusy] = useState<boolean>(false);
   const [adminNotice, setAdminNotice] = useState<{ ok: boolean; msg: string } | null>(null);
   const [confirmRemoveEmail, setConfirmRemoveEmail] = useState<string | null>(null);
+  const [roleAssignments, setRoleAssignments] = useState<OfficialRoleAssignment[]>([]);
+  const [roleInvites, setRoleInvites] = useState<OfficialRoleInvite[]>([]);
+  const [roleEmail, setRoleEmail] = useState('');
+  const [roleName, setRoleName] = useState('');
+  const [roleToAssign, setRoleToAssign] = useState<OfficialRole>('START');
+  const [roleBusy, setRoleBusy] = useState(false);
+  const [roleNotice, setRoleNotice] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [confirmRemoveRoleEmail, setConfirmRemoveRoleEmail] = useState<string | null>(null);
 
   // Offline backup code state
   const [offlineEnabled, setOfflineEnabled] = useState<boolean>(true);
@@ -374,6 +397,12 @@ export function AccessControlView({
             const currentClaimedRole = roleClaim.claimed ? roleClaim.role : null;
             const currentEmail = firebaseUser?.email?.trim().toLowerCase();
             const invites = await listMyAdminInvitesFromFirestore();
+            const [officialAssignments, officialInvites] = await Promise.all([
+              listOfficialRoleAssignmentsFromFirestore(),
+              listOfficialRoleInvitesFromFirestore(),
+            ]);
+            setRoleAssignments(officialAssignments);
+            setRoleInvites(officialInvites);
             setAdmins((currentAdmins) => {
               const byEmail = new Map(
                 currentAdmins.map((admin) => [admin.email.toLowerCase(), admin])
@@ -1355,6 +1384,69 @@ export function AccessControlView({
     }
   };
 
+  const handleAssignOfficialRole = async (
+    email: string,
+    displayName: string,
+    role: OfficialRole
+  ) => {
+    setRoleBusy(true);
+    setRoleNotice(null);
+    try {
+      await upsertOfficialRoleInviteInFirestore({ email, displayName, role });
+      const [assignments, invites] = await Promise.all([
+        listOfficialRoleAssignmentsFromFirestore(),
+        listOfficialRoleInvitesFromFirestore(),
+      ]);
+      setRoleAssignments(assignments);
+      setRoleInvites(invites);
+      setRoleEmail('');
+      setRoleName('');
+      setRoleNotice({
+        ok: true,
+        msg: `Tilldelade ${role} till ${email}. Om personen inte har aktiverat sin roll ännu måste hen logga in med samma Google-konto.`,
+      });
+    } catch (error) {
+      setRoleNotice({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte spara funktionärsrollen.',
+      });
+    } finally {
+      setRoleBusy(false);
+    }
+  };
+
+  const handleAddOfficialRole = async (event: React.FormEvent) => {
+    event.preventDefault();
+    await handleAssignOfficialRole(
+      roleEmail.trim().toLowerCase(),
+      roleName.trim() || roleEmail.trim().split('@')[0],
+      roleToAssign
+    );
+  };
+
+  const handleRemoveOfficialRole = async (email: string) => {
+    setRoleBusy(true);
+    setRoleNotice(null);
+    try {
+      await removeOfficialRoleFromFirestore(email);
+      setRoleAssignments((current) =>
+        current.filter((assignment) => assignment.email.toLowerCase() !== email.toLowerCase())
+      );
+      setRoleInvites((current) =>
+        current.filter((invite) => invite.email.toLowerCase() !== email.toLowerCase())
+      );
+      setConfirmRemoveRoleEmail(null);
+      setRoleNotice({ ok: true, msg: `Tog bort funktionärsrollen för ${email}.` });
+    } catch (error) {
+      setRoleNotice({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte ta bort funktionärsrollen.',
+      });
+    } finally {
+      setRoleBusy(false);
+    }
+  };
+
   const handleSaveOfflineSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setOfflineBusy(true);
@@ -1974,6 +2066,30 @@ export function AccessControlView({
     );
   }
 
+  const roleDirectory = new Map<
+    string,
+    { email: string; displayName: string; role: OfficialRole; pending: boolean }
+  >();
+  for (const assignment of roleAssignments) {
+    roleDirectory.set(assignment.email.toLowerCase(), {
+      email: assignment.email,
+      displayName: assignment.displayName,
+      role: assignment.role,
+      pending: false,
+    });
+  }
+  for (const invite of roleInvites.filter((item) => item.active)) {
+    const key = invite.email.toLowerCase();
+    if (!roleDirectory.has(key)) {
+      roleDirectory.set(key, {
+        email: invite.email,
+        displayName: invite.displayName,
+        role: invite.role,
+        pending: true,
+      });
+    }
+  }
+
   return (
     <div className="space-y-3.5">
       {/* Top Header & Segmented Admin Navigation */}
@@ -1985,7 +2101,7 @@ export function AccessControlView({
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {view === 'events'
               ? 'Hantera tävlingar, serier, molnsynk och säkerhetskopior.'
-              : 'Hantera administratörer, PIN-koder, klubbprofil, hyrbrickor och klubbserier.'}
+              : 'Hantera användarroller, administratörer, klubbprofil, hyrbrickor och klubbserier.'}
           </p>
         </div>
 
@@ -2027,7 +2143,7 @@ export function AccessControlView({
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              Admin & PIN ({admins.length})
+              Roller & Admin ({admins.length})
             </button>
             <button
               type="button"
@@ -2528,10 +2644,165 @@ export function AccessControlView({
       )}
 
       {/* =====================================================================
-          TAB 2: GOOGLE-ADMINISTRATÖRER, PIN-KODER & OFFLINE RESERVKOD
+          TAB 2: GOOGLE-ROLLER & ADMINISTRATÖRER
          ===================================================================== */}
       {subTab === 'admins' && (
         <div className="space-y-3.5">
+          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">
+                Funktionärsroller (Firebase Auth)
+              </h2>
+              <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                {roleDirectory.size} tilldelningar/inbjudningar
+              </span>
+            </div>
+            <div className="p-4 space-y-3">
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Tilldela en roll till personens Google-e-postadress. Personen måste logga in med samma konto för att aktivera rollen.
+              </p>
+              {roleNotice && (
+                <div
+                  role="status"
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border ${
+                    roleNotice.ok
+                      ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900'
+                      : 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900'
+                  }`}
+                >
+                  {roleNotice.msg}
+                </div>
+              )}
+              {roleDirectory.size > 0 && (
+                <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg text-xs">
+                  {Array.from(roleDirectory.values()).map((person) => (
+                    <div
+                      key={person.email}
+                      className="px-3.5 py-2 flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <span className="font-semibold text-slate-900 dark:text-slate-100">
+                          {person.displayName}
+                        </span>
+                        <span className="mx-1.5 text-slate-400">·</span>
+                        <span className="font-mono text-[11px] text-slate-600 dark:text-slate-300 break-all">
+                          {person.email}
+                        </span>
+                        {person.pending && (
+                          <span className="ml-2 text-[10px] text-amber-700 dark:text-amber-300">
+                            Väntar på inloggning
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={person.role}
+                          disabled={roleBusy}
+                          onChange={(event) =>
+                            void handleAssignOfficialRole(
+                              person.email,
+                              person.displayName,
+                              event.target.value as OfficialRole
+                            )
+                          }
+                          aria-label={`Funktionärsroll för ${person.email}`}
+                          className="px-2 py-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100"
+                        >
+                          {(Object.keys(OFFICIAL_ROLE_LABELS) as OfficialRole[]).map((role) => (
+                            <option key={role} value={role}>
+                              {OFFICIAL_ROLE_LABELS[role]}
+                            </option>
+                          ))}
+                        </select>
+                        {confirmRemoveRoleEmail === person.email ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={roleBusy}
+                              onClick={() => void handleRemoveOfficialRole(person.email)}
+                              className="px-2 py-1 text-xs text-white bg-red-600 hover:bg-red-700 rounded-md"
+                            >
+                              Bekräfta
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmRemoveRoleEmail(null)}
+                              className="px-2 py-1 text-xs text-slate-600 dark:text-slate-300"
+                            >
+                              Avbryt
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRemoveRoleEmail(person.email)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Ta bort
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <form
+                onSubmit={(event) => void handleAddOfficialRole(event)}
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 items-end pt-1"
+              >
+                <div className="lg:col-span-4">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Google-e-postadress
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={roleEmail}
+                    onChange={(event) => setRoleEmail(event.target.value)}
+                    placeholder="namn@gmail.com"
+                    className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+                <div className="lg:col-span-3">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Namn
+                  </label>
+                  <input
+                    value={roleName}
+                    onChange={(event) => setRoleName(event.target.value)}
+                    placeholder="t.ex. Anna"
+                    className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+                <div className="lg:col-span-3">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Funktionärsroll
+                  </label>
+                  <select
+                    value={roleToAssign}
+                    onChange={(event) => setRoleToAssign(event.target.value as OfficialRole)}
+                    className="w-full px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
+                  >
+                    {(Object.keys(OFFICIAL_ROLE_LABELS) as OfficialRole[]).map((role) => (
+                      <option key={role} value={role}>
+                        {OFFICIAL_ROLE_LABELS[role]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  disabled={roleBusy}
+                  className="lg:col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white disabled:opacity-50 rounded-lg"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  {roleBusy ? 'Sparar...' : 'Tilldela'}
+                </button>
+              </form>
+            </div>
+          </section>
+
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">
@@ -2700,6 +2971,8 @@ export function AccessControlView({
             </div>
           </section>
 
+          {LEGACY_PIN_AUTH_ENABLED && (
+            <>
           {/* 4-Digit Official PINs per Role */}
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
             <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
@@ -2888,6 +3161,8 @@ export function AccessControlView({
               </div>
             </form>
           </section>
+            </>
+          )}
         </div>
       )}
 

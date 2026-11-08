@@ -8,7 +8,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { serverTimestamp } from 'firebase/firestore';
+import { doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import fs from 'fs';
 import path from 'path';
 
@@ -165,6 +165,57 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         updatedAt: now,
       })
     );
+
+    // Official roles are issued only from an admin-created email invite.
+    const roleInvite = raceAdminCtx.firestore().doc('roleInvites/inv_official');
+    await assertSucceeds(
+      roleInvite.set({
+        inviteId: 'inv_official',
+        email: 'official@klubb.se',
+        displayName: 'Klubbfunktionär',
+        role: 'START',
+        active: true,
+        createdByUid: 'race_admin_1',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    const officialCtx = testEnv.authenticatedContext('official_uid', {
+      email: 'official@klubb.se',
+      email_verified: true,
+    });
+    await assertSucceeds(officialCtx.firestore().doc('roleInvites/inv_official').get());
+    await assertFails(officialCtx.firestore().collection('roleAssignments').get());
+    await assertFails(
+      attackerCtx.firestore().doc('roleAssignments/attacker_uid').set({
+        uid: 'attacker_uid',
+        inviteId: 'inv_missing',
+        email: 'attacker@example.com',
+        displayName: 'Attacker',
+        role: 'SUPER_ADMIN',
+        createdByUid: 'attacker_uid',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    const claimBatch = writeBatch(officialCtx.firestore());
+    claimBatch.set(doc(officialCtx.firestore(), 'roleAssignments/official_uid'), {
+      uid: 'official_uid',
+      inviteId: 'inv_official',
+      email: 'official@klubb.se',
+      displayName: 'Klubbfunktionär',
+      role: 'START',
+      createdByUid: 'race_admin_1',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    claimBatch.update(doc(officialCtx.firestore(), 'roleInvites/inv_official'), {
+      active: false,
+      claimedUid: 'official_uid',
+      updatedAt: serverTimestamp(),
+    });
+    await assertSucceeds(claimBatch.commit());
+    await assertSucceeds(officialCtx.firestore().doc('roleAssignments/official_uid').get());
 
     // 2. Unverified Email Spoof -> DENIED
     await assertFails(unverifiedBossCtx.firestore().doc('admins/spoof_uid').get());
@@ -609,6 +660,32 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .firestore()
         .doc('competitions/evt_live/stationPunches/op_test_1')
         .set(stationPunch)
+    );
+    await assertSucceeds(
+      officialCtx
+        .firestore()
+        .doc('competitions/evt_live/stationPunches/op_official')
+        .set({
+          ...stationPunch,
+          punchId: 'op_official',
+          clientPunchId: 'op_official',
+          ownerUid: 'official_uid',
+          stationFunction: 'RADIO',
+          createdAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      officialCtx
+        .firestore()
+        .doc('competitions/evt_live/stationPunches/op_forbidden')
+        .set({
+          ...stationPunch,
+          punchId: 'op_forbidden',
+          clientPunchId: 'op_forbidden',
+          ownerUid: 'official_uid',
+          stationFunction: 'FINISH',
+          createdAt: serverTimestamp(),
+        })
     );
     await assertSucceeds(
       raceAdminCtx.firestore().collection('competitions/evt_live/stationPunches').get()

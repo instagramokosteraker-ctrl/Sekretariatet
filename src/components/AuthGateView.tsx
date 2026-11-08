@@ -19,6 +19,7 @@ import {
   loginWithGoogleClient,
   loginWithOfflineCodeClient,
   loginWithPinClient,
+  LEGACY_PIN_AUTH_ENABLED,
   type StoredAuthSession,
 } from '../services/authClient';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
@@ -185,7 +186,6 @@ export function AuthGateView({
       if (!result.ok) {
         if (result.code) setAdminErrorCode(result.code);
         setAdminError(result.error);
-        if (isEmbeddedIframe) setOfflineExpanded(true);
         return;
       }
       onAuthenticated(result.session);
@@ -193,9 +193,8 @@ export function AuthGateView({
       const code = extractFirebaseErrorCode(err);
       setAdminErrorCode(code || null);
       setAdminError(
-        err instanceof Error ? err.message : 'Google-inloggningen misslyckades. Använd reservkod nedan.'
+        err instanceof Error ? err.message : 'Google-inloggningen misslyckades.'
       );
-      setOfflineExpanded(true);
     } finally {
       setGoogleBusy(false);
     }
@@ -271,7 +270,13 @@ export function AuthGateView({
 
       {/* Main Container */}
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6 lg:p-8">
-        <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div
+          className={`w-full ${
+            LEGACY_PIN_AUTH_ENABLED ? 'max-w-4xl md:grid-cols-2' : 'max-w-xl md:grid-cols-1'
+          } grid grid-cols-1 gap-5`}
+        >
+          {LEGACY_PIN_AUTH_ENABLED && (
+            <>
           {/* Card 1: Funktionärs-PIN */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col justify-between space-y-4 shadow-sm">
             <div className="space-y-3">
@@ -382,23 +387,25 @@ export function AuthGateView({
               Standard-PIN: Start 1100 · Mål 2200 · Skog 3300 · Speaker 4400
             </div>
           </div>
+            </>
+          )}
 
-          {/* Card 2: Administratör (Google & Offline reservkod) */}
+          {/* Google sign-in for assigned club roles */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 flex flex-col justify-between space-y-4 shadow-sm">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-slate-900 dark:text-slate-100 shrink-0" />
                   <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                    Administratör & Tävlingsledare
+                    Google-inloggning
                   </h2>
                 </div>
                 <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
-                  Full behörighet
+                  Tilldelad roll
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Logga in med klubbens administratörskonto via Google för full behörighet till alla funktioner.
+                Logga in med Google-kontot som tilldelats en roll av klubbadministratören.
               </p>
 
               {/* Google Sign In Button */}
@@ -448,8 +455,8 @@ export function AuthGateView({
                 )}
               </div>
 
-              {/* Offline reservkod collapsible */}
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+              {LEGACY_PIN_AUTH_ENABLED && (
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setOfflineExpanded((v) => !v)}
@@ -486,7 +493,8 @@ export function AuthGateView({
                     </div>
                   </form>
                 )}
-              </div>
+                </div>
+              )}
             </div>
 
             <div className="text-[11px] text-slate-400 text-center">

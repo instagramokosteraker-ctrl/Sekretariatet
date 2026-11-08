@@ -13,6 +13,7 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const LEGACY_PIN_AUTH_ENABLED = process.env.LEGACY_PIN_AUTH_ENABLED === 'true';
 
 type SICardSeries =
   | 'SI-Card 5'
@@ -348,7 +349,7 @@ interface RocIntegrationStatus {
 type OfficialPinRole = 'START' | 'READOUT' | 'FOREST' | 'SPEAKER';
 type RolePinMap = Record<OfficialPinRole, string>;
 type OfficialRoleMode = 'ALL' | OfficialPinRole;
-type AuthSessionKind = 'ADMIN' | 'PIN_OFFICIAL';
+type AuthSessionKind = 'ADMIN' | 'OFFICIAL' | 'PIN_OFFICIAL';
 type ClubAdminTier = 'SUPER_ADMIN' | 'RACE_ADMIN';
 
 interface ClubAdminAccount {
@@ -774,6 +775,7 @@ async function verifyFirebaseIdToken(idToken: string): Promise<{
   email: string;
   emailVerified: boolean;
   name: string;
+  expiresAt: number;
 }> {
   const parts = idToken.trim().split('.');
   if (parts.length !== 3) {
@@ -835,7 +837,32 @@ async function verifyFirebaseIdToken(idToken: string): Promise<{
     email: payload.email.trim().toLowerCase(),
     emailVerified: true,
     name: (payload.name || payload.email.split('@')[0]).trim(),
+    expiresAt: payload.exp!,
   };
+}
+
+async function readFirestoreRole(
+  token: string,
+  collectionName: 'admins' | 'roleAssignments',
+  uid: string
+): Promise<string | null> {
+  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    FIREBASE_PROJECT_ID
+  )}/databases/${encodeURIComponent(
+    FIRESTORE_DATABASE_ID
+  )}/documents/${collectionName}/${encodeURIComponent(uid)}`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (response.status === 403 || response.status === 404) return null;
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Kunde inte läsa Firebase-roll (${response.status}): ${body.slice(0, 300)}`);
+  }
+  const document = (await response.json()) as {
+    fields?: Record<string, { stringValue?: string }>;
+  };
+  return document.fields?.role?.stringValue || null;
 }
 
 function inferSeries(siNumber: number): SICardSeries {
@@ -3085,12 +3112,8 @@ async function startServer() {
   };
 
   app.get('/api/auth/public-info', (_req, res) => {
-    const authCfg = ensureSeasonAuthConfig(seasonDb);
     const summaries = buildCompetitionsSummaryList(seasonDb);
     const competitions = summaries.map((s) => {
-      const ev = seasonDb.eventsMap[s.id];
-      const pins = ev ? ensureEventPins(ev) : { ...DEFAULT_ROLE_PINS };
-      const customized = Boolean(ev?.pinsCustomized);
       return {
         id: s.id,
         shortCode: s.shortCode,
@@ -3098,8 +3121,6 @@ async function startServer() {
         organizer: s.organizer,
         date: s.date,
         status: s.status,
-        pinsCustomized: customized,
-        ...(customized ? {} : { demoPinHints: pins }),
       };
     });
 
@@ -3107,11 +3128,6 @@ async function startServer() {
     res.json({
       competitions,
       activeEventId: seasonDb.activeEventId,
-      offlineCodeEnabled: authCfg.offlineCodeEnabled,
-      offlineCodeCustomized: authCfg.offlineCodeCustomized,
-      ...(authCfg.offlineCodeEnabled && !authCfg.offlineCodeCustomized
-        ? { demoOfflineCodeHint: DEFAULT_OFFLINE_ADMIN_CODE }
-        : {}),
       firebaseProjectId: FIREBASE_PROJECT_ID,
       clubSettings: {
         clubName: clubCfg.clubName,
@@ -3124,88 +3140,17 @@ async function startServer() {
     });
   });
 
-  app.post('/api/auth/login-google', async (req, res) => {
-    const { idToken } = req.body as { idToken?: string };
-    if (!idToken || typeof idToken !== 'string') {
-      res.status(400).json({ error: 'Saknar Google ID-token.' });
-      return;
-    }
-
-    try {
-      const verified = await verifyFirebaseIdToken(idToken);
-      const authCfg = ensureSeasonAuthConfig(seasonDb);
-      let adminEntry = authCfg.admins.find(
-        (a) => a.email.toLowerCase() === verified.email
-      );
-
-      if (!adminEntry) {
-        if (isBootstrapAdminEmail(verified.email)) {
-          adminEntry = {
-            email: verified.email,
-            displayName: verified.name || (verified.email === BOOTSTRAP_ADMIN_EMAIL ? 'OK Österåker (Huvudadmin)' : 'Huvudadmin'),
-            role: 'SUPER_ADMIN',
-            isBootstrapOwner: verified.email === BOOTSTRAP_ADMIN_EMAIL,
-            addedAt: new Date().toISOString(),
-          };
-          authCfg.admins.unshift(adminEntry);
-          saveSeasonDatabase(seasonDb);
-        } else {
-          // Check Zero-Trust Firestore `/admins/{uid}` in case container cold-started after invite
-          const cloudRole = await verifyFirestoreAdminRoleRest(verified.uid, idToken);
-          if (cloudRole) {
-            adminEntry = {
-              email: verified.email,
-              displayName: verified.name || verified.email.split('@')[0],
-              role: cloudRole,
-              addedAt: new Date().toISOString(),
-            };
-            authCfg.admins.push(adminEntry);
-            saveSeasonDatabase(seasonDb);
-          }
-        }
-      }
-
-      if (!adminEntry) {
-        res.status(403).json({
-          error: `Google-kontot (${verified.email}) är inte upplagt som tävlingsledare ännu. Be klubbens huvudadministratör lägga till adressen under Behörighet & PIN, eller använd en 4-siffrig funktionärs-PIN.`,
-        });
-        return;
-      }
-
-      if (verified.name && adminEntry.displayName !== verified.name && !adminEntry.isBootstrapOwner) {
-        adminEntry.displayName = verified.name;
-        saveSeasonDatabase(seasonDb);
-      }
-
-      const issuedAt = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString();
-      const sessionUser: AuthSessionUser = {
-        sessionKind: 'ADMIN',
-        uid: verified.uid,
-        displayName: verified.name || adminEntry.displayName,
-        email: verified.email,
-        adminTier: adminEntry.role,
-        officialRole: 'ALL',
-        lockedEventId: null,
-        lockedEventName: null,
-        authMethod: 'GOOGLE',
-        issuedAt,
-        expiresAt,
-      };
-
-      const token = signAuthSessionToken(sessionUser, authCfg.hmacSecret);
-      res.json({ token, user: sessionUser });
-    } catch (err: unknown) {
-      res.status(401).json({
-        error:
-          err instanceof Error
-            ? err.message
-            : 'Kunde inte verifiera Google-inloggningen.',
-      });
-    }
+  app.post('/api/auth/login-google', (_req, res) => {
+    res.status(410).json({
+      error: 'Google-inloggning hanteras direkt av Firebase Auth-klienten.',
+    });
   });
 
   app.post('/api/auth/login-pin', (req, res) => {
+    if (!LEGACY_PIN_AUTH_ENABLED) {
+      res.status(403).json({ error: 'PIN-inloggning är avstängd. Logga in med Google.' });
+      return;
+    }
     const { eventId, pin } = req.body as { eventId?: string; pin?: string };
     const cleanPin = String(pin || '').replace(/\D/g, '');
     if (cleanPin.length < 4 || cleanPin.length > 6) {
@@ -3266,6 +3211,10 @@ async function startServer() {
   });
 
   app.post('/api/auth/login-offline', (req, res) => {
+    if (!LEGACY_PIN_AUTH_ENABLED) {
+      res.status(403).json({ error: 'Offline-kodinloggning är avstängd. Logga in med Google.' });
+      return;
+    }
     const { code } = req.body as { code?: string };
     const cleanCode = String(code || '').trim();
     const authCfg = ensureSeasonAuthConfig(seasonDb);
@@ -3311,78 +3260,76 @@ async function startServer() {
     res.json({ token, user: sessionUser });
   });
 
-  function resolveSessionUserFromToken(
+  async function resolveSessionUserFromToken(
     rawToken: string | undefined | null,
     authCfg: SeasonAuthConfig
-  ): AuthSessionUser | null {
+  ): Promise<AuthSessionUser | null> {
     if (!rawToken || typeof rawToken !== 'string') return null;
     const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken.trim();
     if (!token) return null;
 
-    // 1. Check server-signed HMAC token (2 parts)
     const hmacUser = verifyAuthSessionToken(token, authCfg.hmacSecret);
-    if (hmacUser) return hmacUser;
+    if (hmacUser) {
+      if (
+        LEGACY_PIN_AUTH_ENABLED &&
+        (hmacUser.authMethod === 'PIN' || hmacUser.authMethod === 'OFFLINE_CODE')
+      ) {
+        return hmacUser;
+      }
+      return null;
+    }
 
-    // 2. Check Firebase ID Token (JWT with 3 parts from client-side Google Auth)
-    const parts = token.split('.');
-    if (parts.length === 3) {
+    if (token.split('.').length === 3) {
       try {
-        const payload = JSON.parse(
-          Buffer.from(parts[1], 'base64url').toString('utf-8')
-        ) as {
-          aud?: string;
-          iss?: string;
-          sub?: string;
-          user_id?: string;
-          email?: string;
-          email_verified?: boolean;
-          name?: string;
-          exp?: number;
-        };
-
-        const nowSec = Math.floor(Date.now() / 1000);
-        const isNotExpired = !payload.exp || payload.exp >= nowSec - 120;
-        const isAudValid =
-          !payload.aud ||
-          payload.aud === FIREBASE_PROJECT_ID ||
-          payload.iss === `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
-
-        if (isNotExpired && isAudValid && payload.email) {
-          const normEmail = payload.email.trim().toLowerCase();
-          const isBootstrap = isBootstrapAdminEmail(normEmail);
-          const adminEntry = authCfg.admins.find(
-            (a) => a.email.toLowerCase() === normEmail
-          );
-
-          if (isBootstrap || adminEntry) {
-            const tier: ClubAdminTier = isBootstrap
-              ? 'SUPER_ADMIN'
-              : (adminEntry?.role ?? 'RACE_ADMIN');
-            return {
-              sessionKind: 'ADMIN',
-              uid: payload.sub || payload.user_id || `google_${normEmail}`,
-              displayName:
-                payload.name ||
-                adminEntry?.displayName ||
-                (isBootstrap ? 'OK Österåker (Huvudadmin)' : normEmail.split('@')[0]),
-              email: normEmail,
-              adminTier: tier,
-              officialRole: 'ALL',
-              lockedEventId: null,
-              lockedEventName: null,
-              authMethod: 'GOOGLE',
-              issuedAt: new Date().toISOString(),
-              expiresAt: new Date((payload.exp || nowSec + 3600 * 24) * 1000).toISOString(),
-            };
-          }
+        const verified = await verifyFirebaseIdToken(token);
+        const [adminRole, assignedOfficialRole] = await Promise.all([
+          readFirestoreRole(token, 'admins', verified.uid),
+          readFirestoreRole(token, 'roleAssignments', verified.uid),
+        ]);
+        if (adminRole === 'SUPER_ADMIN' || adminRole === 'RACE_ADMIN') {
+          return {
+            sessionKind: 'ADMIN',
+            uid: verified.uid,
+            displayName: verified.name,
+            email: verified.email,
+            adminTier: adminRole,
+            officialRole: 'ALL',
+            lockedEventId: null,
+            lockedEventName: null,
+            authMethod: 'GOOGLE',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(verified.expiresAt * 1000).toISOString(),
+          };
         }
-      } catch {
-        // ignore JSON parse error
+        if (
+          assignedOfficialRole === 'START' ||
+          assignedOfficialRole === 'READOUT' ||
+          assignedOfficialRole === 'FOREST' ||
+          assignedOfficialRole === 'SPEAKER'
+        ) {
+          return {
+            sessionKind: 'OFFICIAL',
+            uid: verified.uid,
+            displayName: verified.name,
+            email: verified.email,
+            adminTier: null,
+            officialRole: assignedOfficialRole,
+            lockedEventId: null,
+            lockedEventName: null,
+            authMethod: 'GOOGLE',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(verified.expiresAt * 1000).toISOString(),
+          };
+        }
+      } catch (error) {
+        console.warn(
+          'Firebase-tokenverifiering misslyckades:',
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 
-    // 3. Check client offline emergency admin token
-    if (token.startsWith('offline_') || token.toLowerCase() === 'okosteraker2026') {
+    if (LEGACY_PIN_AUTH_ENABLED && (token.startsWith('offline_') || token.toLowerCase() === 'okosteraker2026')) {
       return {
         sessionKind: 'ADMIN',
         uid: 'offline_emergency_admin',
@@ -3398,8 +3345,7 @@ async function startServer() {
       };
     }
 
-    // 4. Check client PIN token
-    if (token.startsWith('pin_')) {
+    if (LEGACY_PIN_AUTH_ENABLED && token.startsWith('pin_')) {
       const segments = token.split('_');
       const roleCandidate = (segments[1] || 'ALL').toUpperCase() as OfficialRoleMode;
       return {
@@ -3420,10 +3366,36 @@ async function startServer() {
     return null;
   }
 
-  function getRequestSessionUser(req: express.Request): AuthSessionUser | null {
+  async function getRequestSessionUser(req: express.Request): Promise<AuthSessionUser | null> {
     const authCfg = ensureSeasonAuthConfig(seasonDb);
     const headerToken = req.header('x-passersi-token') || req.header('authorization');
     return resolveSessionUserFromToken(headerToken, authCfg);
+  }
+
+  function isOfficialWriteAllowed(
+    sessionUser: AuthSessionUser,
+    method: string,
+    route: string
+  ): boolean {
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
+    if (sessionUser.sessionKind === 'ADMIN') return true;
+    const role = sessionUser.officialRole;
+    const permissions: Array<{ method: string; path: RegExp; roles: OfficialPinRole[] }> = [
+      { method: 'POST', path: /^\/online-punch$/, roles: ['START', 'READOUT', 'FOREST'] },
+      { method: 'POST', path: /^\/readout$/, roles: ['READOUT', 'FOREST', 'SPEAKER'] },
+      { method: 'POST', path: /^\/draw\/class$/, roles: ['START'] },
+      { method: 'POST', path: /^\/competitors$/, roles: ['START', 'READOUT'] },
+      { method: 'PUT', path: /^\/competitors\/[^/]+$/, roles: ['START', 'READOUT', 'FOREST'] },
+      { method: 'PUT', path: /^\/emergency(?:\/.*)?$/, roles: ['FOREST', 'READOUT'] },
+      { method: 'POST', path: /^\/emergency\/(?:recalculate-all|manual-finish)$/, roles: ['FOREST', 'READOUT'] },
+      { method: 'PUT', path: /^\/club\/rentals\/[^/]+\/[^/]+\/return$/, roles: ['READOUT'] },
+    ];
+    return permissions.some(
+      (permission) =>
+        permission.method === method &&
+        permission.path.test(route) &&
+        permission.roles.includes(role as OfficialPinRole)
+    );
   }
 
   // Gate all non-public `/api/*` Secretariat endpoints
@@ -3438,15 +3410,25 @@ async function startServer() {
       next();
       return;
     }
-    const sessionUser = getRequestSessionUser(req);
-    if (!sessionUser) {
-      res.status(401).json({
-        error: 'Inloggning krävs för sekretariatet.',
+    void getRequestSessionUser(req)
+      .then((sessionUser) => {
+        if (!sessionUser) {
+          res.status(401).json({ error: 'Inloggning krävs för sekretariatet.' });
+          return;
+        }
+        if (!isOfficialWriteAllowed(sessionUser, req.method, req.path)) {
+          res.status(403).json({
+            error: 'Din tilldelade funktionärsroll saknar behörighet för den här åtgärden.',
+          });
+          return;
+        }
+        (req as express.Request & { authUser?: AuthSessionUser }).authUser = sessionUser;
+        next();
+      })
+      .catch((error: unknown) => {
+        console.error('Kunde inte kontrollera API-behörighet:', error);
+        res.status(503).json({ error: 'Kunde inte verifiera inloggningen just nu.' });
       });
-      return;
-    }
-    (req as express.Request & { authUser?: AuthSessionUser }).authUser = sessionUser;
-    next();
   });
 
   wss.on('connection', (ws, req) => {
@@ -3456,24 +3438,25 @@ async function startServer() {
     const params = new URLSearchParams(search);
     const token = params.get('token');
     const authCfg = ensureSeasonAuthConfig(seasonDb);
-    const sessionUser = resolveSessionUserFromToken(token, authCfg);
+    void resolveSessionUserFromToken(token, authCfg)
+      .then((sessionUser) => {
 
-    if (sessionUser) {
-      authenticatedWsClients.add(ws);
-      ws.send(
-        JSON.stringify({
-          type: 'state:sync',
-          payload: buildFullStatePayload(),
-        })
-      );
-    } else {
-      ws.send(
-        JSON.stringify({
-          type: 'public:ping',
-          changedShortCode: getActiveEvent().competition.shortCode,
-        })
-      );
-    }
+        if (sessionUser) {
+          authenticatedWsClients.add(ws);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'state:sync', payload: buildFullStatePayload() }));
+          }
+        } else if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'public:ping',
+            changedShortCode: getActiveEvent().competition.shortCode,
+          }));
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Kunde inte verifiera WebSocket-inloggning:', error);
+        if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Authentication failed');
+      });
 
     ws.on('message', (data) => {
       try {
@@ -3489,7 +3472,11 @@ async function startServer() {
 
   function requireAdminRequest(req: express.Request, res: express.Response): AuthSessionUser | null {
     const sessionUser = (req as express.Request & { authUser?: AuthSessionUser }).authUser;
-    if (!sessionUser || sessionUser.sessionKind !== 'ADMIN') {
+    if (
+      !sessionUser ||
+      sessionUser.sessionKind !== 'ADMIN' ||
+      (sessionUser.adminTier !== 'SUPER_ADMIN' && sessionUser.adminTier !== 'RACE_ADMIN')
+    ) {
       res.status(403).json({
         error: 'Denna åtgärd kräver inloggning som Tävlingsledare / Klubbadmin.',
       });
@@ -3536,6 +3523,10 @@ async function startServer() {
   });
 
   app.put('/api/auth/pins', (req, res) => {
+    if (!LEGACY_PIN_AUTH_ENABLED) {
+      res.status(403).json({ error: 'PIN-konfiguration är avstängd.' });
+      return;
+    }
     if (!requireAdminRequest(req, res)) return;
     const body = req.body as {
       eventId?: string;
@@ -3677,6 +3668,10 @@ async function startServer() {
   });
 
   app.put('/api/auth/offline-code', (req, res) => {
+    if (!LEGACY_PIN_AUTH_ENABLED) {
+      res.status(403).json({ error: 'Offline-koder är avstängda.' });
+      return;
+    }
     if (!requireAdminRequest(req, res)) return;
     const body = req.body as { enabled?: boolean; newCode?: string };
     const authCfg = ensureSeasonAuthConfig(seasonDb);

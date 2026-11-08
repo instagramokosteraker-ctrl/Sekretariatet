@@ -93,7 +93,6 @@ import {
 import {
   getStockholmTodayIso,
   loadFullSeasonFromFirestore,
-  ensureAdminRoleInFirestore,
   subscribeFirebaseAuth,
   syncFullSeasonToFirestore,
   createCompetitionInFirestore,
@@ -115,7 +114,7 @@ import {
   recalculateCompetitionFromFirestore,
   auth,
   googleProvider,
-  BOOTSTRAP_SUPER_ADMIN_EMAILS,
+  resolveFirebaseUserRole,
   subscribePublicCompetitionSummaries,
   loadClubSettingsFromFirestore,
   subscribeClubSettingsFromFirestore,
@@ -278,7 +277,7 @@ export default function App() {
   const [roleMode, setRoleMode] = useState<OfficialRoleMode>(() => {
     if (typeof window === 'undefined') return 'ALL';
     const storedSess = getStoredAuthSession();
-    if (storedSess?.user.sessionKind === 'PIN_OFFICIAL') {
+    if (storedSess && storedSess.user.sessionKind !== 'ADMIN') {
       return storedSess.user.officialRole as OfficialRoleMode;
     }
     const saved = localStorage.getItem('passersi_role_mode') as OfficialRoleMode | null;
@@ -289,7 +288,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<MeosTab>(() => {
     if (typeof window === 'undefined') return 'readout';
     const storedSess = getStoredAuthSession();
-    if (storedSess?.user.sessionKind === 'PIN_OFFICIAL') {
+    if (storedSess && storedSess.user.sessionKind !== 'ADMIN') {
       const lockedRole = storedSess.user.officialRole as OfficialRoleMode;
       return ROLE_ALLOWED_TABS[lockedRole]?.[0] ?? 'readout';
     }
@@ -308,35 +307,31 @@ export default function App() {
         setFirebaseUserPresent(true);
         try {
           const token = await u.getIdToken();
-          const emailLower = (u.email ?? '').toLowerCase();
-          let claimedRole: 'SUPER_ADMIN' | 'RACE_ADMIN' | null = null;
-          try {
-            const roleClaim = await ensureAdminRoleInFirestore(u);
-            if (roleClaim.claimed) claimedRole = roleClaim.role;
-          } catch (error) {
-            console.error('Kunde inte aktivera Google-administratörens Firestore-roll:', error);
+          const assignedRole = await resolveFirebaseUserRole(u);
+          if (!assignedRole) {
+            setStoredAuthSession(null);
+            setAuthSession(null);
+          } else {
+            const isOfficial = assignedRole.kind === 'OFFICIAL';
+            const session: StoredAuthSession = {
+              token,
+              user: {
+                sessionKind: isOfficial ? 'OFFICIAL' : 'ADMIN',
+                uid: u.uid,
+                displayName: u.displayName || u.email || 'Administratör',
+                email: u.email,
+                adminTier: assignedRole.adminTier,
+                officialRole: assignedRole.officialRole || 'ALL',
+                lockedEventId: null,
+                lockedEventName: null,
+                authMethod: 'GOOGLE',
+                issuedAt: new Date().toISOString(),
+                expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+              },
+            };
+            setStoredAuthSession(session);
+            setAuthSession(session);
           }
-          const isSuper =
-            claimedRole === 'SUPER_ADMIN' ||
-            BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(emailLower);
-          const session: StoredAuthSession = {
-            token,
-            user: {
-              sessionKind: 'ADMIN',
-              uid: u.uid,
-              displayName: u.displayName || u.email || 'Administratör',
-              email: u.email,
-              adminTier: claimedRole ?? (isSuper ? 'SUPER_ADMIN' : 'RACE_ADMIN'),
-              officialRole: 'ALL',
-              lockedEventId: null,
-              lockedEventName: null,
-              authMethod: 'GOOGLE',
-              issuedAt: new Date().toISOString(),
-              expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
-            },
-          };
-          setStoredAuthSession(session);
-          setAuthSession(session);
         } catch {
           // If token fetch fails, preserve existing session
         }
@@ -381,7 +376,7 @@ export default function App() {
   // Enforce role & station locking whenever a PIN_OFFICIAL session is active
   useEffect(() => {
     if (!authSession) return;
-    if (authSession.user.sessionKind === 'PIN_OFFICIAL') {
+    if (authSession.user.sessionKind !== 'ADMIN') {
       const lockedRole = authSession.user.officialRole as OfficialRoleMode;
       handleChangeRoleMode(lockedRole, false);
       setCreateEventModalOpen(false);
@@ -1830,7 +1825,7 @@ export default function App() {
         clubSettings={clubSettings}
         onAuthenticated={(sess) => {
           setAuthSession(sess);
-          if (sess.user.sessionKind === 'PIN_OFFICIAL') {
+          if (sess.user.sessionKind !== 'ADMIN') {
             handleChangeRoleMode(sess.user.officialRole as OfficialRoleMode, false);
           } else {
             handleChangeRoleMode('ALL', true);
@@ -1841,7 +1836,7 @@ export default function App() {
     );
   }
 
-  const isPinOfficial = authSession.user.sessionKind === 'PIN_OFFICIAL';
+  const isPinOfficial = authSession.user.sessionKind !== 'ADMIN';
   const isAdminSession = authSession.user.sessionKind === 'ADMIN';
   const sidebarCompetition =
     competitionsList.find((item) => item.id === activeEventId) ??

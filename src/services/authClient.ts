@@ -5,7 +5,7 @@ import {
 import {
   auth,
   googleProvider,
-  BOOTSTRAP_SUPER_ADMIN_EMAILS,
+  resolveFirebaseUserRole,
 } from '../firebase';
 import type {
   AuthPublicInfoPayload,
@@ -19,6 +19,7 @@ export interface StoredAuthSession {
 }
 
 const SESSION_STORAGE_KEY = 'passersi_auth_session_v1';
+export const LEGACY_PIN_AUTH_ENABLED = import.meta.env.VITE_ENABLE_LEGACY_PIN_AUTH === 'true';
 
 type AuthListener = (session: StoredAuthSession | null) => void;
 const listeners = new Set<AuthListener>();
@@ -37,6 +38,13 @@ export function getStoredAuthSession(): StoredAuthSession | null {
     const parsed = JSON.parse(raw) as StoredAuthSession;
     if (!parsed?.token || !parsed?.user) return null;
     if (parsed.user.expiresAt && Date.parse(parsed.user.expiresAt) < Date.now()) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
+    if (
+      !LEGACY_PIN_AUTH_ENABLED &&
+      (parsed.user.authMethod === 'PIN' || parsed.user.authMethod === 'OFFLINE_CODE')
+    ) {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       return null;
     }
@@ -181,18 +189,25 @@ export async function loginWithGoogleClient(): Promise<
     const credential = await signInWithPopup(auth, googleProvider);
     const user = credential.user;
     const token = await user.getIdToken();
-    const emailLower = (user.email ?? '').toLowerCase();
-    const isSuper = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(emailLower);
+    const role = await resolveFirebaseUserRole(user);
+    if (!role) {
+      await signOut(auth);
+      return {
+        ok: false,
+        error: 'Kontot saknar tilldelad PasserSI-roll. Be en administratör bjuda in dig under Klubbadmin & Behörighet.',
+      };
+    }
+    const isOfficial = role.kind === 'OFFICIAL';
 
     const session: StoredAuthSession = {
       token,
       user: {
-        sessionKind: 'ADMIN',
+        sessionKind: isOfficial ? 'OFFICIAL' : 'ADMIN',
         uid: user.uid,
         displayName: user.displayName || user.email || 'Administratör',
         email: user.email,
-        adminTier: isSuper ? 'SUPER_ADMIN' : 'RACE_ADMIN',
-        officialRole: 'ALL',
+        adminTier: role.adminTier,
+        officialRole: role.officialRole || 'ALL',
         lockedEventId: null,
         lockedEventName: null,
         authMethod: 'GOOGLE',
@@ -262,7 +277,7 @@ export function loginWithPinClient(params: {
   }
 
   const session: StoredAuthSession = {
-    token: `pin_token_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    token: `pin_${matchedRole}_${eventId}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
     user: {
       sessionKind: 'PIN_OFFICIAL',
       uid: `pin_${matchedRole.toLowerCase()}_${eventId}`,

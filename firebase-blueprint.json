@@ -340,6 +340,41 @@
         "updatedAt"
       ]
     },
+    "OfficialRoleAssignment": {
+      "title": "OfficialRoleAssignment",
+      "description": "Verified Firebase user's assigned competition-secretariat role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "inviteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["START", "READOUT", "FOREST", "SPEAKER"] },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "inviteId", "email", "displayName", "role", "createdByUid", "createdAt", "updatedAt"],
+      "additionalProperties": false
+    },
+    "OfficialRoleInvite": {
+      "title": "OfficialRoleInvite",
+      "description": "Admin-created email invitation for a single official role, claimed by the matching verified Google account.",
+      "type": "object",
+      "properties": {
+        "inviteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["START", "READOUT", "FOREST", "SPEAKER"] },
+        "active": { "type": "boolean" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "claimedUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["inviteId", "email", "displayName", "role", "active", "createdByUid", "createdAt", "updatedAt"],
+      "additionalProperties": false
+    },
     "ClubSettings": {
       "title": "ClubSettings",
       "description": "Public club configuration including Eventor organisation ID, payment settings, rental card fees, and active season state. Eventor API credentials are stored separately in the admin-only EventorPrivateSettings subdocument.",
@@ -1133,6 +1168,14 @@
     "/adminInvites/{inviteId}": {
       "schema": { "$ref": "#/entities/AdminInvite" },
       "description": "PII-isolated collection of invited club administrator email addresses."
+    },
+    "/roleAssignments/{userId}": {
+      "schema": { "$ref": "#/entities/OfficialRoleAssignment" },
+      "description": "Role mapping for verified Firebase UIDs; readable by the owner and administrators, writable by administrators or through an invite claim."
+    },
+    "/roleInvites/{inviteId}": {
+      "schema": { "$ref": "#/entities/OfficialRoleInvite" },
+      "description": "Admin-managed, email-restricted invitations for START, READOUT, FOREST, or SPEAKER."
     },
     "/clubSettings/{settingId}": {
       "schema": { "$ref": "#/entities/ClubSettings" },

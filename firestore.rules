@@ -73,6 +73,13 @@ service cloud.firestore {
       );
     }
 
+    function hasOfficialRole(role) {
+      return isVerifiedUser() &&
+        isOfficialRole(role) &&
+        exists(/databases/$(database)/documents/roleAssignments/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/roleAssignments/$(request.auth.uid)).data.role == role;
+    }
+
     function parentCompetitionExists(competitionId) {
       return exists(/databases/$(database)/documents/competitions/$(competitionId));
     }
@@ -107,6 +114,74 @@ service cloud.firestore {
         (data.role == 'SUPER_ADMIN' || data.role == 'RACE_ADMIN') &&
         data.active is bool &&
         data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 && data.createdByUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        (!('claimedUid' in data) || isValidId(data.claimedUid)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isOfficialRole(role) {
+      return role == 'START' || role == 'READOUT' || role == 'FOREST' || role == 'SPEAKER';
+    }
+
+    function isValidRoleAssignment(data) {
+      return data.keys().hasAll([
+          'uid',
+          'inviteId',
+          'email',
+          'displayName',
+          'role',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'inviteId',
+          'email',
+          'displayName',
+          'role',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        isValidId(data.inviteId) &&
+        data.email is string && data.email.size() >= 5 && data.email.size() <= 120 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        isOfficialRole(data.role) &&
+        isValidId(data.createdByUid) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidRoleInvite(data) {
+      return data.keys().hasAll([
+          'inviteId',
+          'email',
+          'displayName',
+          'role',
+          'active',
+          'createdByUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'inviteId',
+          'email',
+          'displayName',
+          'role',
+          'active',
+          'createdByUid',
+          'claimedUid',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.inviteId) &&
+        data.email is string && data.email.size() >= 5 && data.email.size() <= 120 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        isOfficialRole(data.role) &&
+        data.active is bool &&
+        isValidId(data.createdByUid) &&
         (!('claimedUid' in data) || isValidId(data.claimedUid)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -642,6 +717,96 @@ service cloud.firestore {
         );
     }
 
+    match /roleAssignments/{userId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(userId) &&
+          (request.auth.uid == userId || isAdmin());
+
+        allow list: if isVerifiedUser() && isAdmin();
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          userId == request.auth.uid &&
+          isValidRoleAssignment(incoming()) &&
+          incoming().uid == request.auth.uid &&
+          incoming().email == request.auth.token.email &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          existsAfter(/databases/$(database)/documents/roleInvites/$(incoming().inviteId)) &&
+          getAfter(/databases/$(database)/documents/roleInvites/$(incoming().inviteId)).data.email == request.auth.token.email &&
+          getAfter(/databases/$(database)/documents/roleInvites/$(incoming().inviteId)).data.role == incoming().role &&
+          getAfter(/databases/$(database)/documents/roleInvites/$(incoming().inviteId)).data.createdByUid == incoming().createdByUid &&
+          getAfter(/databases/$(database)/documents/roleInvites/$(incoming().inviteId)).data.active == false &&
+          getAfter(/databases/$(database)/documents/roleInvites/$(incoming().inviteId)).data.claimedUid == request.auth.uid;
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          resource != null &&
+          isValidRoleAssignment(incoming()) &&
+          incoming().uid == existing().uid &&
+          incoming().email == existing().email &&
+          incoming().createdByUid == existing().createdByUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          isAdmin() &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'updatedAt']);
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          resource != null &&
+          isAdmin();
+    }
+
+    match /roleInvites/{inviteId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(inviteId) &&
+          (
+            (resource != null && resource.data.email == request.auth.token.email) ||
+            isAdmin()
+          );
+
+        allow list: if isVerifiedUser() && isAdmin();
+
+        allow create: if isVerifiedUser() &&
+          isValidId(inviteId) &&
+          isValidRoleInvite(incoming()) &&
+          incoming().inviteId == inviteId &&
+          incoming().createdByUid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          incoming().active == true &&
+          !('claimedUid' in incoming()) &&
+          isAdmin();
+
+        allow update: if isVerifiedUser() &&
+          isValidId(inviteId) &&
+          resource != null &&
+          isValidRoleInvite(incoming()) &&
+          incoming().inviteId == existing().inviteId &&
+          incoming().email == existing().email &&
+          incoming().createdByUid == existing().createdByUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            (
+              isAdmin() &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'active', 'updatedAt'])
+            ) ||
+            (
+              existing().active == true &&
+              existing().email == request.auth.token.email &&
+              incoming().active == false &&
+              incoming().claimedUid == request.auth.uid &&
+              incoming().role == existing().role &&
+              incoming().displayName == existing().displayName &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['active', 'claimedUid', 'updatedAt']) &&
+              getAfter(/databases/$(database)/documents/roleAssignments/$(request.auth.uid)).data.role == existing().role
+            )
+          );
+
+        allow delete: if isVerifiedUser() && isAdmin();
+    }
+
     // =========================================================================
     // 3. /clubSettings/{settingId} — Singleton Club & Swish Configuration
     // =========================================================================
@@ -878,6 +1043,16 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly([
               'status',
               'statusOverride',
+              'updatedAt'
+            ])
+          ) ||
+          (
+            hasOfficialRole('READOUT') &&
+            existing().status != 'COMPLETED' &&
+            incoming().finishedCount >= existing().finishedCount &&
+            incoming().finishedCount <= existing().finishedCount + 1 &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'finishedCount',
               'updatedAt'
             ])
           )
@@ -1200,6 +1375,36 @@ service cloud.firestore {
                 'punchTimes',
                 'updatedAt'
               ])
+            ) ||
+            (
+              parentCompetitionData(competitionId).status != 'COMPLETED' &&
+              (
+                (
+                  hasOfficialRole('READOUT') ||
+                  hasOfficialRole('SPEAKER') ||
+                  hasOfficialRole('FOREST')
+                ) &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status',
+                  'checkTimeSec',
+                  'startTimeSec',
+                  'finishTimeSec',
+                  'runningTimeSec',
+                  'readoutAtIso',
+                  'punchCodes',
+                  'punchTimes',
+                  'updatedAt'
+                ])
+              ) ||
+              (
+                hasOfficialRole('START') &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status',
+                  'checkTimeSec',
+                  'startTimeSec',
+                  'updatedAt'
+                ])
+              )
             )
           )
         );
@@ -1281,17 +1486,17 @@ service cloud.firestore {
           isValidId(competitionId) &&
           isValidId(receiptId) &&
           parentCompetitionExists(competitionId) &&
-          (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
-          isAdmin();
+          (
+            isAdmin() ||
+            hasOfficialRole('READOUT') ||
+            hasOfficialRole('FOREST') ||
+            hasOfficialRole('SPEAKER')
+          ) &&
+          (resource == null || existing().ownerUid == request.auth.uid);
 
         allow list: if isVerifiedUser() &&
           isValidId(competitionId) &&
           parentCompetitionExists(competitionId) &&
-          (
-            parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
-            isAdmin() ||
-            isSuperAdmin()
-          ) &&
           isAdmin();
 
         allow create: if isVerifiedUser() &&
@@ -1304,9 +1509,13 @@ service cloud.firestore {
           incoming().clientReadoutId == receiptId &&
           incoming().createdAt == request.time &&
           parentCompetitionExists(competitionId) &&
-          (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
           parentCompetitionData(competitionId).status != 'COMPLETED' &&
-          isAdmin();
+          (
+            isAdmin() ||
+            hasOfficialRole('READOUT') ||
+            hasOfficialRole('FOREST') ||
+            hasOfficialRole('SPEAKER')
+          );
 
         allow update: if false;
 
@@ -1392,15 +1601,14 @@ service cloud.firestore {
             data.updatedAt is timestamp;
         }
 
-        allow get, list: if isVerifiedUser() &&
+        allow get: if isVerifiedUser() &&
           isValidId(competitionId) &&
+          isValidId(punchId) &&
           parentCompetitionExists(competitionId) &&
-          (
-            parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
-            isAdmin() ||
-            isSuperAdmin()
-          ) &&
-          isAdmin();
+          (isAdmin() || hasOfficialRole('START') || hasOfficialRole('READOUT') || hasOfficialRole('FOREST')) &&
+          (resource == null || existing().ownerUid == request.auth.uid);
+
+        allow list: if isVerifiedUser() && isAdmin();
 
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1551,11 +1759,34 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           parentCompetitionData(competitionId).status != 'COMPLETED' &&
           (
+            isAdmin() ||
             (
-              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
-              isAdmin()
+              hasOfficialRole('START') &&
+              (
+                incoming().stationFunction == 'CHECK' ||
+                incoming().stationFunction == 'START' ||
+                incoming().stationFunction == 'RADIO' ||
+                incoming().stationFunction == 'PREWARNING'
+              )
             ) ||
-            isSuperAdmin()
+            (
+              hasOfficialRole('READOUT') &&
+              (
+                incoming().stationFunction == 'CHECK' ||
+                incoming().stationFunction == 'START' ||
+                incoming().stationFunction == 'RADIO' ||
+                incoming().stationFunction == 'PREWARNING' ||
+                incoming().stationFunction == 'FINISH' ||
+                incoming().stationFunction == 'READOUT'
+              )
+            ) ||
+            (
+              hasOfficialRole('FOREST') &&
+              (
+                incoming().stationFunction == 'RADIO' ||
+                incoming().stationFunction == 'PREWARNING'
+              )
+            )
           );
 
         allow update: if false;

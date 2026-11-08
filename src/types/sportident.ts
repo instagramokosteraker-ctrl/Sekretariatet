@@ -426,9 +426,32 @@ export type OfficialPinRole = 'START' | 'READOUT' | 'FOREST' | 'SPEAKER';
 
 export type RolePinMap = Record<OfficialPinRole, string>;
 
-export type AuthSessionKind = 'ADMIN' | 'PIN_OFFICIAL';
+export type AuthSessionKind = 'ADMIN' | 'OFFICIAL' | 'PIN_OFFICIAL';
 
 export type ClubAdminTier = 'SUPER_ADMIN' | 'RACE_ADMIN';
+export type OfficialRole = Exclude<OfficialRoleMode, 'ALL'>;
+
+export interface OfficialRoleAssignment {
+  uid: string;
+  inviteId: string;
+  email: string;
+  displayName: string;
+  role: OfficialRole;
+  createdByUid: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OfficialRoleInvite {
+  inviteId: string;
+  email: string;
+  displayName: string;
+  role: OfficialRole;
+  active: boolean;
+  createdByUid: string;
+  claimedUid?: string;
+  addedAt: string;
+}
 
 export interface AuthSessionUser {
   sessionKind: AuthSessionKind;
