@@ -1300,13 +1300,15 @@ export async function syncFullSeasonToFirestore(
     ),
     rentalCardFeeSek: clampInt(snapshot.clubSettings.rentalCardFeeSek, 0, 5000, 30),
     missingRentalFeeSek: clampInt(snapshot.clubSettings.missingRentalFeeSek, 0, 20000, 650),
+    demoCleared: Boolean(snapshot.demoCleared),
+    competitionIds,
+  };
+  const legacyBranding = {
     portalTitle: (snapshot.clubSettings.portalTitle || '').trim().slice(0, 80),
     logoDataUrl: sanitizeCloudLogoDataUrl(snapshot.clubSettings.logoDataUrl),
     customBgColor: sanitizeCloudHexColor(snapshot.clubSettings.customBgColor),
     customTextColor: sanitizeCloudHexColor(snapshot.clubSettings.customTextColor),
     customAccentColor: sanitizeCloudHexColor(snapshot.clubSettings.customAccentColor),
-    demoCleared: Boolean(snapshot.demoCleared),
-    competitionIds,
   };
 
   let existingClubOwner: string | null = null;
@@ -1321,24 +1323,19 @@ export async function syncFullSeasonToFirestore(
     handleWriteOrOfflineError(err, OperationType.GET, clubPath);
   }
 
-  // Preserve existing non-empty branding and indexed IDs if snapshot is empty
+  // Preserve existing indexed IDs; branding is only imported when this document is first created.
   if (existingClubDoc) {
-    if (!clubMutable.logoDataUrl && typeof existingClubDoc.logoDataUrl === 'string' && existingClubDoc.logoDataUrl.length > 0) {
-      clubMutable.logoDataUrl = existingClubDoc.logoDataUrl;
-    }
-    if (!clubMutable.portalTitle && typeof existingClubDoc.portalTitle === 'string' && existingClubDoc.portalTitle.length > 0) {
-      clubMutable.portalTitle = existingClubDoc.portalTitle;
-    }
     if (clubMutable.competitionIds.length === 0 && Array.isArray(existingClubDoc.competitionIds) && existingClubDoc.competitionIds.length > 0) {
       clubMutable.competitionIds = existingClubDoc.competitionIds as string[];
     }
   }
 
-  if (!existingClubOwner) {
+  if (!existingClubDoc) {
     try {
       await setDoc(doc(db, 'clubSettings', 'default'), {
         settingId: 'default',
         ...clubMutable,
+        ...legacyBranding,
         activeEventId: snapshot.activeEventId
           ? sanitizeFirestoreId(snapshot.activeEventId, 'evt')
           : '',
@@ -4728,6 +4725,17 @@ export async function saveClubSettingsToFirestore(
     settings.customAccentColor !== undefined
       ? sanitizeCloudHexColor(settings.customAccentColor)
       : (typeof existingData?.customAccentColor === 'string' ? existingData.customAccentColor : '');
+  const brandingPatch = {
+    ...(settings.portalTitle === undefined
+      ? {}
+      : { portalTitle: settings.portalTitle.trim().slice(0, 80) }),
+    ...(settings.logoDataUrl === undefined
+      ? {}
+      : { logoDataUrl: sanitizeCloudLogoDataUrl(settings.logoDataUrl) }),
+    ...(settings.customBgColor === undefined ? {} : { customBgColor }),
+    ...(settings.customTextColor === undefined ? {} : { customTextColor }),
+    ...(settings.customAccentColor === undefined ? {} : { customAccentColor }),
+  };
   const seriesScoringSettings =
     settings.seriesScoringSettings === undefined
       ? undefined
@@ -4742,11 +4750,7 @@ export async function saveClubSettingsToFirestore(
       defaultDirectEntryFeeSek,
       rentalCardFeeSek,
       missingRentalFeeSek,
-      portalTitle,
-      logoDataUrl,
-      customBgColor,
-      customTextColor,
-      customAccentColor,
+      ...brandingPatch,
       ...(seriesScoringSettings === undefined ? {} : { seriesScoringSettings }),
       updatedAt: serverTimestamp(),
     });

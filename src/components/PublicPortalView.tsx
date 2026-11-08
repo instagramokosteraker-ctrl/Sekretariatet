@@ -35,6 +35,7 @@ import { applyClubThemeToDocument } from '../utils/clubTheme';
 import {
   loadFullSeasonFromFirestore,
   loadPublicRaceFromFirestore,
+  subscribeClubSettingsFromFirestore,
   subscribePublicCompetitionSummaries,
 } from '../firebase';
 import { apiWebSocketUrl } from '../services/authClient';
@@ -61,6 +62,7 @@ export function PublicPortalView({
     CompetitionSummary[]
   >([]);
   const [seasonClubSettings, setSeasonClubSettings] = useState<ClubSettings | null>(null);
+  const [firestoreBranding, setFirestoreBranding] = useState<Partial<ClubSettings> | null>(null);
   const [seasonSeriesStandings, setSeasonSeriesStandings] = useState<SeriesStandingsBundle[]>([]);
   const [selectedSeriesName, setSelectedSeriesName] = useState<string>('');
   const [selectedSeriesClass, setSelectedSeriesClass] = useState<string>('');
@@ -214,6 +216,20 @@ export function PublicPortalView({
     );
   }, [shortCode]);
 
+  useEffect(
+    () =>
+      subscribeClubSettingsFromFirestore((settings) => {
+        setFirestoreBranding({
+          portalTitle: settings.portalTitle,
+          logoDataUrl: settings.logoDataUrl,
+          customBgColor: settings.customBgColor,
+          customTextColor: settings.customTextColor,
+          customAccentColor: settings.customAccentColor,
+        });
+      }),
+    []
+  );
+
   useEffect(() => {
     if (seasonSeriesStandings.length === 0) {
       setSelectedSeriesName('');
@@ -293,7 +309,10 @@ export function PublicPortalView({
     };
   }, [publicEventUrl]);
 
-  const effectiveClubSettings = raceData?.clubSettings ?? seasonClubSettings;
+  const effectiveClubSettings = useMemo(() => {
+    const settings = raceData?.clubSettings ?? seasonClubSettings;
+    return firestoreBranding ? { ...settings, ...firestoreBranding } : settings;
+  }, [firestoreBranding, raceData?.clubSettings, seasonClubSettings]);
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
 
   useEffect(() => {

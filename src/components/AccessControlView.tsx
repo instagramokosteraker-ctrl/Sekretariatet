@@ -239,11 +239,7 @@ export function AccessControlView({
   const anyEventHasFees = Boolean(enableFeesAndSwish);
 
   useEffect(() => {
-    setClubForm((prev) => ({
-      ...clubSettings,
-      logoDataUrl: clubSettings.logoDataUrl || prev.logoDataUrl || '',
-      portalTitle: clubSettings.portalTitle || prev.portalTitle || '',
-    }));
+    setClubForm(clubSettings);
     setLogoPreviewBroken(false);
   }, [clubSettings]);
 
@@ -1337,28 +1333,12 @@ export function AccessControlView({
     setClubBusy(true);
     setClubNotice(null);
     try {
-      if (onUpdateClubSettings) {
-        onUpdateClubSettings(clubForm);
+      if (!auth.currentUser) {
+        throw new Error('Logga in med Google för att spara klubbinställningar i Firestore.');
       }
+      await saveClubSettingsToFirestore(clubForm, isSuperAdmin);
+      onUpdateClubSettings?.(clubForm);
       applyClubThemeToDocument(clubForm, false);
-
-      let savedToFirestore = false;
-      if (auth.currentUser) {
-        try {
-          await saveClubSettingsToFirestore(clubForm, isSuperAdmin);
-          savedToFirestore = true;
-        } catch (cloudErr) {
-          console.warn('Firestore club save error:', cloudErr);
-          const msg = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
-          if (msg.includes('permission-denied') || msg.includes('under /admins')) {
-            setClubNotice({
-              ok: false,
-              msg,
-            });
-            return;
-          }
-        }
-      }
 
       try {
         const res = await apiFetch('/api/club-settings', {
@@ -1370,12 +1350,6 @@ export function AccessControlView({
           const stateRes = await apiFetch('/api/state');
           if (stateRes.ok) {
             const snap = (await stateRes.json()) as MeosAppState;
-            if (snap.clubSettings) {
-              snap.clubSettings.logoDataUrl =
-                snap.clubSettings.logoDataUrl || clubForm.logoDataUrl || '';
-              snap.clubSettings.portalTitle =
-                snap.clubSettings.portalTitle || clubForm.portalTitle || '';
-            }
             onApplyStateSnapshot(snap);
           }
         }
@@ -1385,9 +1359,7 @@ export function AccessControlView({
 
       setClubNotice({
         ok: true,
-        msg: savedToFirestore
-          ? 'Sparade klubbprofil, logotyp, utseende och Swish-inställningar i Firestore.'
-          : 'Sparade klubbprofil, logotyp och grundutseende.',
+        msg: 'Sparade klubbprofil, logotyp, utseende och Swish-inställningar i Firestore.',
       });
     } catch (err) {
       setClubNotice({
@@ -1574,7 +1546,10 @@ export function AccessControlView({
       }
 
       if (auth.currentUser) {
-        await saveClubSettingsToFirestore(nextSettings, isSuperAdmin);
+        await saveClubSettingsToFirestore(
+          { seriesScoringSettings: nextSettings.seriesScoringSettings },
+          isSuperAdmin
+        );
         const cloudSnapshot = await loadFullSeasonFromFirestore();
         if (cloudSnapshot) {
           onApplySeriesScoringUpdate(
@@ -1657,7 +1632,10 @@ export function AccessControlView({
       }
 
       if (auth.currentUser) {
-        await saveClubSettingsToFirestore(nextSettings, isSuperAdmin);
+        await saveClubSettingsToFirestore(
+          { seriesScoringSettings: nextSettings.seriesScoringSettings },
+          isSuperAdmin
+        );
         const cloudSnapshot = await loadFullSeasonFromFirestore();
         if (cloudSnapshot) {
           onApplySeriesScoringUpdate(
@@ -1761,7 +1739,10 @@ export function AccessControlView({
 
       if (auth.currentUser) {
         firestoreSettingsSaveAttempted = true;
-        await saveClubSettingsToFirestore(nextSettings, isSuperAdmin);
+        await saveClubSettingsToFirestore(
+          { seriesScoringSettings: nextSettings.seriesScoringSettings },
+          isSuperAdmin
+        );
         const cloudSnapshot = await loadFullSeasonFromFirestore();
         if (cloudSnapshot) {
           onApplySeriesScoringUpdate(
@@ -1825,7 +1806,10 @@ export function AccessControlView({
       }
       if (firestoreSettingsSaveAttempted && auth.currentUser) {
         try {
-          await saveClubSettingsToFirestore(oldSettings, isSuperAdmin);
+          await saveClubSettingsToFirestore(
+            { seriesScoringSettings: oldSettings.seriesScoringSettings },
+            isSuperAdmin
+          );
         } catch (rollbackError) {
           rollbackErrors.push(
             rollbackError instanceof Error

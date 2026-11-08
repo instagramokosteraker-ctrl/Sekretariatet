@@ -909,8 +909,15 @@ export default function App() {
       setClubSettings((prev) => ({
         ...prev,
         ...snap.clubSettings,
-        logoDataUrl: snap.clubSettings?.logoDataUrl || prev.logoDataUrl || '',
-        portalTitle: snap.clubSettings?.portalTitle || prev.portalTitle || '',
+        ...(firebaseUserUid
+          ? {
+              portalTitle: prev.portalTitle,
+              logoDataUrl: prev.logoDataUrl,
+              customBgColor: prev.customBgColor,
+              customTextColor: prev.customTextColor,
+              customAccentColor: prev.customAccentColor,
+            }
+          : {}),
       }));
     }
     if (snap.seriesStandings) setSeriesStandings(snap.seriesStandings);
@@ -1199,12 +1206,6 @@ export default function App() {
             expRes,
             'Kunde inte hämta säsongsdata från servern för Firestore-synkronisering.'
           );
-          if (clubSettings.logoDataUrl && !snapshot.clubSettings?.logoDataUrl) {
-            snapshot.clubSettings.logoDataUrl = clubSettings.logoDataUrl;
-          }
-          if (clubSettings.portalTitle && !snapshot.clubSettings?.portalTitle) {
-            snapshot.clubSettings.portalTitle = clubSettings.portalTitle;
-          }
           await syncFullSeasonToFirestore(
             snapshot,
             authSession.user.adminTier === 'SUPER_ADMIN'
