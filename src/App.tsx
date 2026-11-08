@@ -914,6 +914,7 @@ export default function App() {
               customBgColor: prev.customBgColor,
               customTextColor: prev.customTextColor,
               customAccentColor: prev.customAccentColor,
+              eventorOrgId: prev.eventorOrgId,
             }
           : {}),
       }));

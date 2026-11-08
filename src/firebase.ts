@@ -1294,7 +1294,6 @@ export async function syncFullSeasonToFirestore(
   const clubPath = 'clubSettings/default';
   const clubMutable = {
     clubName: (snapshot.clubSettings.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
-    eventorOrgId: (snapshot.clubSettings.eventorOrgId || '').trim().slice(0, 32),
     defaultDirectEntryFeeSek: clampInt(
       snapshot.clubSettings.defaultDirectEntryFeeSek,
       0,
@@ -1338,6 +1337,7 @@ export async function syncFullSeasonToFirestore(
       await setDoc(doc(db, 'clubSettings', 'default'), {
         settingId: 'default',
         ...clubMutable,
+        eventorOrgId: (snapshot.clubSettings.eventorOrgId || '').trim().slice(0, 32),
         ...legacyBranding,
         activeEventId: snapshot.activeEventId
           ? sanitizeFirestoreId(snapshot.activeEventId, 'evt')
