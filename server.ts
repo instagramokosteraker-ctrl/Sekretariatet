@@ -84,6 +84,7 @@ interface CompetitionMeta {
   zeroTimeSec: number;
   arenaInfo: string;
   seriesName?: string;
+  allowSelfRegistration?: boolean;
   feeTrackingEnabled?: boolean;
 }
 
@@ -399,6 +400,7 @@ interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
+    allowSelfRegistration?: boolean;
     feeTrackingEnabled: boolean;
   };
   courses: Course[];
@@ -2277,6 +2279,7 @@ function buildCompetitionsSummaryList(seasonDb: SeasonDatabase): CompetitionSumm
       zeroTimeStr: ev.competition.zeroTimeStr,
       arenaInfo: ev.competition.arenaInfo || '',
       seriesName: ev.competition.seriesName || '',
+      allowSelfRegistration: Boolean(ev.competition.allowSelfRegistration),
       feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       competitorCount: ev.competitors.length,
       finishedCount: ev.competitors.filter(
@@ -3478,6 +3481,7 @@ async function startServer() {
           zeroTimeSec: zeroSec,
           arenaInfo: item.competition.arenaInfo || '',
           seriesName: item.competition.seriesName || '',
+          allowSelfRegistration: Boolean(item.competition.allowSelfRegistration),
           feeTrackingEnabled: Boolean(
             item.competition.feeTrackingEnabled ??
               (item.competition as typeof item.competition & {
@@ -3757,6 +3761,68 @@ async function startServer() {
     seasonDb.demoCleared = false;
     persistUserMutation();
     broadcastFullState(shortCode);
+    res.status(201).json(buildFullStatePayload());
+  });
+
+  app.post('/api/competitions/:id/mirror', (req, res) => {
+    if (!requireAdminRequest(req, res)) return;
+    const body = req.body as {
+      competition?: CompetitionMeta;
+      courses?: Course[];
+      classes?: CompClass[];
+    };
+    const competitionId = req.params.id;
+    const competition = body.competition;
+    if (
+      !competition ||
+      competition.id !== competitionId ||
+      !competition.name?.trim() ||
+      !competition.organizer?.trim() ||
+      !competition.date?.trim() ||
+      !competition.shortCode?.trim() ||
+      !Array.isArray(body.courses) ||
+      !Array.isArray(body.classes)
+    ) {
+      res.status(400).json({ error: 'Ogiltiga tävlingsdata för kompatibilitetsspegling.' });
+      return;
+    }
+    if (seasonDb.eventsMap[competitionId]) {
+      res.status(409).json({ error: 'Tävlingen finns redan i Express-spegeln.' });
+      return;
+    }
+    const status =
+      competition.status === 'LIVE' ||
+      competition.status === 'UPCOMING' ||
+      competition.status === 'COMPLETED'
+        ? competition.status
+        : 'UPCOMING';
+    const record: SingleEventRecord = {
+      competition: {
+        ...competition,
+        id: competitionId,
+        status,
+        zeroTimeStr: competition.zeroTimeStr || '18:00:00',
+        zeroTimeSec: Number.isFinite(competition.zeroTimeSec)
+          ? competition.zeroTimeSec
+          : parseClockStrToSec(competition.zeroTimeStr || '18:00:00') ?? 64800,
+        arenaInfo: competition.arenaInfo || '',
+        seriesName: competition.seriesName || '',
+        feeTrackingEnabled: Boolean(competition.feeTrackingEnabled),
+      },
+      courses: body.courses,
+      classes: body.classes,
+      stations: buildDefaultStations(new Date().toISOString()),
+      competitors: [],
+      emergency: { brokenControls: [], controlTimeOffsets: {} },
+      roc: buildDefaultRocStatus('1046'),
+      events: [],
+      processedClientIds: [],
+    };
+    seasonDb.eventsMap[competitionId] = record;
+    seasonDb.activeEventId = competitionId;
+    seasonDb.demoCleared = false;
+    persistUserMutation();
+    broadcastFullState(record.competition.shortCode);
     res.status(201).json(buildFullStatePayload());
   });
 

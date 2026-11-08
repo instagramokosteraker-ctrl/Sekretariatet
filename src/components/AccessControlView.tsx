@@ -517,45 +517,66 @@ export function AccessControlView({
     setEventBusyId(ev.id);
     setEventsNotice(null);
     try {
-      let res: Response | null = null;
-      try {
-        res = await apiFetch(`/api/competitions/${encodeURIComponent(ev.id)}/duplicate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-      } catch (error) {
-        if (!(error instanceof TypeError)) throw error;
-      }
-
-      if (res?.ok) {
-        const snap = (await res.json()) as MeosAppState;
-        onApplyStateSnapshot(snap);
-      } else {
-        if (res && res.status !== 404 && res.status !== 405) {
-          const errorBody = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(errorBody.error ?? 'Kunde inte duplicera tävlingen.');
-        }
+      if (firebaseReadyUser) {
         const cloudSnap = await loadFullSeasonFromFirestore({ competitionId: ev.id });
         const source = cloudSnap?.events.find((item) => item.competition.id === ev.id);
         if (!source) throw new Error('Tävlingen hittades inte i Firestore.');
         const suffix = Date.now().toString().slice(-6);
-        await createCompetitionInFirestore({
-          competitionId: `evt-copy-${Date.now()}`,
+        const competitionId = `evt-copy-${Date.now()}`;
+        const duplicatedCompetition = {
+          ...source.competition,
+          id: competitionId,
           shortCode: `${source.competition.shortCode.slice(0, 20)}-${suffix}`,
           name: `${source.competition.name} (kopia)`.slice(0, 140),
-          organizer: source.competition.organizer,
           date: getStockholmTodayIso(),
+          status: 'UPCOMING' as const,
+          statusOverride: false,
+        };
+        await createCompetitionInFirestore({
+          competitionId,
+          shortCode: duplicatedCompetition.shortCode,
+          name: duplicatedCompetition.name,
+          organizer: source.competition.organizer,
+          date: duplicatedCompetition.date,
           status: 'UPCOMING',
           zeroTimeStr: source.competition.zeroTimeStr,
           zeroTimeSec: source.competition.zeroTimeSec,
           arenaInfo: source.competition.arenaInfo,
           seriesName: source.competition.seriesName,
+          allowSelfRegistration: source.competition.allowSelfRegistration,
           feeTrackingEnabled: source.competition.feeTrackingEnabled,
           courses: source.courses,
           classes: source.classes,
         });
+        const mirrorResponse = await apiFetch(
+          `/api/competitions/${encodeURIComponent(competitionId)}/mirror`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              competition: duplicatedCompetition,
+              courses: source.courses,
+              classes: source.classes,
+            }),
+          }
+        ).catch((error: unknown) => {
+          if (error instanceof TypeError) return null;
+          throw error;
+        });
+        if (mirrorResponse && !mirrorResponse.ok && mirrorResponse.status !== 404) {
+          console.warn(
+            `Tävlingen duplicerades i Firestore men Express-spegeln svarade HTTP ${mirrorResponse.status}.`
+          );
+        }
         await loadCloudCompetitions();
+      } else {
+        const res = await apiFetch(`/api/competitions/${encodeURIComponent(ev.id)}/duplicate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        await ensureApiResponseOk(res, 'Kunde inte duplicera tävlingen.');
+        onApplyStateSnapshot((await res.json()) as MeosAppState);
       }
       setEventsNotice({
         ok: true,
@@ -575,66 +596,40 @@ export function AccessControlView({
     setEventBusyId(ev.id);
     setEventsNotice(null);
     try {
-      let removedFromServer = false;
-      let serverError = '';
-      try {
-        const res = await apiFetch(`/api/competitions/${encodeURIComponent(ev.id)}`, {
-          method: 'DELETE',
-        });
-        if (res.ok) {
-          const body = await res.text();
-          if (body.trim() && res.headers.get('content-type')?.includes('application/json')) {
-            try {
-              onApplyStateSnapshot(JSON.parse(body) as MeosAppState);
-            } catch {
-              serverError = 'Tävlingsservern returnerade ett ogiltigt svar efter radering.';
-            }
-          }
-          removedFromServer = !body.trim() || Boolean(
-            res.headers.get('content-type')?.includes('application/json') && !serverError
-          );
-        } else {
-          const body = await res.text();
-          if (res.status !== 404 && !res.headers.get('content-type')?.includes('text/html')) {
-            try {
-              const data = JSON.parse(body) as { error?: string };
-              serverError = data.error || body.trim().slice(0, 240);
-            } catch {
-              serverError = body.trim().slice(0, 240);
-            }
-          }
-        }
-      } catch (error) {
-        serverError = error instanceof Error ? error.message : String(error);
-      }
-
-      let removedFromCloud = false;
-      let cloudError = '';
       if (firebaseReadyUser) {
+        await deleteCompetitionFromFirestore(ev.id);
+        await loadCloudCompetitions();
         try {
-          await deleteCompetitionFromFirestore(ev.id);
-          removedFromCloud = true;
-          await loadCloudCompetitions();
+          const mirrorResponse = await apiFetch(
+            `/api/competitions/${encodeURIComponent(ev.id)}`,
+            { method: 'DELETE' }
+          );
+          if (!mirrorResponse.ok && mirrorResponse.status !== 404) {
+            console.warn(
+              `Tävlingen raderades från Firestore men Express-spegeln svarade HTTP ${mirrorResponse.status}.`
+            );
+          }
         } catch (error) {
-          cloudError = error instanceof Error ? error.message : String(error);
+          console.warn('Tävlingen raderades från Firestore men Express-spegeln kunde inte nås:', error);
         }
-      }
-
-      if (!removedFromServer && !removedFromCloud) {
-        throw new Error(
-          [cloudError, serverError].filter(Boolean).join(' ') || 'Kunde inte radera tävlingen.'
+      } else {
+        const response = await apiFetch(
+          `/api/competitions/${encodeURIComponent(ev.id)}`,
+          { method: 'DELETE' }
         );
+        if (!response.ok) {
+          await ensureApiResponseOk(response, 'Kunde inte radera tävlingen.');
+        }
+        const body = await response.text();
+        if (body && response.headers.get('content-type')?.includes('application/json')) {
+          onApplyStateSnapshot(JSON.parse(body) as MeosAppState);
+        }
       }
 
       setConfirmDeleteEventId(null);
       setEventsNotice({
         ok: true,
-        msg:
-          removedFromServer && removedFromCloud
-            ? `Raderade "${ev.name}" från tävlingsservern och Firestore.`
-            : removedFromCloud
-            ? `Raderade "${ev.name}" från Firestore.${serverError ? ` Tävlingsservern svarade: ${serverError}` : ''}`
-            : `Raderade "${ev.name}" från tävlingsservern, men inte från Firestore.${cloudError ? ` ${cloudError}` : ''}`,
+        msg: `Raderade "${ev.name}"${firebaseReadyUser ? ' från Firestore' : ''}.`,
       });
     } catch (error) {
       setEventsNotice({

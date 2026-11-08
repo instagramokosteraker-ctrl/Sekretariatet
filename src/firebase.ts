@@ -43,6 +43,7 @@ import type {
   ClubAdminTier,
   ClubSettings,
   CompClass,
+  CompetitionMeta,
   CompetitionSummary,
   Competitor,
   Course,
@@ -1168,6 +1169,7 @@ export async function updateCompetitionMetadataInFirestore(
     zeroTimeSec?: number;
     arenaInfo?: string;
     seriesName?: string;
+    allowSelfRegistration?: boolean;
     feeTrackingEnabled?: boolean;
   }
 ): Promise<void> {
@@ -1211,6 +1213,9 @@ export async function updateCompetitionMetadataInFirestore(
   }
   if ('arenaInfo' in patch) mutable.arenaInfo = (patch.arenaInfo || '').trim().slice(0, 500);
   if ('seriesName' in patch) mutable.seriesName = (patch.seriesName || '').trim().slice(0, 80);
+  if ('allowSelfRegistration' in patch) {
+    mutable.allowSelfRegistration = Boolean(patch.allowSelfRegistration);
+  }
   if ('feeTrackingEnabled' in patch) {
     mutable.feeTrackingEnabled = Boolean(patch.feeTrackingEnabled);
   }
@@ -1318,9 +1323,14 @@ export async function syncFullSeasonToFirestore(
 
   // Preserve Firestore-owned settings while retaining the legacy initial seed behavior.
   if (existingClubDoc) {
-    if (clubMutable.competitionIds.length === 0 && Array.isArray(existingClubDoc.competitionIds) && existingClubDoc.competitionIds.length > 0) {
-      clubMutable.competitionIds = existingClubDoc.competitionIds as string[];
-    }
+    const existingCompetitionIds = Array.isArray(existingClubDoc.competitionIds)
+      ? existingClubDoc.competitionIds.filter(
+          (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
+        )
+      : [];
+    clubMutable.competitionIds = Array.from(
+      new Set([...existingCompetitionIds, ...clubMutable.competitionIds])
+    ).slice(0, 100);
   }
 
   if (!existingClubDoc) {
@@ -1411,6 +1421,7 @@ export async function syncFullSeasonToFirestore(
       statusOverride: Boolean(ev.competition.statusOverride),
       arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
       seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
+      allowSelfRegistration: Boolean(ev.competition.allowSelfRegistration),
       feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       competitorCount,
       finishedCount,
@@ -1423,7 +1434,13 @@ export async function syncFullSeasonToFirestore(
     };
 
     const compPath = `competitions/${competitionId}`;
-    let existingComp: { status?: string; ownerUid?: string } | null = null;
+    let existingComp: {
+      status?: string;
+      statusOverride?: boolean;
+      date?: string;
+      zeroTimeStr?: string;
+      ownerUid?: string;
+    } | null = null;
     try {
       const snap = await getDoc(doc(db, 'competitions', competitionId));
       if (snap.exists()) {
@@ -1433,6 +1450,12 @@ export async function syncFullSeasonToFirestore(
       handleWriteOrOfflineError(err, OperationType.GET, compPath);
     }
 
+    const canMirrorDerivedStatus = Boolean(
+      existingComp &&
+        existingComp.statusOverride !== true &&
+        existingComp.date === compMutableBase.date &&
+        existingComp.zeroTimeStr === compMutableBase.zeroTimeStr
+    );
     if (existingComp) {
       const isOwner = existingComp.ownerUid === ownerUid;
       const isManualReopen =
@@ -1445,16 +1468,20 @@ export async function syncFullSeasonToFirestore(
     }
 
     // Create parent competition first if missing so subcollection Master Gate exists() passes
-    const deferCompletedLock = !isSuperAdmin && targetStatus === 'COMPLETED';
     if (!existingComp) {
       try {
-        await setDoc(doc(db, 'competitions', competitionId), {
-          competitionId,
-          ...compMutableBase,
-          status: deferCompletedLock ? 'LIVE' : targetStatus,
-          ownerUid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+        const competitionRef = doc(db, 'competitions', competitionId);
+        await runTransaction(db, async (transaction) => {
+          const current = await transaction.get(competitionRef);
+          if (current.exists()) return;
+          transaction.set(competitionRef, {
+            competitionId,
+            ...compMutableBase,
+            status: targetStatus,
+            ownerUid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
         });
       } catch (err) {
         handleWriteOrOfflineError(err, OperationType.CREATE, compPath);
@@ -1624,12 +1651,21 @@ export async function syncFullSeasonToFirestore(
       await commitQueuedBatchOps(childOps);
     }
 
-    // Update parent competition metadata (or finalize deferred COMPLETED lock)
-    if (existingComp || deferCompletedLock) {
+    // Keep derived counts and emergency settings mirrored without changing canonical metadata.
+    if (existingComp) {
       try {
         await updateDoc(doc(db, 'competitions', competitionId), {
-          ...compMutableBase,
-          status: targetStatus,
+          competitorCount,
+          finishedCount,
+          ...(canMirrorDerivedStatus ? { status: targetStatus } : {}),
+          brokenControls: compMutableBase.brokenControls,
+          ...(ev.emergency
+            ? {
+                controlTimeOffsets: normalizeControlTimeOffsets(
+                  ev.emergency.controlTimeOffsets
+                ),
+              }
+            : {}),
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
@@ -2067,6 +2103,7 @@ export async function loadFullSeasonFromFirestore(options?: {
         zeroTimeSec: Number(compDocData.zeroTimeSec ?? 36000),
         arenaInfo: String(compDocData.arenaInfo || ''),
         seriesName: String(compDocData.seriesName || ''),
+        allowSelfRegistration: Boolean(compDocData.allowSelfRegistration),
         feeTrackingEnabled: Boolean(
           compDocData.feeTrackingEnabled ?? compDocData.enableFeesAndSwish
         ),
@@ -4579,6 +4616,54 @@ export function subscribePublicCompetitionSummaries(
   };
 }
 
+export function subscribeCompetitionMetadataFromFirestore(
+  competitionId: string,
+  onUpdate: (competition: CompetitionMeta | null) => void,
+  onError: (error: Error) => void
+): () => void {
+  const id = sanitizeFirestoreId(competitionId, 'evt');
+  return onSnapshot(
+    doc(db, 'competitions', id),
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        onUpdate(null);
+        return;
+      }
+      const data = snapshot.data();
+      const status =
+        data.status === 'LIVE' ||
+        data.status === 'UPCOMING' ||
+        data.status === 'COMPLETED'
+          ? data.status
+          : 'UPCOMING';
+      onUpdate({
+        id,
+        shortCode: typeof data.shortCode === 'string' ? data.shortCode : '',
+        status,
+        statusOverride: Boolean(data.statusOverride),
+        name: typeof data.name === 'string' ? data.name : 'Tävling',
+        organizer: typeof data.organizer === 'string' ? data.organizer : '',
+        date:
+          typeof data.date === 'string' && ISO_DATE_REGEX.test(data.date)
+            ? data.date
+            : getStockholmTodayIso(),
+        zeroTimeStr:
+          typeof data.zeroTimeStr === 'string' && CLOCK_REGEX.test(data.zeroTimeStr)
+            ? data.zeroTimeStr
+            : '18:00:00',
+        zeroTimeSec: clampInt(data.zeroTimeSec, 0, 86400, 64800),
+        arenaInfo: typeof data.arenaInfo === 'string' ? data.arenaInfo : '',
+        seriesName: typeof data.seriesName === 'string' ? data.seriesName : '',
+        allowSelfRegistration: Boolean(data.allowSelfRegistration),
+        feeTrackingEnabled: Boolean(
+          data.feeTrackingEnabled ?? data.enableFeesAndSwish
+        ),
+      });
+    },
+    onError
+  );
+}
+
 export const DEFAULT_CLUB_SETTINGS: ClubSettings = {
   clubName: 'OK Österåker',
   eventorOrgId: '',
@@ -4784,7 +4869,13 @@ export async function createCompetitionInFirestore(
   };
 
   const compRef = doc(db, 'competitions', competitionId);
-  await setDoc(compRef, compDocData);
+  await runTransaction(db, async (transaction) => {
+    const existing = await transaction.get(compRef);
+    if (existing.exists()) {
+      throw new Error('Tävlings-ID:t finns redan i Firestore.');
+    }
+    transaction.set(compRef, compDocData);
+  });
 
   // Child subcollections: courses and classes
   const childBatchOps: QueuedBatchOp[] = [];

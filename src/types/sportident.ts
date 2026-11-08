@@ -504,6 +504,7 @@ export interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
+    allowSelfRegistration?: boolean;
     feeTrackingEnabled: boolean;
   };
   courses: Course[];

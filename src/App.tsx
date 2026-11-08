@@ -118,6 +118,7 @@ import {
   googleProvider,
   resolveFirebaseUserRole,
   subscribePublicCompetitionSummaries,
+  subscribeCompetitionMetadataFromFirestore,
   loadClubSettingsFromFirestore,
   subscribeClubSettingsFromFirestore,
   subscribeActiveEventIdFromFirestore,
@@ -259,6 +260,49 @@ async function apiRequestUnavailable(
   if (response.status === 404 || response.status === 405) return true;
   await ensureApiResponseOk(response, fallbackMessage);
   return false;
+}
+
+async function mirrorCompetitionMetadataToExpress(
+  competitionId: string,
+  patch: Partial<CompetitionMeta>
+): Promise<void> {
+  try {
+    const response = await apiFetch(
+      `/api/competitions/${encodeURIComponent(competitionId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }
+    );
+    if (response.status === 404 || response.status === 405) return;
+    await ensureApiResponseOk(response, 'Tävlingsändringen sparades i Firestore men kunde inte speglas till servern.');
+  } catch (error) {
+    console.warn('Tävlingsmetadata sparades i Firestore men Express-spegeln kunde inte uppdateras:', error);
+  }
+}
+
+async function mirrorNewCompetitionToExpress(params: {
+  competition: CompetitionMeta;
+  courses: Course[];
+  classes: CompClass[];
+}): Promise<void> {
+  const competitionId = params.competition.id;
+  if (!competitionId) return;
+  try {
+    const response = await apiFetch(
+      `/api/competitions/${encodeURIComponent(competitionId)}/mirror`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      }
+    );
+    if (response.status === 404 || response.status === 405) return;
+    await ensureApiResponseOk(response, 'Tävlingen skapades i Firestore men kunde inte speglas till servern.');
+  } catch (error) {
+    console.warn('Tävlingen skapades i Firestore men Express-spegeln kunde inte uppdateras:', error);
+  }
 }
 
 export default function App() {
@@ -708,6 +752,18 @@ export default function App() {
   }, [activeEventId, authSession?.user.sessionKind, firebaseUserUid]);
   useEffect(() => {
     if (!firebaseUserUid || !activeEventId) return;
+    return subscribeCompetitionMetadataFromFirestore(
+      activeEventId,
+      (metadata) => {
+        if (metadata) setCompetition(metadata);
+      },
+      (error) => {
+        console.error('Kunde inte prenumerera på tävlingsmetadata från Firestore:', error);
+      }
+    );
+  }, [activeEventId, firebaseUserUid]);
+  useEffect(() => {
+    if (!firebaseUserUid || !activeEventId) return;
     return subscribeClassesFromFirestore(
       activeEventId,
       setClasses,
@@ -986,30 +1042,31 @@ export default function App() {
   }, [appendFrameLog, submitFullReadoutToServer, submitOnlinePunchToServer]);
 
   const applySnapshot = useCallback((snap: MeosAppState) => {
+    const hasFirestoreIdentity = Boolean(firebaseUserUid || auth.currentUser);
     if (
-      firebaseUserUid &&
+      hasFirestoreIdentity &&
       activeEventIdFromFirestoreRef.current &&
       snap.activeEventId !== activeEventIdRef.current
     ) {
       setLoading(false);
       return;
     }
-    if (!firebaseUserUid && snap.activeEventId !== undefined) {
+    if (!hasFirestoreIdentity && snap.activeEventId !== undefined) {
       setActiveEventId(snap.activeEventId);
     }
-    if (snap.competitionsList) {
-      setCompetitionsList(firestoreCompetitionsRef.current ?? snap.competitionsList);
+    if (snap.competitionsList && !hasFirestoreIdentity) {
+      setCompetitionsList(snap.competitionsList);
     }
-    setIsEmptySeason(Boolean(snap.isEmptySeason));
-    if (snap.isFreshColdStart !== undefined) {
+    if (!hasFirestoreIdentity) setIsEmptySeason(Boolean(snap.isEmptySeason));
+    if (!hasFirestoreIdentity && snap.isFreshColdStart !== undefined) {
       setIsFreshColdStart(Boolean(snap.isFreshColdStart));
     }
-    setDemoCleared(Boolean(snap.demoCleared));
+    if (!hasFirestoreIdentity) setDemoCleared(Boolean(snap.demoCleared));
     if (snap.clubSettings) {
       setClubSettings((prev) => ({
         ...prev,
         ...snap.clubSettings,
-        ...(firebaseUserUid
+        ...(hasFirestoreIdentity
           ? {
               portalTitle: prev.portalTitle,
               logoDataUrl: prev.logoDataUrl,
@@ -1027,16 +1084,16 @@ export default function App() {
       }));
     }
     if (snap.seriesStandings) setSeriesStandings(snap.seriesStandings);
-    setCompetition(snap.competition);
-    if (!firebaseUserUid && !auth.currentUser) {
+    if (!hasFirestoreIdentity) setCompetition(snap.competition);
+    if (!hasFirestoreIdentity) {
       setCourses(snap.courses);
     }
-    if (!firebaseUserUid && !auth.currentUser) {
+    if (!hasFirestoreIdentity) {
       setClasses(snap.classes);
     }
     setStations(snap.stations);
     setCompetitors(snap.competitors);
-    if (!firebaseUserUid && !auth.currentUser) {
+    if (!hasFirestoreIdentity) {
       setRunnerDb(snap.runnerDb ?? []);
     }
     if (snap.eventor) setEventor(snap.eventor);
@@ -1414,18 +1471,8 @@ export default function App() {
       feeTrackingEnabled?: boolean;
     }
   ) => {
-    const useFirestore = await apiRequestUnavailable(
-      `/api/competitions/${encodeURIComponent(eventId)}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      },
-      'Kunde inte uppdatera tävlingen.'
-    );
-    if (useFirestore || (patch.status !== undefined && firebaseUserPresent)) {
-      await updateCompetitionMetadataInFirestore(eventId, patch);
-    }
+    await updateCompetitionMetadataInFirestore(eventId, patch);
+    await mirrorCompetitionMetadataToExpress(eventId, patch);
     const savedPatch = {
       ...patch,
       ...(patch.status ? { statusOverride: true } : {}),
@@ -1658,126 +1705,148 @@ export default function App() {
           })
         : null;
 
-      let snap: MeosAppState | null = null;
-      try {
-        const res = await apiFetch('/api/competitions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: newEvtName.trim(),
-            organizer: clubSettings.clubName || 'OK Österåker',
-            date: newEvtDate,
-            zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
-            arenaInfo: newEvtArena.trim(),
-            seriesName: newEvtSeriesName.trim(),
-            feeTrackingEnabled: newEvtFeeTracking,
-            copyCoursesFromActive:
-              !effectiveCourseImport && !isEmptySeason && newEvtCopyCourses,
-            ...(effectiveCourseImport
-              ? {
-                  importedCourses: effectiveCourseImport.courses,
-                  importedClasses: effectiveCourseImport.classes,
-                }
-              : {}),
-          }),
-        });
-        if (res.ok) {
-          snap = (await res.json()) as MeosAppState;
-          applySnapshot(snap);
-        }
-      } catch {
-        // Express backend not available (e.g. running on Vercel)
-      }
-
-      const compId = snap?.competition?.id || snap?.activeEventId || `evt-${Date.now()}`;
-      const sc = snap?.competition?.shortCode || `oko${Math.floor(1000 + Math.random() * 9000)}`;
-      const importedCourses: Course[] = effectiveCourseImport
-        ? effectiveCourseImport.courses.map((c, idx) => ({
-            id: `crs-${idx + 1}`,
-            name: c.name,
-            lengthMeters: c.lengthMeters,
-            climbMeters: c.climbMeters,
-            controls: c.controls,
-          }))
-        : [];
-      const importedClasses: CompClass[] = effectiveCourseImport
-        ? effectiveCourseImport.classes.map((cls, idx) => {
-            const matched = importedCourses.find((c) => c.name === cls.courseName);
-            return {
-              id: `cls-${idx + 1}`,
-              name: cls.name,
-              courseId: matched ? matched.id : null,
-              classFormat: cls.classFormat || 'STANDARD',
-              allowDirectEntry: true,
-              freeStart: cls.freeStart ?? true,
-              autoMatchCourse: cls.autoMatchCourse ?? true,
-              feeSek: 100,
-            };
-          })
-        : [];
-
-      // ATOMIC FIRESTORE STORAGE: Guarantees all 23 schema fields without undefined
-      if (auth.currentUser) {
-        await createCompetitionInFirestore({
-          competitionId: compId,
-          shortCode: sc,
-          name: newEvtName.trim(),
-          organizer: clubSettings.clubName || 'OK Österåker',
-          date: newEvtDate,
-          status: 'UPCOMING',
-          zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
-          zeroTimeSec: parseTimeToSec(newEvtZeroTime),
-          arenaInfo: newEvtArena.trim(),
-          seriesName: newEvtSeriesName.trim(),
-          allowSelfRegistration: newEvtSelfReg,
-          feeTrackingEnabled: newEvtFeeTracking,
-          courses: snap ? snap.courses : importedCourses,
-          classes: snap ? snap.classes : importedClasses,
-        });
-      } else if (!snap) {
+      if (!auth.currentUser) {
         throw new Error('Du måste vara inloggad med Google för att skapa tävling i Firestore.');
       }
 
-      if (!snap) {
-        const newComp: CompetitionMeta = {
+      const createdAt = Date.now();
+      const compId = `evt-${createdAt}`;
+      const usedShortCodes = new Set(competitionsList.map((item) => item.shortCode.toLowerCase()));
+      let suffix = createdAt.toString().slice(-6);
+      let sc = `oko${suffix}`;
+      while (usedShortCodes.has(sc.toLowerCase())) {
+        suffix = `${Number(suffix) + 1}`.slice(-6);
+        sc = `oko${suffix}`;
+      }
+
+      const importedCourses: Course[] =
+        effectiveCourseImport?.courses.length
+          ? effectiveCourseImport.courses.map((course, index) => ({
+              id: `crs-${createdAt}-${index + 1}`,
+              name: course.name,
+              lengthMeters: course.lengthMeters,
+              climbMeters: course.climbMeters,
+              controls: [...course.controls],
+            }))
+          : [];
+      const shouldCopyCourses =
+        !effectiveCourseImport &&
+        !isEmptySeason &&
+        newEvtCopyCourses &&
+        courses.length > 0;
+      const newCourses: Course[] = importedCourses.length
+        ? importedCourses
+        : shouldCopyCourses
+          ? courses.map((course) => ({ ...course, controls: [...course.controls] }))
+          : [
+              {
+                id: `crs-${createdAt}-1`,
+                name: 'Bana A — Lång (5,0 km)',
+                lengthMeters: 5000,
+                climbMeters: 120,
+                controls: [31, 42, 55, 100],
+              },
+              {
+                id: `crs-${createdAt}-2`,
+                name: 'Bana B — Kort / Öppen (2,8 km)',
+                lengthMeters: 2800,
+                climbMeters: 60,
+                controls: [32, 42, 100],
+              },
+            ];
+      const importedClasses: CompClass[] =
+        importedCourses.length && effectiveCourseImport?.classes.length
+          ? effectiveCourseImport.classes.map((cls, index) => {
+              const linkedCourse = newCourses.find(
+                (course) => course.name.toLowerCase() === cls.courseName?.toLowerCase()
+              );
+              return {
+                id: `cls-${createdAt}-${index + 1}`,
+                name: cls.name,
+                courseId: linkedCourse?.id ?? null,
+                classFormat: cls.classFormat || 'STANDARD',
+                allowDirectEntry: true,
+                freeStart: cls.freeStart ?? true,
+                autoMatchCourse: cls.autoMatchCourse ?? true,
+                feeSek: clubSettings.defaultDirectEntryFeeSek,
+              };
+            })
+          : [];
+      const newClasses: CompClass[] = importedClasses.length
+        ? importedClasses
+        : shouldCopyCourses && classes.length > 0
+          ? classes.map((compClass) => ({ ...compClass }))
+          : newCourses.map((course, index) => ({
+              id: `cls-${createdAt}-${index + 1}`,
+              name: course.name.slice(0, 80),
+              courseId: course.id,
+              classFormat: 'STANDARD',
+              forkCourseIds: [],
+              allowDirectEntry: true,
+              freeStart: true,
+              autoMatchCourse: true,
+              feeSek: clubSettings.defaultDirectEntryFeeSek,
+            }));
+      const newComp: CompetitionMeta = {
+        id: compId,
+        shortCode: sc,
+        name: newEvtName.trim(),
+        organizer: clubSettings.clubName || 'OK Österåker',
+        date: newEvtDate,
+        status: 'UPCOMING',
+        zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
+        zeroTimeSec: parseTimeToSec(newEvtZeroTime),
+        arenaInfo: newEvtArena.trim(),
+        seriesName: newEvtSeriesName.trim(),
+        allowSelfRegistration: newEvtSelfReg,
+        feeTrackingEnabled: newEvtFeeTracking,
+      };
+
+      await createCompetitionInFirestore({
+        competitionId: compId,
+        shortCode: sc,
+        name: newComp.name,
+        organizer: newComp.organizer,
+        date: newComp.date,
+        status: newComp.status,
+        zeroTimeStr: newComp.zeroTimeStr,
+        zeroTimeSec: newComp.zeroTimeSec,
+        arenaInfo: newComp.arenaInfo,
+        seriesName: newComp.seriesName,
+        allowSelfRegistration: newComp.allowSelfRegistration,
+        feeTrackingEnabled: newComp.feeTrackingEnabled,
+        courses: newCourses,
+        classes: newClasses,
+      });
+      setCompetition(newComp);
+      setActiveEventId(compId);
+      setCourses(newCourses);
+      setClasses(newClasses);
+      setCompetitors([]);
+      setIsEmptySeason(false);
+      setCompetitionsList((previous) => [
+        {
+          ...newComp,
           id: compId,
           shortCode: sc,
-          name: newEvtName.trim(),
-          organizer: clubSettings.clubName || 'OK Österåker',
-          date: newEvtDate,
           status: 'UPCOMING',
-          zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
-          zeroTimeSec: parseTimeToSec(newEvtZeroTime),
-          arenaInfo: newEvtArena.trim(),
-          seriesName: newEvtSeriesName.trim(),
-          allowSelfRegistration: newEvtSelfReg,
-          feeTrackingEnabled: newEvtFeeTracking,
-        };
-        setCompetition(newComp);
-        setActiveEventId(compId);
-        setCourses(importedCourses);
-        setClasses(importedClasses);
-        setCompetitors([]);
-        setIsEmptySeason(false);
-        setCompetitionsList((prev) => [
-          {
-            id: compId,
-            shortCode: sc,
-            status: 'UPCOMING',
-            name: newEvtName.trim(),
-            organizer: clubSettings.clubName || 'OK Österåker',
-            date: newEvtDate,
-            zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
-            arenaInfo: newEvtArena.trim(),
-            seriesName: newEvtSeriesName.trim(),
-            feeTrackingEnabled: newEvtFeeTracking,
-            competitorCount: 0,
-            finishedCount: 0,
-            classCount: importedClasses.length,
-          },
-          ...prev,
-        ]);
-      }
+          organizer: newComp.organizer,
+          date: newComp.date,
+          zeroTimeStr: newComp.zeroTimeStr,
+          arenaInfo: newComp.arenaInfo || '',
+          seriesName: newComp.seriesName,
+          feeTrackingEnabled: Boolean(newComp.feeTrackingEnabled),
+          competitorCount: 0,
+          finishedCount: 0,
+          classCount: newClasses.length,
+        },
+        ...previous.filter((item) => item.id !== compId),
+      ]);
+      await mirrorNewCompetitionToExpress({
+        competition: newComp,
+        courses: newCourses,
+        classes: newClasses,
+      });
 
       setSelectedRunnerId(null);
       setPendingUnknownReadout(null);
@@ -2834,18 +2903,8 @@ export default function App() {
                   eventor={eventor}
                   runnerDbCount={runnerDb.length}
                   onUpdateCompetition={async (patch) => {
-                    const useFirestore = await apiRequestUnavailable(
-                      '/api/competition',
-                      {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(patch),
-                      },
-                      'Kunde inte spara tävlingsinställningarna.'
-                    );
-                    if (useFirestore || ('status' in patch && firebaseUserPresent)) {
-                      await updateCompetitionMetadataInFirestore(activeEventId, patch);
-                    }
+                    await updateCompetitionMetadataInFirestore(activeEventId, patch);
+                    await mirrorCompetitionMetadataToExpress(activeEventId, patch);
                     const savedPatch = {
                       ...patch,
                       ...('status' in patch ? { statusOverride: true } : {}),
