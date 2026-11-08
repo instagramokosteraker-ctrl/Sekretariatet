@@ -13,7 +13,6 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const LEGACY_PIN_AUTH_ENABLED = process.env.LEGACY_PIN_AUTH_ENABLED === 'true';
 
 type SICardSeries =
   | 'SI-Card 5'
@@ -346,10 +345,9 @@ interface RocIntegrationStatus {
   lastError: string | null;
 }
 
-type OfficialPinRole = 'START' | 'READOUT' | 'FOREST' | 'SPEAKER';
-type RolePinMap = Record<OfficialPinRole, string>;
-type OfficialRoleMode = 'ALL' | OfficialPinRole;
-type AuthSessionKind = 'ADMIN' | 'OFFICIAL' | 'PIN_OFFICIAL';
+type OfficialRole = 'START' | 'READOUT' | 'FOREST' | 'SPEAKER';
+type OfficialRoleMode = 'ALL' | OfficialRole;
+type AuthSessionKind = 'ADMIN' | 'OFFICIAL';
 type ClubAdminTier = 'SUPER_ADMIN' | 'RACE_ADMIN';
 
 interface ClubAdminAccount {
@@ -361,12 +359,7 @@ interface ClubAdminAccount {
 }
 
 interface SeasonAuthConfig {
-  hmacSecret: string;
   admins: ClubAdminAccount[];
-  offlineCodeEnabled: boolean;
-  offlineCodeSalt: string;
-  offlineCodeHash: string;
-  offlineCodeCustomized: boolean;
 }
 
 interface AuthSessionUser {
@@ -378,7 +371,7 @@ interface AuthSessionUser {
   officialRole: OfficialRoleMode;
   lockedEventId: string | null;
   lockedEventName: string | null;
-  authMethod: 'GOOGLE' | 'PIN' | 'OFFLINE_CODE';
+  authMethod: 'GOOGLE';
   issuedAt: string;
   expiresAt: string;
 }
@@ -393,8 +386,6 @@ interface SingleEventRecord {
   roc: RocIntegrationStatus;
   events: LiveEventItem[];
   processedClientIds: string[];
-  rolePins?: RolePinMap;
-  pinsCustomized?: boolean;
 }
 
 interface CloudEventExportItem {
@@ -418,8 +409,6 @@ interface CloudEventExportItem {
   stations?: SIStation[];
   brokenControls: number[];
   emergency?: EmergencySettings;
-  rolePins: RolePinMap;
-  pinsCustomized: boolean;
 }
 
 interface CloudSeasonSnapshot {
@@ -451,14 +440,6 @@ function isBootstrapAdminEmail(email?: string | null): boolean {
   const clean = email.trim().toLowerCase();
   return BOOTSTRAP_ADMIN_EMAILS.includes(clean);
 }
-
-const DEFAULT_ROLE_PINS: RolePinMap = {
-  START: '1100',
-  READOUT: '2200',
-  FOREST: '3300',
-  SPEAKER: '4400',
-};
-const DEFAULT_OFFLINE_ADMIN_CODE = 'okosteraker2026';
 
 function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: string } {
   try {
@@ -621,22 +602,8 @@ async function verifyFirestoreAdminRoleRest(
   }
 }
 
-function hashSecretScrypt(secret: string, saltHex: string): string {
-  return crypto.scryptSync(secret, Buffer.from(saltHex, 'hex'), 32).toString('hex');
-}
-
-function verifySecretScrypt(secret: string, saltHex: string, expectedHashHex: string): boolean {
-  if (!saltHex || !expectedHashHex) return false;
-  const actualBuf = crypto.scryptSync(secret, Buffer.from(saltHex, 'hex'), 32);
-  const expectedBuf = Buffer.from(expectedHashHex, 'hex');
-  if (actualBuf.length !== expectedBuf.length) return false;
-  return crypto.timingSafeEqual(actualBuf, expectedBuf);
-}
-
 function buildDefaultSeasonAuthConfig(nowIso: string): SeasonAuthConfig {
-  const salt = crypto.randomBytes(16).toString('hex');
   return {
-    hmacSecret: crypto.randomBytes(32).toString('hex'),
     admins: [
       {
         email: BOOTSTRAP_ADMIN_EMAIL,
@@ -646,45 +613,21 @@ function buildDefaultSeasonAuthConfig(nowIso: string): SeasonAuthConfig {
         addedAt: nowIso,
       },
     ],
-    offlineCodeEnabled: true,
-    offlineCodeSalt: salt,
-    offlineCodeHash: hashSecretScrypt(DEFAULT_OFFLINE_ADMIN_CODE, salt),
-    offlineCodeCustomized: false,
   };
-}
-
-function ensureEventPins(ev: SingleEventRecord): RolePinMap {
-  if (
-    !ev.rolePins ||
-    !/^\d{4,6}$/.test(ev.rolePins.START || '') ||
-    !/^\d{4,6}$/.test(ev.rolePins.READOUT || '') ||
-    !/^\d{4,6}$/.test(ev.rolePins.FOREST || '') ||
-    !/^\d{4,6}$/.test(ev.rolePins.SPEAKER || '')
-  ) {
-    ev.rolePins = { ...DEFAULT_ROLE_PINS };
-    ev.pinsCustomized = false;
-  }
-  if (ev.pinsCustomized === undefined) {
-    ev.pinsCustomized = false;
-  }
-  return ev.rolePins;
 }
 
 function ensureSeasonAuthConfig(seasonDb: SeasonDatabase): SeasonAuthConfig {
   const nowIso = new Date().toISOString();
-  if (!seasonDb.authConfig || !seasonDb.authConfig.hmacSecret) {
-    seasonDb.authConfig = buildDefaultSeasonAuthConfig(nowIso);
-    return seasonDb.authConfig;
-  }
-  if (!Array.isArray(seasonDb.authConfig.admins)) {
-    seasonDb.authConfig.admins = [];
-  }
-  if (
-    !seasonDb.authConfig.admins.some(
-      (a) => a.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL
-    )
-  ) {
-    seasonDb.authConfig.admins.unshift({
+  const admins = Array.isArray(seasonDb.authConfig?.admins)
+    ? seasonDb.authConfig.admins.filter(
+        (admin) =>
+          admin &&
+          typeof admin.email === 'string' &&
+          (admin.role === 'SUPER_ADMIN' || admin.role === 'RACE_ADMIN')
+      )
+    : [];
+  if (!admins.some((admin) => admin.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL)) {
+    admins.unshift({
       email: BOOTSTRAP_ADMIN_EMAIL,
       displayName: 'OK Österåker (Huvudadmin)',
       role: 'SUPER_ADMIN',
@@ -692,60 +635,8 @@ function ensureSeasonAuthConfig(seasonDb: SeasonDatabase): SeasonAuthConfig {
       addedAt: nowIso,
     });
   }
-  if (seasonDb.authConfig.offlineCodeEnabled === undefined) {
-    seasonDb.authConfig.offlineCodeEnabled = true;
-  }
-  if (!seasonDb.authConfig.offlineCodeSalt || !seasonDb.authConfig.offlineCodeHash) {
-    const salt = crypto.randomBytes(16).toString('hex');
-    seasonDb.authConfig.offlineCodeSalt = salt;
-    seasonDb.authConfig.offlineCodeHash = hashSecretScrypt(DEFAULT_OFFLINE_ADMIN_CODE, salt);
-    seasonDb.authConfig.offlineCodeCustomized = false;
-  }
+  seasonDb.authConfig = { admins };
   return seasonDb.authConfig;
-}
-
-function signAuthSessionToken(user: AuthSessionUser, hmacSecret: string): string {
-  const payloadB64 = Buffer.from(JSON.stringify(user), 'utf-8').toString('base64url');
-  const sigB64 = crypto
-    .createHmac('sha256', hmacSecret)
-    .update(payloadB64)
-    .digest('base64url');
-  return `${payloadB64}.${sigB64}`;
-}
-
-function verifyAuthSessionToken(
-  token: string | undefined | null,
-  hmacSecret: string
-): AuthSessionUser | null {
-  if (!token || typeof token !== 'string') return null;
-  const parts = token.trim().split('.');
-  if (parts.length !== 2) return null;
-  const [payloadB64, sigB64] = parts;
-  if (!payloadB64 || !sigB64) return null;
-
-  const expectedSigBuf = crypto
-    .createHmac('sha256', hmacSecret)
-    .update(payloadB64)
-    .digest();
-  const actualSigBuf = Buffer.from(sigB64, 'base64url');
-  if (
-    expectedSigBuf.length !== actualSigBuf.length ||
-    !crypto.timingSafeEqual(expectedSigBuf, actualSigBuf)
-  ) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(
-      Buffer.from(payloadB64, 'base64url').toString('utf-8')
-    ) as AuthSessionUser;
-    if (!parsed.expiresAt || Date.parse(parsed.expiresAt) < Date.now()) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
 }
 
 let cachedGoogleCerts: { certs: Record<string, string>; fetchedAtMs: number } | null = null;
@@ -2208,10 +2099,23 @@ function loadSeasonDatabase(): SeasonDatabase {
         if (!Array.isArray(full.runnerDb)) full.runnerDb = [];
         if (!full.eventor) full.eventor = buildDefaultEventorMeta();
         const loadedClubCfg = ensureClubSettings(full);
-        const hadAuth = Boolean(full.authConfig?.hmacSecret);
+        const hadAuthConfig = Boolean(full.authConfig);
+        const hadLegacyAuthConfig = Boolean(
+          full.authConfig &&
+          Object.keys(full.authConfig).some((key) => key !== 'admins')
+        );
         ensureSeasonAuthConfig(full);
         let normalizedAnyEventMeta = false;
         for (const ev of Object.values(full.eventsMap)) {
+          const legacyPinFields = ev as SingleEventRecord & {
+            rolePins?: unknown;
+            pinsCustomized?: unknown;
+          };
+          if ('rolePins' in legacyPinFields || 'pinsCustomized' in legacyPinFields) {
+            delete legacyPinFields.rolePins;
+            delete legacyPinFields.pinsCustomized;
+            normalizedAnyEventMeta = true;
+          }
           if (ev.competition.enableFeesAndSwish === undefined) {
             normalizedAnyEventMeta = true;
           }
@@ -2223,10 +2127,9 @@ function loadSeasonDatabase(): SeasonDatabase {
           if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
           if (!ev.roc) ev.roc = buildDefaultRocStatus('1042');
           if (!Array.isArray(ev.processedClientIds)) ev.processedClientIds = [];
-          ensureEventPins(ev);
           recomputeAllSplitRanks(ev);
         }
-        if (!hadAuth || normalizedAnyEventMeta) {
+        if (!hadAuthConfig || hadLegacyAuthConfig || normalizedAnyEventMeta) {
           saveSeasonDatabase(full);
         }
         return full;
@@ -2501,8 +2404,6 @@ async function startServer() {
       roc: buildDefaultRocStatus(''),
       events: [],
       processedClientIds: [],
-      rolePins: { ...DEFAULT_ROLE_PINS },
-      pinsCustomized: false,
     };
   }
 
@@ -3019,40 +2920,6 @@ async function startServer() {
     void pollRocOnce(ev);
   }, 1500);
 
-  wss.on('connection', (ws, req) => {
-    const authCfg = ensureSeasonAuthConfig(seasonDb);
-    let wsToken: string | null = null;
-    try {
-      const parsedUrl = new URL(req.url || '/api/ws', 'http://localhost');
-      wsToken = parsedUrl.searchParams.get('token');
-    } catch {
-      wsToken = null;
-    }
-
-    const sessionUser = verifyAuthSessionToken(wsToken, authCfg.hmacSecret);
-    if (sessionUser) {
-      authenticatedWsClients.add(ws);
-      ws.send(
-        JSON.stringify({
-          type: 'state:sync',
-          payload: buildFullStatePayload(),
-        })
-      );
-      broadcastFullState();
-    } else {
-      ws.send(
-        JSON.stringify({
-          type: 'public:ping',
-          changedShortCode: getActiveEvent().competition.shortCode,
-        })
-      );
-    }
-
-    ws.on('close', () => {
-      broadcastFullState();
-    });
-  });
-
   // ==========================================================================
   // PUBLIC SPECTATOR, QR SELF-REGISTRATION & LIVELOX IOF XML 3.0 ROUTES
   // ==========================================================================
@@ -3102,15 +2969,8 @@ async function startServer() {
   });
 
   // ==========================================================================
-  // AUTHENTICATION, ROLE PINS & SECRETARIAT ACCESS CONTROL (Alternativ C)
+  // AUTHENTICATION, ROLE-BASED ACCESS CONTROL
   // ==========================================================================
-  const ROLE_DISPLAY_NAMES: Record<OfficialPinRole, string> = {
-    START: 'Startpersonal & Startfålla',
-    READOUT: 'Mål & Avläsning',
-    FOREST: 'Skogssäkerhet & Sök',
-    SPEAKER: 'Speaker & Resultat',
-  };
-
   app.get('/api/auth/public-info', (_req, res) => {
     const summaries = buildCompetitionsSummaryList(seasonDb);
     const competitions = summaries.map((s) => {
@@ -3146,138 +3006,12 @@ async function startServer() {
     });
   });
 
-  app.post('/api/auth/login-pin', (req, res) => {
-    if (!LEGACY_PIN_AUTH_ENABLED) {
-      res.status(403).json({ error: 'PIN-inloggning är avstängd. Logga in med Google.' });
-      return;
-    }
-    const { eventId, pin } = req.body as { eventId?: string; pin?: string };
-    const cleanPin = String(pin || '').replace(/\D/g, '');
-    if (cleanPin.length < 4 || cleanPin.length > 6) {
-      res.status(400).json({ error: 'Ange en giltig 4-siffrig funktionärs-PIN.' });
-      return;
-    }
-
-    const targetEv = findEventByIdOrShortCode(eventId);
-    if (!targetEv) {
-      res.status(404).json({ error: 'Vald tävling hittades inte.' });
-      return;
-    }
-
-    const pins = ensureEventPins(targetEv);
-    let matchedRole: OfficialPinRole | null = null;
-    for (const rKey of ['START', 'READOUT', 'FOREST', 'SPEAKER'] as OfficialPinRole[]) {
-      const expected = Buffer.from(pins[rKey], 'utf-8');
-      const actual = Buffer.from(cleanPin, 'utf-8');
-      if (expected.length === actual.length && crypto.timingSafeEqual(expected, actual)) {
-        matchedRole = rKey;
-        break;
-      }
-    }
-
-    if (!matchedRole) {
-      res.status(401).json({
-        error: 'Felaktig PIN-kod för den valda tävlingen.',
-      });
-      return;
-    }
-
-    // Activate selected competition if needed so the official lands directly on their race
-    if (seasonDb.activeEventId !== targetEv.competition.id) {
-      seasonDb.activeEventId = targetEv.competition.id;
-      saveSeasonDatabase(seasonDb);
-      broadcastFullState(targetEv.competition.shortCode);
-    }
-
-    const authCfg = ensureSeasonAuthConfig(seasonDb);
-    const issuedAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-    const sessionUser: AuthSessionUser = {
-      sessionKind: 'PIN_OFFICIAL',
-      uid: `pin_${targetEv.competition.id}_${matchedRole.toLowerCase()}`,
-      displayName: ROLE_DISPLAY_NAMES[matchedRole],
-      email: null,
-      adminTier: null,
-      officialRole: matchedRole,
-      lockedEventId: targetEv.competition.id,
-      lockedEventName: targetEv.competition.name,
-      authMethod: 'PIN',
-      issuedAt,
-      expiresAt,
-    };
-
-    const token = signAuthSessionToken(sessionUser, authCfg.hmacSecret);
-    res.json({ token, user: sessionUser });
-  });
-
-  app.post('/api/auth/login-offline', (req, res) => {
-    if (!LEGACY_PIN_AUTH_ENABLED) {
-      res.status(403).json({ error: 'Offline-kodinloggning är avstängd. Logga in med Google.' });
-      return;
-    }
-    const { code } = req.body as { code?: string };
-    const cleanCode = String(code || '').trim();
-    const authCfg = ensureSeasonAuthConfig(seasonDb);
-
-    if (!authCfg.offlineCodeEnabled) {
-      res.status(403).json({
-        error: 'Offline reservkod är avstängd för denna klubb.',
-      });
-      return;
-    }
-    if (!cleanCode) {
-      res.status(400).json({ error: 'Ange klubbens offline reservkod.' });
-      return;
-    }
-
-    const valid = verifySecretScrypt(
-      cleanCode,
-      authCfg.offlineCodeSalt,
-      authCfg.offlineCodeHash
-    );
-    if (!valid) {
-      res.status(401).json({ error: 'Felaktig offline reservkod.' });
-      return;
-    }
-
-    const issuedAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
-    const sessionUser: AuthSessionUser = {
-      sessionKind: 'ADMIN',
-      uid: 'offline_emergency_admin',
-      displayName: 'Tävlingsledare (Offline reservläge)',
-      email: null,
-      adminTier: 'RACE_ADMIN',
-      officialRole: 'ALL',
-      lockedEventId: null,
-      lockedEventName: null,
-      authMethod: 'OFFLINE_CODE',
-      issuedAt,
-      expiresAt,
-    };
-
-    const token = signAuthSessionToken(sessionUser, authCfg.hmacSecret);
-    res.json({ token, user: sessionUser });
-  });
-
   async function resolveSessionUserFromToken(
-    rawToken: string | undefined | null,
-    authCfg: SeasonAuthConfig
+    rawToken: string | undefined | null
   ): Promise<AuthSessionUser | null> {
     if (!rawToken || typeof rawToken !== 'string') return null;
     const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken.trim();
     if (!token) return null;
-
-    const hmacUser = verifyAuthSessionToken(token, authCfg.hmacSecret);
-    if (hmacUser) {
-      if (
-        LEGACY_PIN_AUTH_ENABLED &&
-        (hmacUser.authMethod === 'PIN' || hmacUser.authMethod === 'OFFLINE_CODE')
-      ) {
-        return hmacUser;
-      }
-      return null;
-    }
 
     if (token.split('.').length === 3) {
       try {
@@ -3329,47 +3063,12 @@ async function startServer() {
       }
     }
 
-    if (LEGACY_PIN_AUTH_ENABLED && (token.startsWith('offline_') || token.toLowerCase() === 'okosteraker2026')) {
-      return {
-        sessionKind: 'ADMIN',
-        uid: 'offline_emergency_admin',
-        displayName: 'Tävlingsledare (Offline reservläge)',
-        email: null,
-        adminTier: 'RACE_ADMIN',
-        officialRole: 'ALL',
-        lockedEventId: null,
-        lockedEventName: null,
-        authMethod: 'OFFLINE_CODE',
-        issuedAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
-      };
-    }
-
-    if (LEGACY_PIN_AUTH_ENABLED && token.startsWith('pin_')) {
-      const segments = token.split('_');
-      const roleCandidate = (segments[1] || 'ALL').toUpperCase() as OfficialRoleMode;
-      return {
-        sessionKind: 'PIN_OFFICIAL',
-        uid: token,
-        displayName: 'Funktionär (PIN-inloggad)',
-        email: null,
-        adminTier: null,
-        officialRole: roleCandidate,
-        lockedEventId: null,
-        lockedEventName: null,
-        authMethod: 'PIN',
-        issuedAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
-      };
-    }
-
     return null;
   }
 
   async function getRequestSessionUser(req: express.Request): Promise<AuthSessionUser | null> {
-    const authCfg = ensureSeasonAuthConfig(seasonDb);
     const headerToken = req.header('x-passersi-token') || req.header('authorization');
-    return resolveSessionUserFromToken(headerToken, authCfg);
+    return resolveSessionUserFromToken(headerToken);
   }
 
   function isOfficialWriteAllowed(
@@ -3380,7 +3079,7 @@ async function startServer() {
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
     if (sessionUser.sessionKind === 'ADMIN') return true;
     const role = sessionUser.officialRole;
-    const permissions: Array<{ method: string; path: RegExp; roles: OfficialPinRole[] }> = [
+    const permissions: Array<{ method: string; path: RegExp; roles: OfficialRole[] }> = [
       { method: 'POST', path: /^\/online-punch$/, roles: ['START', 'READOUT', 'FOREST'] },
       { method: 'POST', path: /^\/readout$/, roles: ['READOUT', 'FOREST', 'SPEAKER'] },
       { method: 'POST', path: /^\/draw\/class$/, roles: ['START'] },
@@ -3394,7 +3093,7 @@ async function startServer() {
       (permission) =>
         permission.method === method &&
         permission.path.test(route) &&
-        permission.roles.includes(role as OfficialPinRole)
+        permission.roles.includes(role as OfficialRole)
     );
   }
 
@@ -3403,9 +3102,7 @@ async function startServer() {
     if (
       req.path.startsWith('/public/') ||
       req.path === '/auth/public-info' ||
-      req.path === '/auth/login-google' ||
-      req.path === '/auth/login-pin' ||
-      req.path === '/auth/login-offline'
+      req.path === '/auth/login-google'
     ) {
       next();
       return;
@@ -3437,8 +3134,7 @@ async function startServer() {
     const search = qIndex !== -1 ? rawUrl.slice(qIndex) : '';
     const params = new URLSearchParams(search);
     const token = params.get('token');
-    const authCfg = ensureSeasonAuthConfig(seasonDb);
-    void resolveSessionUserFromToken(token, authCfg)
+    void resolveSessionUserFromToken(token)
       .then((sessionUser) => {
 
         if (sessionUser) {
@@ -3506,70 +3202,11 @@ async function startServer() {
   app.get('/api/auth/manage', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
     const authCfg = ensureSeasonAuthConfig(seasonDb);
-    const ev = getActiveEvent();
-    const rolePins = ensureEventPins(ev);
 
     res.json({
-      eventId: ev.competition.id,
-      eventName: ev.competition.name,
-      rolePins,
-      pinsCustomized: Boolean(ev.pinsCustomized),
       admins: authCfg.admins,
-      offlineCodeEnabled: authCfg.offlineCodeEnabled,
-      offlineCodeCustomized: authCfg.offlineCodeCustomized,
       clubSettings: ensureClubSettings(seasonDb),
       demoCleared: Boolean(seasonDb.demoCleared),
-    });
-  });
-
-  app.put('/api/auth/pins', (req, res) => {
-    if (!LEGACY_PIN_AUTH_ENABLED) {
-      res.status(403).json({ error: 'PIN-konfiguration är avstängd.' });
-      return;
-    }
-    if (!requireAdminRequest(req, res)) return;
-    const body = req.body as {
-      eventId?: string;
-      rolePins?: Partial<RolePinMap>;
-    };
-    const ev = findEventByIdOrShortCode(body.eventId);
-    if (!ev) {
-      res.status(404).json({ error: 'Skapa eller välj en tävling först.' });
-      return;
-    }
-    const current = ensureEventPins(ev);
-    const candidate: RolePinMap = {
-      START: String(body.rolePins?.START ?? current.START).replace(/\D/g, ''),
-      READOUT: String(body.rolePins?.READOUT ?? current.READOUT).replace(/\D/g, ''),
-      FOREST: String(body.rolePins?.FOREST ?? current.FOREST).replace(/\D/g, ''),
-      SPEAKER: String(body.rolePins?.SPEAKER ?? current.SPEAKER).replace(/\D/g, ''),
-    };
-
-    for (const k of ['START', 'READOUT', 'FOREST', 'SPEAKER'] as OfficialPinRole[]) {
-      if (candidate[k].length < 4 || candidate[k].length > 6) {
-        res.status(400).json({
-          error: 'Alla fyra funktionärs-PIN-koder måste bestå av 4–6 siffror.',
-        });
-        return;
-      }
-    }
-
-    const uniquePins = new Set(Object.values(candidate));
-    if (uniquePins.size !== 4) {
-      res.status(400).json({
-        error: 'Varje funktionärsroll måste ha en unik PIN-kod så rätt vy öppnas vid inloggning.',
-      });
-      return;
-    }
-
-    ev.rolePins = candidate;
-    ev.pinsCustomized = true;
-    persistUserMutation();
-
-    res.json({
-      eventId: ev.competition.id,
-      rolePins: ev.rolePins,
-      pinsCustomized: true,
     });
   });
 
@@ -3665,39 +3302,6 @@ async function startServer() {
     );
     persistUserMutation();
     res.json({ admins: authCfg.admins });
-  });
-
-  app.put('/api/auth/offline-code', (req, res) => {
-    if (!LEGACY_PIN_AUTH_ENABLED) {
-      res.status(403).json({ error: 'Offline-koder är avstängda.' });
-      return;
-    }
-    if (!requireAdminRequest(req, res)) return;
-    const body = req.body as { enabled?: boolean; newCode?: string };
-    const authCfg = ensureSeasonAuthConfig(seasonDb);
-
-    if (body.enabled !== undefined) {
-      authCfg.offlineCodeEnabled = Boolean(body.enabled);
-    }
-    if (body.newCode !== undefined && body.newCode.trim().length > 0) {
-      const clean = body.newCode.trim();
-      if (clean.length < 6 || clean.length > 64) {
-        res.status(400).json({
-          error: 'Offline reservkod ska vara minst 6 tecken lång.',
-        });
-        return;
-      }
-      const salt = crypto.randomBytes(16).toString('hex');
-      authCfg.offlineCodeSalt = salt;
-      authCfg.offlineCodeHash = hashSecretScrypt(clean, salt);
-      authCfg.offlineCodeCustomized = true;
-    }
-
-    persistUserMutation();
-    res.json({
-      offlineCodeEnabled: authCfg.offlineCodeEnabled,
-      offlineCodeCustomized: authCfg.offlineCodeCustomized,
-    });
   });
 
   // ==========================================================================
@@ -3836,8 +3440,6 @@ async function startServer() {
       stations: ev.stations,
       brokenControls: ev.emergency?.brokenControls ?? [],
       emergency: ev.emergency,
-      rolePins: ensureEventPins(ev),
-      pinsCustomized: Boolean(ev.pinsCustomized),
     }));
 
     const snapshot: CloudSeasonSnapshot = {
@@ -3911,10 +3513,7 @@ async function startServer() {
         roc: existingLocal?.roc ?? buildDefaultRocStatus('1042'),
         events: existingLocal?.events ?? [],
         processedClientIds: existingLocal?.processedClientIds ?? [],
-        rolePins: item.rolePins ?? { ...DEFAULT_ROLE_PINS },
-        pinsCustomized: Boolean(item.pinsCustomized),
       };
-      ensureEventPins(evRec);
       recalculateEventFromRawReadouts(evRec);
       nextMap[evRec.competition.id] = evRec;
     }
@@ -4156,8 +3755,6 @@ async function startServer() {
       roc: buildDefaultRocStatus('1045'),
       events: [],
       processedClientIds: [],
-      rolePins: { ...DEFAULT_ROLE_PINS },
-      pinsCustomized: false,
     };
     createdRecord.competition.status = resolveEffectiveCompetitionStatus(createdRecord);
 
@@ -4289,8 +3886,6 @@ async function startServer() {
       roc: buildDefaultRocStatus('1046'),
       events: [],
       processedClientIds: [],
-      rolePins: { ...DEFAULT_ROLE_PINS },
-      pinsCustomized: false,
     };
 
     seasonDb.eventsMap[newId] = duplicated;
@@ -6339,7 +5934,6 @@ async function startServer() {
       if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
       if (!ev.roc) ev.roc = buildDefaultRocStatus('1042');
       if (!Array.isArray(ev.processedClientIds)) ev.processedClientIds = [];
-      ensureEventPins(ev);
       recalculateEventFromRawReadouts(ev);
     }
 

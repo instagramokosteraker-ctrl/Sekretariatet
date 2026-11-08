@@ -10,4 +10,4 @@ Administratörer kan testa anslutningen från samma vy. Om en äldre servermilj�
 
 Alla nya sekretariatsinloggningar använder Google via Firebase Auth. Klubbroller (`SUPER_ADMIN`, `RACE_ADMIN`) ligger i `admins/{uid}`. Funktionärsroller (`START`, `READOUT`, `FOREST`, `SPEAKER`) delas ut med e-postinbjudan i **Klubbadmin & Behörighet** och aktiveras av användaren vid inloggning med samma Google-konto. Tilldelningar lagras i `roleAssignments/{uid}`; inbjudningar ligger i `roleInvites/{inviteId}`. Publicera Firestore-reglerna innan rollinbjudningar används.
 
-PIN- och offlinekodsinloggning har tagits bort från klienten. Äldre Express-rutter finns kvar tillfälligt för backendkompatibilitet och är avstängda som standard; de styrs enbart av serverflaggan `LEGACY_PIN_AUTH_ENABLED`. Håll flaggan avstängd och avveckla rutterna efter migreringen.
+PIN- och offlinekodsinloggning har tagits bort. Sekretariatsåtkomst använder Google via Firebase Auth och Firestore-roller.
