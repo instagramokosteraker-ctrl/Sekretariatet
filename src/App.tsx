@@ -102,6 +102,7 @@ import {
   updateCompetitionMetadataInFirestore,
   saveCourseToFirestore,
   deleteCourseFromFirestore,
+  subscribeCoursesFromFirestore,
   saveClassToFirestore,
   deleteClassFromFirestore,
   saveStationToFirestore,
@@ -684,6 +685,27 @@ export default function App() {
     });
   }, [firebaseUserUid]);
   useEffect(() => {
+    if (!firebaseUserUid || !activeEventId) return;
+    return subscribeCoursesFromFirestore(
+      activeEventId,
+      setCourses,
+      (error) => {
+        console.error('Kunde inte prenumerera på banor från Firestore:', error);
+      },
+      () => {
+        if (authSession?.user.sessionKind !== 'ADMIN') return;
+        void recalculateCompetitionFromFirestore(activeEventId)
+          .then((recalculated) => {
+            setCompetitors(recalculated.competitors);
+            setEmergency(recalculated.emergency);
+          })
+          .catch((error: unknown) => {
+            console.error('Kunde inte räkna om resultat efter banändring:', error);
+          });
+      }
+    );
+  }, [activeEventId, authSession?.user.sessionKind, firebaseUserUid]);
+  useEffect(() => {
     if (
       !firebaseUserUid ||
       !activeEventId ||
@@ -984,7 +1006,9 @@ export default function App() {
     }
     if (snap.seriesStandings) setSeriesStandings(snap.seriesStandings);
     setCompetition(snap.competition);
-    setCourses(snap.courses);
+    if (!firebaseUserUid && !auth.currentUser) {
+      setCourses(snap.courses);
+    }
     setClasses(snap.classes);
     setStations(snap.stations);
     setCompetitors(snap.competitors);
@@ -3743,18 +3767,10 @@ export default function App() {
                   feeTrackingEnabled={Boolean(competition.feeTrackingEnabled)}
                   onSaveCourse={async (payload, existingId) => {
                     let saved: Course | null = null;
-                    if (firebaseUserPresent || auth.currentUser) {
-                      try {
-                        saved = await saveCourseToFirestore(
-                          activeEventId,
-                          payload,
-                          existingId
-                        );
-                      } catch (cloudErr) {
-                        console.warn('Firestore saveCourse error:', cloudErr);
-                      }
-                    }
-                    if (!saved) {
+                    const firestoreOwned = Boolean(firebaseUserPresent || auth.currentUser);
+                    if (firestoreOwned) {
+                      saved = await saveCourseToFirestore(activeEventId, payload, existingId);
+                    } else {
                       const prevCourse = courses.find((c) => c.id === existingId);
                       saved = {
                         id: existingId || `crs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3769,50 +3785,55 @@ export default function App() {
                         ? current.map((course) => (course.id === existingId ? saved! : course))
                         : [...current, saved!]
                     );
-                    if (firebaseUserPresent || auth.currentUser) {
-                      try {
-                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                        setCompetitors(recalculated.competitors);
-                        setEmergency(recalculated.emergency);
-                      } catch {
-                        // ignore
-                      }
-                    }
                     try {
-                      await apiFetch(
-                        existingId ? `/api/courses/${existingId}` : '/api/courses',
+                      const response = await apiFetch(
+                        existingId
+                          ? `/api/courses/${existingId}`
+                          : '/api/courses',
                         {
                           method: existingId ? 'PUT' : 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify(payload),
+                          body: JSON.stringify({ ...payload, id: saved.id }),
                         }
                       );
-                    } catch {
-                      // offline fallback
+                      if (!response.ok) {
+                        console.warn(
+                          `Kunde inte uppdatera Express-kompatibilitetsspeglingen för bana ${saved.id} (HTTP ${response.status}).`
+                        );
+                      }
+                    } catch (error) {
+                      console.warn('Kunde inte nå Express-kompatibilitetsspeglingen för banor:', error);
                     }
                   }}
                   onDeleteCourse={async (id) => {
-                    if (firebaseUserPresent || auth.currentUser) {
-                      try {
-                        await deleteCourseFromFirestore(activeEventId, id);
-                      } catch (cloudErr) {
-                        console.warn('Firestore deleteCourse error:', cloudErr);
+                    const firestoreOwned = Boolean(firebaseUserPresent || auth.currentUser);
+                    if (firestoreOwned) {
+                      await deleteCourseFromFirestore(activeEventId, id);
+                    } else {
+                      const response = await apiFetch(`/api/courses/${id}`, {
+                        method: 'DELETE',
+                      });
+                      if (!response.ok) {
+                        throw new Error('Kunde inte ta bort banan från servern.');
                       }
                     }
                     setCourses((current) => current.filter((course) => course.id !== id));
-                    if (firebaseUserPresent || auth.currentUser) {
+                    if (firestoreOwned) {
                       try {
-                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                        setCompetitors(recalculated.competitors);
-                        setEmergency(recalculated.emergency);
-                      } catch {
-                        // ignore
+                        const response = await apiFetch(`/api/courses/${id}`, {
+                          method: 'DELETE',
+                        });
+                        if (!response.ok) {
+                          console.warn(
+                            `Kunde inte uppdatera Express-kompatibilitetsspeglingen för borttagen bana ${id} (HTTP ${response.status}).`
+                          );
+                        }
+                      } catch (error) {
+                        console.warn(
+                          'Kunde inte nå Express-kompatibilitetsspeglingen för banor:',
+                          error
+                        );
                       }
-                    }
-                    try {
-                      await apiFetch(`/api/courses/${id}`, { method: 'DELETE' });
-                    } catch {
-                      // offline fallback
                     }
                   }}
                   onSaveClass={async (payload, existingId) => {
@@ -3947,33 +3968,19 @@ export default function App() {
                         );
 
                     if (firebaseUserPresent || auth.currentUser) {
-                      try {
-                        await saveCompetitionImportToFirestore({
-                          competitionId: activeEventId,
-                          courses: nextCourses,
-                          classes: nextClasses,
-                          competitors,
-                          runnerDbEntries: [],
-                          competitorCount: competitors.length,
-                          replaceCoursesAndClasses: payload.replaceExisting,
-                        });
-                      } catch (cloudErr) {
-                        console.warn('Firestore batch import error:', cloudErr);
-                      }
+                      await saveCompetitionImportToFirestore({
+                        competitionId: activeEventId,
+                        courses: nextCourses,
+                        classes: nextClasses,
+                        competitors,
+                        runnerDbEntries: [],
+                        competitorCount: competitors.length,
+                        replaceCoursesAndClasses: payload.replaceExisting,
+                      });
                     }
 
                     setCourses(nextCourses);
                     setClasses(nextClasses);
-
-                    if (firebaseUserPresent || auth.currentUser) {
-                      try {
-                        const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-                        setCompetitors(recalculated.competitors);
-                        setEmergency(recalculated.emergency);
-                      } catch {
-                        // ignore
-                      }
-                    }
 
                     let serverRes: { addedCourses?: number; addedClasses?: number } | null = null;
                     try {
@@ -3991,9 +3998,16 @@ export default function App() {
                       });
                       if (res.ok) {
                         serverRes = await res.json();
+                      } else {
+                        console.warn(
+                          `Kunde inte uppdatera Express-kompatibilitetsspeglingen efter banimport (HTTP ${res.status}).`
+                        );
                       }
-                    } catch {
-                      // offline fallback
+                    } catch (error) {
+                      console.warn(
+                        'Kunde inte nå Express-kompatibilitetsspeglingen efter banimport:',
+                        error
+                      );
                     }
 
                     return {

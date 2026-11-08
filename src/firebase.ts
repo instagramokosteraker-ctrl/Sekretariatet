@@ -1273,7 +1273,7 @@ export async function activateCompetitionInFirestore(
 }
 
 /**
- * Syncs the entire club season (clubSettings, competitions, courses, classes, competitors, SI punches,
+ * Syncs legacy season data (clubSettings, competitions, classes, competitors, SI punches,
  * and empty/demoCleared states) to Firestore under Zero-Trust rules.
  */
 export async function syncFullSeasonToFirestore(
@@ -1379,10 +1379,8 @@ export async function syncFullSeasonToFirestore(
     }
   }
 
-  // 2. Sync each competition + its courses, classes, and competitors
+  // 2. Sync each competition's legacy-owned metadata, classes, and competitors
   let syncedEvents = 0;
-  const activeCompSet = new Set<string>(competitionIds);
-
   for (const ev of snapshot.events.slice(0, 100)) {
     const competitionId = sanitizeFirestoreId(ev.competition.id, 'evt');
     const rawShort = sanitizeFirestoreId(ev.competition.shortCode || 'oko26', 'sc').slice(0, 32);
@@ -1463,69 +1461,10 @@ export async function syncFullSeasonToFirestore(
       }
     }
 
-    // Sync courses, classes, and competitors in chunked batches
+    // Courses are Firestore-owned and are intentionally excluded from legacy snapshots.
     const childOps: QueuedBatchOp[] = [];
 
-    // 2a. Courses
-    const existingCourseIds = new Set<string>();
-    try {
-      const crsSnap = await getDocs(
-        query(
-          collection(db, 'competitions', competitionId, 'courses'),
-          where('ownerUid', '==', ownerUid)
-        )
-      );
-      crsSnap.docs.forEach((d) => existingCourseIds.add(d.id));
-    } catch (err) {
-      handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/courses`);
-    }
-
-    const nextCourseIds = new Set<string>();
-    for (const crs of ev.courses) {
-      const courseId = sanitizeFirestoreId(crs.id, 'crs');
-      nextCourseIds.add(courseId);
-      const crsRef = doc(db, 'competitions', competitionId, 'courses', courseId);
-      const crsPath = `competitions/${competitionId}/courses/${courseId}`;
-      const crsMutable = {
-        name: (crs.name || 'Bana').trim().slice(0, 120) || 'Bana',
-        lengthMeters: clampInt(crs.lengthMeters, 0, 200000, 3000),
-        climbMeters: clampInt(crs.climbMeters, 0, 20000, 0),
-        controls: (crs.controls || []).slice(0, 128).map((c) => clampInt(c, 1, 999, 31)),
-      };
-      if (existingCourseIds.has(courseId)) {
-        childOps.push({
-          kind: 'update',
-          ref: crsRef,
-          path: crsPath,
-          data: { ...crsMutable, updatedAt: serverTimestamp() },
-        });
-      } else {
-        childOps.push({
-          kind: 'set',
-          ref: crsRef,
-          path: crsPath,
-          data: {
-            courseId,
-            competitionId,
-            ...crsMutable,
-            ownerUid,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-        });
-      }
-    }
-    for (const oldId of existingCourseIds) {
-      if (!nextCourseIds.has(oldId)) {
-        childOps.push({
-          kind: 'delete',
-          ref: doc(db, 'competitions', competitionId, 'courses', oldId),
-          path: `competitions/${competitionId}/courses/${oldId}`,
-        });
-      }
-    }
-
-    // 2b. Classes
+    // 2a. Classes
     const existingClassIds = new Set<string>();
     try {
       const clsSnap = await getDocs(
@@ -1602,7 +1541,7 @@ export async function syncFullSeasonToFirestore(
       }
     }
 
-    // 2c. Competitors (including raw punches & rental/payment flags)
+    // 2b. Competitors (including raw punches & rental/payment flags)
     const existingCompIds = new Set<string>();
     try {
       const cmpSnap = await getDocs(
@@ -1775,20 +1714,6 @@ export async function syncFullSeasonToFirestore(
     }
 
     syncedEvents += 1;
-  }
-
-  // 3. Remove any competitions owned by this user that were deleted locally
-  try {
-    const ownedSnap = await getDocs(
-      query(collection(db, 'competitions'), where('ownerUid', '==', ownerUid))
-    );
-    for (const compDoc of ownedSnap.docs) {
-      if (!activeCompSet.has(compDoc.id)) {
-        await deleteCompetitionFromFirestore(compDoc.id);
-      }
-    }
-  } catch (err) {
-    handleWriteOrOfflineError(err, OperationType.LIST, 'competitions');
   }
 
   return { syncedEvents };
@@ -2581,6 +2506,8 @@ export async function saveCompetitionImportToFirestore(params: {
       classes: new Set(params.classes.map((cls) => sanitizeFirestoreId(cls.id, 'cls'))),
     };
     const staleRefs: DocumentReference[] = [];
+    const staleCourseIds = new Set<string>();
+    const staleClassIds = new Set<string>();
     for (const collectionName of ['courses', 'classes'] as const) {
       const snapshots = await getDocs(
         collection(db, 'competitions', competitionId, collectionName)
@@ -2590,8 +2517,35 @@ export async function saveCompetitionImportToFirestore(params: {
           !retainedIds[collectionName].has(snapshot.id) &&
           (snapshot.data().ownerUid === ownerUid || isSuperAdmin)
         ) {
+          if (collectionName === 'courses') {
+            staleCourseIds.add(snapshot.id);
+          } else {
+            staleClassIds.add(snapshot.id);
+          }
           staleRefs.push(snapshot.ref);
         }
+      }
+    }
+    if (staleCourseIds.size > 0) {
+      const classSnapshots = await getDocs(
+        collection(db, 'competitions', competitionId, 'classes')
+      );
+      const remainingReferences = classSnapshots.docs.flatMap((classDoc) => {
+        if (staleClassIds.has(classDoc.id)) return [];
+        const data = classDoc.data();
+        const referencedCourse = Array.from(staleCourseIds).some(
+          (courseId) =>
+            data.courseId === courseId ||
+            (Array.isArray(data.forkCourseIds) && data.forkCourseIds.includes(courseId))
+        );
+        return referencedCourse
+          ? [typeof data.name === 'string' ? data.name : classDoc.id]
+          : [];
+      });
+      if (remainingReferences.length > 0) {
+        throw new Error(
+          `Importen kan inte ta bort banor som fortfarande används av ${remainingReferences.join(', ')}.`
+        );
       }
     }
     for (let offset = 0; offset < staleRefs.length; offset += 400) {
@@ -2749,7 +2703,57 @@ export async function deleteCourseFromFirestore(
 ): Promise<void> {
   const context = await getCompetitionMutationContext(competitionId);
   const id = sanitizeFirestoreId(courseId, 'crs');
+  const classes = await getDocs(
+    collection(db, 'competitions', context.competitionId, 'classes')
+  );
+  const references = classes.docs.flatMap((classDoc) => {
+    const data = classDoc.data();
+    const directReference = data.courseId === id;
+    const forkReference =
+      Array.isArray(data.forkCourseIds) && data.forkCourseIds.includes(id);
+    return directReference || forkReference
+      ? [typeof data.name === 'string' ? data.name : classDoc.id]
+      : [];
+  });
+  if (references.length > 0) {
+    throw new Error(
+      `Banan används av ${references.join(', ')}. Ta bort eller ändra klassernas banreferenser innan banan tas bort.`
+    );
+  }
   await deleteDoc(doc(db, 'competitions', context.competitionId, 'courses', id));
+}
+
+export function subscribeCoursesFromFirestore(
+  competitionId: string,
+  onCourses: (courses: Course[]) => void,
+  onError: (error: Error) => void,
+  onChanged?: () => void
+): () => void {
+  const id = sanitizeFirestoreId(competitionId, 'evt');
+  let initialized = false;
+  const unsubscribe = onSnapshot(
+    collection(db, 'competitions', id, 'courses'),
+    (snapshot) => {
+      onCourses(
+        snapshot.docs.map((courseDoc) => {
+          const data = courseDoc.data();
+          return {
+            id: typeof data.courseId === 'string' ? data.courseId : courseDoc.id,
+            name: typeof data.name === 'string' ? data.name : 'Bana',
+            lengthMeters: Number(data.lengthMeters ?? 0),
+            climbMeters: Number(data.climbMeters ?? 0),
+            controls: Array.isArray(data.controls) ? data.controls.map(Number) : [],
+          };
+        })
+      );
+      if (initialized && snapshot.docChanges().length > 0) {
+        onChanged?.();
+      }
+      initialized = true;
+    },
+    (error) => onError(error)
+  );
+  return unsubscribe;
 }
 
 export async function saveClassToFirestore(

@@ -4854,13 +4854,18 @@ async function startServer() {
       return;
     }
     const course: Course = {
-      id: `crs-${Date.now()}`,
+      id: body.id?.trim() || `crs-${Date.now()}`,
       name: body.name.trim(),
       lengthMeters: Number(body.lengthMeters) || 3500,
       climbMeters: Number(body.climbMeters) || 80,
       controls: body.controls.map(Number).filter((n) => Number.isFinite(n) && n > 0),
     };
-    db.courses.push(course);
+    const existingIndex = db.courses.findIndex((existing) => existing.id === course.id);
+    if (existingIndex >= 0) {
+      db.courses[existingIndex] = course;
+    } else {
+      db.courses.push(course);
+    }
     recalculateEventFromRawReadouts(db);
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
@@ -4870,31 +4875,46 @@ async function startServer() {
   app.put('/api/courses/:id', (req, res) => {
     const db = getActiveEvent();
     const idx = db.courses.findIndex((c) => c.id === req.params.id);
-    if (idx === -1) {
-      res.status(404).json({ error: 'Bana hittades ej.' });
-      return;
-    }
     const body = req.body as Partial<Course>;
-    db.courses[idx] = {
-      ...db.courses[idx],
-      name: body.name !== undefined ? body.name.trim() : db.courses[idx].name,
+    const existing = idx >= 0 ? db.courses[idx] : null;
+    const course: Course = {
+      id: req.params.id,
+      name: body.name !== undefined ? body.name.trim() : existing?.name ?? 'Bana',
       lengthMeters:
-        body.lengthMeters !== undefined ? Number(body.lengthMeters) : db.courses[idx].lengthMeters,
+        body.lengthMeters !== undefined ? Number(body.lengthMeters) : existing?.lengthMeters ?? 3500,
       climbMeters:
-        body.climbMeters !== undefined ? Number(body.climbMeters) : db.courses[idx].climbMeters,
+        body.climbMeters !== undefined ? Number(body.climbMeters) : existing?.climbMeters ?? 80,
       controls: Array.isArray(body.controls)
         ? body.controls.map(Number).filter((n) => Number.isFinite(n) && n > 0)
-        : db.courses[idx].controls,
+        : existing?.controls ?? [],
     };
+    if (idx >= 0) {
+      db.courses[idx] = course;
+    } else {
+      db.courses.push(course);
+    }
 
     recalculateEventFromRawReadouts(db);
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
-    res.json(db.courses[idx]);
+    res.json(course);
   });
 
   app.delete('/api/courses/:id', (req, res) => {
     const db = getActiveEvent();
+    const referencingClasses = db.classes
+      .filter(
+        (compClass) =>
+          compClass.courseId === req.params.id ||
+          compClass.forkCourseIds?.includes(req.params.id)
+      )
+      .map((compClass) => compClass.name);
+    if (referencingClasses.length > 0) {
+      res.status(409).json({
+        error: `Banan används av ${referencingClasses.join(', ')}. Ta bort eller ändra klassernas banreferenser innan banan tas bort.`,
+      });
+      return;
+    }
     db.courses = db.courses.filter((c) => c.id !== req.params.id);
     recalculateEventFromRawReadouts(db);
     saveSeasonDatabase(seasonDb);

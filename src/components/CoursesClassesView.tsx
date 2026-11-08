@@ -51,6 +51,7 @@ export function CoursesClassesView({
   const [lengthMeters, setLengthMeters] = useState('4200');
   const [climbMeters, setClimbMeters] = useState('110');
   const [controlsText, setControlsText] = useState('31, 42, 55, 100');
+  const [courseActionError, setCourseActionError] = useState<string | null>(null);
 
   const [classModalOpen, setClassModalOpen] = useState(false);
   const [editingClass, setEditingClass] = useState<CompClass | null>(null);
@@ -116,6 +117,7 @@ export function CoursesClassesView({
   }, [courses, classes, competitors]);
 
   const openNewCourse = () => {
+    setCourseActionError(null);
     setEditingCourse(null);
     setCourseName('');
     setLengthMeters('4200');
@@ -125,6 +127,7 @@ export function CoursesClassesView({
   };
 
   const openEditCourse = (c: Course) => {
+    setCourseActionError(null);
     setEditingCourse(c);
     setCourseName(c.name);
     setLengthMeters(String(c.lengthMeters));
@@ -185,16 +188,23 @@ export function CoursesClassesView({
       .filter((n) => Number.isFinite(n) && n > 0 && n <= 511);
     if (!courseName.trim() || parsedControls.length === 0) return;
 
-    await onSaveCourse(
-      {
-        name: courseName.trim(),
-        lengthMeters: Number(lengthMeters) || 3500,
-        climbMeters: Number(climbMeters) || 80,
-        controls: parsedControls,
-      },
-      editingCourse?.id
-    );
-    setCourseModalOpen(false);
+    setCourseActionError(null);
+    try {
+      await onSaveCourse(
+        {
+          name: courseName.trim(),
+          lengthMeters: Number(lengthMeters) || 3500,
+          climbMeters: Number(climbMeters) || 80,
+          controls: parsedControls,
+        },
+        editingCourse?.id
+      );
+      setCourseModalOpen(false);
+    } catch (error) {
+      setCourseActionError(
+        error instanceof Error ? error.message : 'Kunde inte spara banan.'
+      );
+    }
   };
 
   const submitClass = async (e: React.FormEvent) => {
@@ -377,6 +387,14 @@ export function CoursesClassesView({
           >
             <X className="w-3.5 h-3.5" />
           </button>
+        </div>
+      )}
+      {courseActionError && (
+        <div
+          role="alert"
+          className="px-3.5 py-2 rounded-lg border text-xs bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-red-800 dark:text-red-300"
+        >
+          {courseActionError}
         </div>
       )}
 
@@ -868,7 +886,16 @@ export function CoursesClassesView({
                   {courses.length > 1 && (
                     <button
                       type="button"
-                      onClick={() => void onDeleteCourse(c.id)}
+                      onClick={() => {
+                        setCourseActionError(null);
+                        void onDeleteCourse(c.id).catch((error: unknown) => {
+                          setCourseActionError(
+                            error instanceof Error
+                              ? error.message
+                              : 'Kunde inte ta bort banan.'
+                          );
+                        });
+                      }}
                       className="p-1 text-slate-400 hover:text-red-600 rounded"
                       aria-label={`Ta bort ${c.name}`}
                     >
