@@ -422,11 +422,9 @@ export interface PublicSeasonOverviewPayload {
   seriesStandings: SeriesStandingsBundle[];
 }
 
-export type OfficialPinRole = 'START' | 'READOUT' | 'FOREST' | 'SPEAKER';
+export type RolePinMap = Record<OfficialRole, string>;
 
-export type RolePinMap = Record<OfficialPinRole, string>;
-
-export type AuthSessionKind = 'ADMIN' | 'OFFICIAL' | 'PIN_OFFICIAL';
+export type AuthSessionKind = 'ADMIN' | 'OFFICIAL';
 
 export type ClubAdminTier = 'SUPER_ADMIN' | 'RACE_ADMIN';
 export type OfficialRole = Exclude<OfficialRoleMode, 'ALL'>;
@@ -462,7 +460,7 @@ export interface AuthSessionUser {
   officialRole: OfficialRoleMode;
   lockedEventId: string | null;
   lockedEventName: string | null;
-  authMethod: 'GOOGLE' | 'PIN' | 'OFFLINE_CODE';
+  authMethod: 'GOOGLE';
   issuedAt: string;
   expiresAt: string;
 }
@@ -476,41 +474,8 @@ export interface ClubAdminAccount {
   addedAt: string;
 }
 
-export interface AuthPublicInfoPayload {
-  competitions: {
-    id: string;
-    shortCode: string;
-    name: string;
-    organizer: string;
-    date: string;
-    status: EventLifecycleStatus;
-    pinsCustomized: boolean;
-    demoPinHints?: RolePinMap;
-  }[];
-  activeEventId: string;
-  offlineCodeEnabled: boolean;
-  offlineCodeCustomized: boolean;
-  demoOfflineCodeHint?: string;
-  firebaseProjectId: string;
-  clubSettings?: Pick<
-    ClubSettings,
-    | 'clubName'
-    | 'portalTitle'
-    | 'logoDataUrl'
-    | 'customBgColor'
-    | 'customTextColor'
-    | 'customAccentColor'
-  >;
-}
-
 export interface AuthManagePayload {
-  eventId: string;
-  eventName: string;
-  rolePins: RolePinMap;
-  pinsCustomized: boolean;
   admins: ClubAdminAccount[];
-  offlineCodeEnabled: boolean;
-  offlineCodeCustomized: boolean;
   clubSettings?: ClubSettings;
   demoCleared?: boolean;
 }

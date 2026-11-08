@@ -337,11 +337,8 @@ export default function App() {
         }
       } else {
         setFirebaseUserPresent(false);
-        const existing = getStoredAuthSession();
-        if (!existing || existing.user.authMethod === 'GOOGLE') {
-          setStoredAuthSession(null);
-          setAuthSession(null);
-        }
+        setStoredAuthSession(null);
+        setAuthSession(null);
       }
       setAuthReady(true);
     });
@@ -2081,9 +2078,7 @@ export default function App() {
               type="button"
               onClick={() => void handleLogout()}
               className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors whitespace-nowrap shrink-0"
-              title={
-                'Logga ut från sekretariatet'
-              }
+              title="Logga ut från sekretariatet"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>Logga ut</span>
@@ -2294,9 +2289,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => void handleLogout()}
-              title={
-                'Logga ut från sekretariatet'
-              }
+              title="Logga ut från sekretariatet"
               aria-label="Logga ut"
               className="inline-flex items-center gap-1.5 p-1.5 sm:px-2.5 sm:py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-transparent sm:border-slate-200/80 sm:dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >

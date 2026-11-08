@@ -8,9 +8,7 @@ import {
   resolveFirebaseUserRole,
 } from '../firebase';
 import type {
-  AuthPublicInfoPayload,
   AuthSessionUser,
-  OfficialRoleMode,
 } from '../types/sportident';
 
 export interface StoredAuthSession {
@@ -19,7 +17,6 @@ export interface StoredAuthSession {
 }
 
 const SESSION_STORAGE_KEY = 'passersi_auth_session_v1';
-export const LEGACY_PIN_AUTH_ENABLED = import.meta.env.VITE_ENABLE_LEGACY_PIN_AUTH === 'true';
 
 type AuthListener = (session: StoredAuthSession | null) => void;
 const listeners = new Set<AuthListener>();
@@ -41,10 +38,7 @@ export function getStoredAuthSession(): StoredAuthSession | null {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       return null;
     }
-    if (
-      !LEGACY_PIN_AUTH_ENABLED &&
-      (parsed.user.authMethod === 'PIN' || parsed.user.authMethod === 'OFFLINE_CODE')
-    ) {
+    if (parsed.user.authMethod !== 'GOOGLE') {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       return null;
     }
@@ -228,107 +222,6 @@ export async function loginWithGoogleClient(): Promise<
       code,
     };
   }
-}
-
-/**
- * Client-side PIN verification against competition role pins.
- * Zero requests to /api/auth/...
- */
-export function loginWithPinClient(params: {
-  eventId: string;
-  eventName?: string;
-  pin: string;
-  rolePins?: Record<string, string>;
-}): { ok: true; session: StoredAuthSession } | { ok: false; error: string } {
-  const {
-    eventId,
-    eventName = 'Tävling',
-    pin,
-    rolePins = {
-      START: '1100',
-      READOUT: '2200',
-      FOREST: '3300',
-      SPEAKER: '4400',
-    },
-  } = params;
-
-  let matchedRole: OfficialRoleMode | null = null;
-  let roleLabel = '';
-
-  if (pin === (rolePins.START || '1100')) {
-    matchedRole = 'START';
-    roleLabel = 'Startpersonal & Startfålla';
-  } else if (pin === (rolePins.READOUT || '2200')) {
-    matchedRole = 'READOUT';
-    roleLabel = 'Mål & Avläsning';
-  } else if (pin === (rolePins.FOREST || '3300')) {
-    matchedRole = 'FOREST';
-    roleLabel = 'Skogssäkerhet & Sök';
-  } else if (pin === (rolePins.SPEAKER || '4400')) {
-    matchedRole = 'SPEAKER';
-    roleLabel = 'Speaker & Resultat';
-  }
-
-  if (!matchedRole) {
-    return {
-      ok: false,
-      error: 'Felaktig funktionärs-PIN. Kontrollera din 4-siffriga kod.',
-    };
-  }
-
-  const session: StoredAuthSession = {
-    token: `pin_${matchedRole}_${eventId}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-    user: {
-      sessionKind: 'PIN_OFFICIAL',
-      uid: `pin_${matchedRole.toLowerCase()}_${eventId}`,
-      displayName: `${roleLabel} (PIN-inloggad)`,
-      email: null,
-      adminTier: null,
-      officialRole: matchedRole,
-      lockedEventId: eventId,
-      lockedEventName: eventName,
-      authMethod: 'PIN',
-      issuedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
-    },
-  };
-  setStoredAuthSession(session);
-  return { ok: true, session };
-}
-
-/**
- * Client-side offline admin code verification.
- * Zero requests to /api/auth/...
- */
-export function loginWithOfflineCodeClient(
-  code: string
-): { ok: true; session: StoredAuthSession } | { ok: false; error: string } {
-  const clean = code.trim().toLowerCase();
-  if (clean !== 'okosteraker2026' && clean !== 'oklinne2026') {
-    return {
-      ok: false,
-      error: 'Felaktig offline reservkod.',
-    };
-  }
-
-  const session: StoredAuthSession = {
-    token: `offline_token_${Date.now()}`,
-    user: {
-      sessionKind: 'ADMIN',
-      uid: 'offline_emergency_admin',
-      displayName: 'Tävlingsledare (Offline reservläge)',
-      email: null,
-      adminTier: 'RACE_ADMIN',
-      officialRole: 'ALL',
-      lockedEventId: null,
-      lockedEventName: null,
-      authMethod: 'OFFLINE_CODE',
-      issuedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
-    },
-  };
-  setStoredAuthSession(session);
-  return { ok: true, session };
 }
 
 export async function logoutSecretariatSession(): Promise<void> {
