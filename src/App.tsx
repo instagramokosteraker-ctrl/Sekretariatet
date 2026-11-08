@@ -914,6 +914,7 @@ export default function App() {
               customBgColor: prev.customBgColor,
               customTextColor: prev.customTextColor,
               customAccentColor: prev.customAccentColor,
+              clubName: prev.clubName,
               eventorOrgId: prev.eventorOrgId,
               defaultDirectEntryFeeSek: prev.defaultDirectEntryFeeSek,
               rentalCardFeeSek: prev.rentalCardFeeSek,
@@ -1522,6 +1523,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name: newEvtName.trim(),
+            organizer: clubSettings.clubName || 'OK Österåker',
             date: newEvtDate,
             zeroTimeStr: newEvtZeroTime.trim() || '18:00:00',
             arenaInfo: newEvtArena.trim(),

@@ -1293,7 +1293,6 @@ export async function syncFullSeasonToFirestore(
   // 1. Upsert /clubSettings/default
   const clubPath = 'clubSettings/default';
   const clubMutable = {
-    clubName: (snapshot.clubSettings.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
     demoCleared: Boolean(snapshot.demoCleared),
     competitionIds,
   };
@@ -1329,6 +1328,9 @@ export async function syncFullSeasonToFirestore(
       await setDoc(doc(db, 'clubSettings', 'default'), {
         settingId: 'default',
         ...clubMutable,
+        clubName:
+          (snapshot.clubSettings.clubName || 'OK Österåker').trim().slice(0, 100) ||
+          'OK Österåker',
         defaultDirectEntryFeeSek: clampInt(
           snapshot.clubSettings.defaultDirectEntryFeeSek,
           0,

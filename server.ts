@@ -2092,7 +2092,7 @@ function loadSeasonDatabase(): SeasonDatabase {
         }
         if (!Array.isArray(full.runnerDb)) full.runnerDb = [];
         if (!full.eventor) full.eventor = buildDefaultEventorMeta();
-        const loadedClubCfg = ensureClubSettings(full);
+        ensureClubSettings(full);
         const hadAuthConfig = Boolean(full.authConfig);
         const hadLegacyAuthConfig = Boolean(
           full.authConfig &&
@@ -2117,10 +2117,6 @@ function loadSeasonDatabase(): SeasonDatabase {
             ev.competition.feeTrackingEnabled === undefined ||
             legacyCompetition.enableFeesAndSwish !== undefined
           ) {
-            normalizedAnyEventMeta = true;
-          }
-          if (loadedClubCfg.clubName && ev.competition.organizer !== loadedClubCfg.clubName) {
-            ev.competition.organizer = loadedClubCfg.clubName;
             normalizedAnyEventMeta = true;
           }
           ev.competition.feeTrackingEnabled = Boolean(
@@ -3374,9 +3370,6 @@ async function startServer() {
           ? normalizeSeriesScoringSettings(body.seriesScoringSettings)
           : current.seriesScoringSettings || {},
     };
-    for (const ev of Object.values(seasonDb.eventsMap)) {
-      ev.competition.organizer = seasonDb.clubSettings.clubName;
-    }
     persistUserMutation();
     broadcastFullState();
     res.json(seasonDb.clubSettings);
@@ -3476,7 +3469,10 @@ async function startServer() {
           status: item.competition.status || 'LIVE',
           statusOverride: Boolean(item.competition.statusOverride),
           name: item.competition.name || 'Tävling',
-          organizer: ensureClubSettings(seasonDb).clubName,
+          organizer:
+            item.competition.organizer ??
+            existingLocal?.competition.organizer ??
+            ensureClubSettings(seasonDb).clubName,
           date: item.competition.date || getStockholmDateIso(),
           zeroTimeStr: zeroStr,
           zeroTimeSec: zeroSec,
@@ -3737,7 +3733,7 @@ async function startServer() {
         shortCode,
         status: 'LIVE',
         name: body.name.trim(),
-        organizer: clubCfg.clubName || 'OK Österåker',
+        organizer: body.organizer?.trim() || clubCfg.clubName || 'OK Österåker',
         date: body.date?.trim() || getStockholmDateIso(),
         zeroTimeStr: zeroStr,
         zeroTimeSec: zeroSec,
@@ -3784,7 +3780,9 @@ async function startServer() {
     if (body.name !== undefined && body.name.trim()) {
       target.competition.name = body.name.trim();
     }
-    target.competition.organizer = ensureClubSettings(seasonDb).clubName;
+    if (body.organizer !== undefined) {
+      target.competition.organizer = body.organizer.trim().slice(0, 100);
+    }
     if (body.date !== undefined && body.date.trim()) {
       target.competition.date = body.date.trim();
     }
@@ -3868,7 +3866,7 @@ async function startServer() {
         shortCode,
         status: body.status ?? 'UPCOMING',
         name: body.name?.trim() || `${src.competition.name} (Kopia)`,
-        organizer: ensureClubSettings(seasonDb).clubName,
+        organizer: src.competition.organizer,
         date: body.date?.trim() || getStockholmDateIso(),
         zeroTimeStr: src.competition.zeroTimeStr,
         zeroTimeSec: src.competition.zeroTimeSec,
@@ -5837,7 +5835,9 @@ async function startServer() {
       return;
     }
     if (body.name?.trim()) db.competition.name = body.name.trim();
-    db.competition.organizer = ensureClubSettings(seasonDb).clubName;
+    if (body.organizer !== undefined) {
+      db.competition.organizer = body.organizer.trim().slice(0, 100);
+    }
     if (body.date?.trim()) db.competition.date = body.date.trim();
     if (body.zeroTimeStr?.trim()) {
       const parsed = parseClockStrToSec(body.zeroTimeStr);
@@ -5878,9 +5878,6 @@ async function startServer() {
     const fresh = buildSeasonSeed();
     fresh.authConfig = prevAuth;
     fresh.clubSettings = prevClub;
-    for (const ev of Object.values(fresh.eventsMap)) {
-      ev.competition.organizer = prevClub.clubName;
-    }
     seasonDb = fresh;
     persistUserMutation();
     broadcastFullState();
@@ -5954,10 +5951,7 @@ async function startServer() {
       eventor: candidate.eventor ?? seasonDb.eventor,
       authConfig: preservedAuth,
     };
-    const restoredClub = ensureClubSettings(seasonDb);
-    for (const ev of Object.values(seasonDb.eventsMap)) {
-      ev.competition.organizer = restoredClub.clubName;
-    }
+    ensureClubSettings(seasonDb);
     persistUserMutation();
     broadcastFullState();
     res.json({
