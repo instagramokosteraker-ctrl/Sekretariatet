@@ -1305,9 +1305,6 @@ export async function syncFullSeasonToFirestore(
     customBgColor: sanitizeCloudHexColor(snapshot.clubSettings.customBgColor),
     customTextColor: sanitizeCloudHexColor(snapshot.clubSettings.customTextColor),
     customAccentColor: sanitizeCloudHexColor(snapshot.clubSettings.customAccentColor),
-    activeEventId: snapshot.activeEventId
-      ? sanitizeFirestoreId(snapshot.activeEventId, 'evt')
-      : '',
     demoCleared: Boolean(snapshot.demoCleared),
     competitionIds,
   };
@@ -1335,9 +1332,6 @@ export async function syncFullSeasonToFirestore(
     if (clubMutable.competitionIds.length === 0 && Array.isArray(existingClubDoc.competitionIds) && existingClubDoc.competitionIds.length > 0) {
       clubMutable.competitionIds = existingClubDoc.competitionIds as string[];
     }
-    if (!clubMutable.activeEventId && typeof existingClubDoc.activeEventId === 'string' && existingClubDoc.activeEventId.length > 0) {
-      clubMutable.activeEventId = existingClubDoc.activeEventId;
-    }
   }
 
   if (!existingClubOwner) {
@@ -1345,6 +1339,9 @@ export async function syncFullSeasonToFirestore(
       await setDoc(doc(db, 'clubSettings', 'default'), {
         settingId: 'default',
         ...clubMutable,
+        activeEventId: snapshot.activeEventId
+          ? sanitizeFirestoreId(snapshot.activeEventId, 'evt')
+          : '',
         ownerUid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1354,8 +1351,15 @@ export async function syncFullSeasonToFirestore(
     }
   } else if (existingClubOwner === ownerUid || isSuperAdmin) {
     try {
+      const activeEventId =
+        typeof existingClubDoc?.activeEventId === 'string'
+          ? existingClubDoc.activeEventId
+          : snapshot.activeEventId
+            ? sanitizeFirestoreId(snapshot.activeEventId, 'evt')
+            : '';
       await updateDoc(doc(db, 'clubSettings', 'default'), {
         ...clubMutable,
+        ...(existingClubDoc?.activeEventId === undefined ? { activeEventId } : {}),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -4437,6 +4441,26 @@ export function subscribeClubSettingsFromFirestore(
   return unsubscribe;
 }
 
+export function subscribeActiveEventIdFromFirestore(
+  onUpdate: (activeEventId: string | null) => void
+): () => void {
+  const unsubscribe = onSnapshot(
+    doc(db, 'clubSettings', 'default'),
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(null);
+        return;
+      }
+      const activeEventId = snap.data().activeEventId;
+      onUpdate(typeof activeEventId === 'string' ? activeEventId : null);
+    },
+    (err) => {
+      console.warn('Realtime-lyssnare på aktiv tävling misslyckades:', err);
+    }
+  );
+  return unsubscribe;
+}
+
 export interface CreateCompetitionInFirestoreParams {
   competitionId: string;
   shortCode?: string;
@@ -4630,7 +4654,8 @@ export async function createCompetitionInFirestore(
       });
     }
   } catch (clubErr) {
-    console.warn('Kunde inte uppdatera clubSettings i Firestore:', clubErr);
+    console.error('Kunde inte uppdatera aktiv tävling i Firestore:', clubErr);
+    throw clubErr;
   }
 
   return competitionId;

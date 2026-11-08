@@ -118,6 +118,7 @@ import {
   subscribePublicCompetitionSummaries,
   loadClubSettingsFromFirestore,
   subscribeClubSettingsFromFirestore,
+  subscribeActiveEventIdFromFirestore,
 } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
@@ -519,6 +520,8 @@ export default function App() {
 
   const [activeEventId, setActiveEventId] = useState<string>('');
   const activeEventIdRef = useRef<string>('');
+  const activeEventIdFromFirestoreRef = useRef(false);
+  const mirroredActiveEventIdRef = useRef<string | null>(null);
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
   const [competitionSwitchError, setCompetitionSwitchError] = useState<string | null>(null);
   const [isEmptySeason, setIsEmptySeason] = useState<boolean>(true);
@@ -557,6 +560,46 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!firebaseUserUid) {
+      activeEventIdFromFirestoreRef.current = false;
+      mirroredActiveEventIdRef.current = null;
+      return;
+    }
+    return subscribeActiveEventIdFromFirestore((firestoreActiveEventId) => {
+      activeEventIdFromFirestoreRef.current = firestoreActiveEventId !== null;
+      if (firestoreActiveEventId !== null) {
+        setActiveEventId(firestoreActiveEventId);
+      }
+    });
+  }, [firebaseUserUid]);
+
+  useEffect(() => {
+    if (
+      !firebaseUserUid ||
+      authSession?.user.sessionKind !== 'ADMIN' ||
+      !activeEventIdFromFirestoreRef.current ||
+      !activeEventId
+    ) {
+      return;
+    }
+    if (mirroredActiveEventIdRef.current === activeEventId) return;
+    mirroredActiveEventIdRef.current = activeEventId;
+    void apiFetch(`/api/competitions/${encodeURIComponent(activeEventId)}/activate`, {
+      method: 'POST',
+    })
+      .then((response) => {
+        if (!response.ok && response.status !== 404 && response.status !== 405) {
+          console.warn(
+            `Kunde inte uppdatera Express-kompatibilitetsspeglingen för aktiv tävling (HTTP ${response.status}).`
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn('Kunde inte nå Express-kompatibilitetsspeglingen för aktiv tävling:', error);
+      });
+  }, [activeEventId, authSession, firebaseUserUid]);
+
+  useEffect(() => {
     document.title = clubSettings.portalTitle?.trim() || 'PasserSI';
   }, [clubSettings.portalTitle]);
 
@@ -587,46 +630,45 @@ export default function App() {
   useEffect(() => {
     if (
       !firebaseUserUid ||
-      (!isEmptySeason && activeEventId && competitionsList.some((item) => item.id === activeEventId)) ||
+      !activeEventId ||
+      competition.id === activeEventId ||
       hydratingCompetitionListRef.current
     ) {
       return;
     }
 
     hydratingCompetitionListRef.current = true;
-    void loadFullSeasonFromFirestore()
+    void loadFullSeasonFromFirestore({
+      competitionId: activeEventId,
+      includeRunnerDb: false,
+    })
       .then((cloudSnap) => {
         if (!cloudSnap) return;
-        if (cloudSnap.events.length === 0) {
-          setIsEmptySeason(true);
-          return;
-        }
-        const selectedEvent =
-          cloudSnap.events.find((event) => event.competition.id === activeEventId) ??
-          cloudSnap.events.find(
-            (event) => event.competition.id === cloudSnap.activeEventId
-          ) ??
-          cloudSnap.events[0];
+        const selectedEvent = cloudSnap.events.find(
+          (event) => event.competition.id === activeEventId
+        );
         if (!selectedEvent) return;
 
-        setActiveEventId(selectedEvent.competition.id);
         setCompetition(selectedEvent.competition);
         setCourses(selectedEvent.courses);
         setClasses(selectedEvent.classes);
         setCompetitors(selectedEvent.competitors);
-        setRunnerDb(cloudSnap.runnerDb ?? []);
-        setClubSettings(cloudSnap.clubSettings);
-        setSeriesStandings(cloudSnap.seriesStandings ?? []);
-        setDemoCleared(cloudSnap.demoCleared);
+        setStations(selectedEvent.stations ?? []);
+        setEmergency(
+          selectedEvent.emergency ?? {
+            brokenControls: selectedEvent.brokenControls,
+            controlTimeOffsets: {},
+          }
+        );
         setIsEmptySeason(false);
       })
       .catch((error: unknown) => {
-        console.error('Kunde inte läsa aktiv tävling från Firestore:', error);
+        console.error('Kunde inte läsa vald tävling från Firestore:', error);
       })
       .finally(() => {
         hydratingCompetitionListRef.current = false;
       });
-  }, [activeEventId, competitionsList, firebaseUserUid, isEmptySeason]);
+  }, [activeEventId, competition.id, firebaseUserUid]);
 
   const [eventor, setEventor] = useState<EventorIntegrationStatus>({
     apiKeyConfigured: false,
@@ -844,7 +886,17 @@ export default function App() {
   }, [appendFrameLog, submitFullReadoutToServer, submitOnlinePunchToServer]);
 
   const applySnapshot = useCallback((snap: MeosAppState) => {
-    if (snap.activeEventId !== undefined) setActiveEventId(snap.activeEventId);
+    if (
+      firebaseUserUid &&
+      activeEventIdFromFirestoreRef.current &&
+      snap.activeEventId !== activeEventIdRef.current
+    ) {
+      setLoading(false);
+      return;
+    }
+    if (!firebaseUserUid && snap.activeEventId !== undefined) {
+      setActiveEventId(snap.activeEventId);
+    }
     if (snap.competitionsList) {
       setCompetitionsList(firestoreCompetitionsRef.current ?? snap.competitionsList);
     }
@@ -874,7 +926,7 @@ export default function App() {
     setEvents(snap.events);
     setConnectedMonitors(snap.connectedMonitors);
     setLoading(false);
-  }, []);
+  }, [firebaseUserUid]);
 
   // Initial state + authenticated WebSocket synchronization for Secretariat
   const authToken = authSession?.token ?? null;
@@ -1198,20 +1250,6 @@ export default function App() {
     setSelectedRunnerId(null);
     setPendingUnknownReadout(null);
     if (eventId === activeEventId) return true;
-    try {
-      const res = await apiFetch(`/api/competitions/${encodeURIComponent(eventId)}/activate`, {
-        method: 'POST',
-      });
-      if (res.ok) {
-        const snap = (await res.json()) as MeosAppState;
-        if (snap.activeEventId === eventId) {
-          applySnapshot(snap);
-          return true;
-        }
-      }
-    } catch {
-      // Backend not running (Vercel)
-    }
 
     try {
       const cloudSnap = await loadFullSeasonFromFirestore({
@@ -1240,6 +1278,7 @@ export default function App() {
         }
       );
       setIsEmptySeason(false);
+
       return true;
     } catch (err) {
       console.error('Kunde inte aktivera vald tävling:', err);

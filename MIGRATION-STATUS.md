@@ -6,7 +6,7 @@ Last updated: 2026-11-08
 
 - **Frontend:** React/Vite application, intended to be hosted on Vercel.
 - **Authentication and authorization:** Google Sign-In through Firebase Auth. User roles are stored in Firestore and include `SUPER_ADMIN`, `RACE_ADMIN`, `START`, `READOUT`, `FOREST`, and `SPEAKER`.
-- **Cloud data:** Firestore is used for role data, club settings, and cloud season synchronization.
+- **Cloud data:** Firestore is used for role data, club settings, and cloud season synchronization. `clubSettings/default.activeEventId` is now the canonical active-competition selection; the Express `seasonDb` value remains a temporary compatibility mirror for existing routes.
 - **Backend:** The Express application in `server.ts` still exists and serves API routes, serves the production frontend when configured to do so, and hosts the `/api/ws` WebSocket endpoint. It also retains server-side integration and persistence responsibilities.
 - **Eventor:** Eventor settings are managed in the administration UI and stored privately in Firestore. Eventor calls have **not** been migrated to Firebase Functions and still depend on the Express backend.
 - **ROC:** ROC polling remains in the Express backend.
