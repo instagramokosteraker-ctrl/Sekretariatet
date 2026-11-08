@@ -422,8 +422,6 @@ export interface PublicSeasonOverviewPayload {
   seriesStandings: SeriesStandingsBundle[];
 }
 
-export type RolePinMap = Record<OfficialRole, string>;
-
 export type AuthSessionKind = 'ADMIN' | 'OFFICIAL';
 
 export type ClubAdminTier = 'SUPER_ADMIN' | 'RACE_ADMIN';
@@ -516,8 +514,6 @@ export interface CloudEventExportItem {
   stations?: SIStation[];
   brokenControls: number[];
   emergency?: EmergencySettings;
-  rolePins: RolePinMap;
-  pinsCustomized: boolean;
 }
 
 export interface CloudSeasonSnapshot {

@@ -75,7 +75,6 @@ const SAFE_ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
 const SAFE_EMAIL_REGEX = /^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const CLOCK_REGEX = /^\d{2}:\d{2}(:\d{2})?$/;
-const PIN_REGEX = /^\d{4,6}$/;
 const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
 const MAX_LOGO_DATA_URL_LEN = 500_000;
 const BATCH_CHUNK_LIMIT = 350;
@@ -1270,7 +1269,7 @@ export async function activateCompetitionInFirestore(
 
 /**
  * Syncs the entire club season (clubSettings, competitions, courses, classes, competitors, SI punches,
- * role PINs, and empty/demoCleared states) to Firestore under Zero-Trust rules.
+ * and empty/demoCleared states) to Firestore under Zero-Trust rules.
  */
 export async function syncFullSeasonToFirestore(
   snapshot: CloudSeasonSnapshot,
@@ -1407,11 +1406,6 @@ export async function syncFullSeasonToFirestore(
       ...(ev.emergency
         ? { controlTimeOffsets: normalizeControlTimeOffsets(ev.emergency.controlTimeOffsets) }
         : {}),
-      pinStart: PIN_REGEX.test(ev.rolePins?.START || '') ? ev.rolePins.START : '1100',
-      pinReadout: PIN_REGEX.test(ev.rolePins?.READOUT || '') ? ev.rolePins.READOUT : '2200',
-      pinForest: PIN_REGEX.test(ev.rolePins?.FOREST || '') ? ev.rolePins.FOREST : '3300',
-      pinSpeaker: PIN_REGEX.test(ev.rolePins?.SPEAKER || '') ? ev.rolePins.SPEAKER : '4400',
-      pinsCustomized: Boolean(ev.pinsCustomized),
     };
 
     const compPath = `competitions/${competitionId}`;
@@ -2220,13 +2214,6 @@ export async function loadFullSeasonFromFirestore(options?: {
       stations,
       brokenControls,
       emergency,
-      rolePins: {
-        START: String(compDocData.pinStart || '1100'),
-        READOUT: String(compDocData.pinReadout || '2200'),
-        FOREST: String(compDocData.pinForest || '3300'),
-        SPEAKER: String(compDocData.pinSpeaker || '4400'),
-      },
-      pinsCustomized: Boolean(compDocData.pinsCustomized),
     });
   }
 
@@ -4463,11 +4450,6 @@ export interface CreateCompetitionInFirestoreParams {
   seriesName?: string;
   allowSelfRegistration?: boolean;
   enableFeesAndSwish?: boolean;
-  pinStart?: string;
-  pinReadout?: string;
-  pinForest?: string;
-  pinSpeaker?: string;
-  pinsCustomized?: boolean;
   courses?: Course[];
   classes?: CompClass[];
 }
@@ -4519,12 +4501,6 @@ export async function createCompetitionInFirestore(
   const allowSelfRegistration = Boolean(params.allowSelfRegistration);
   const enableFeesAndSwish = Boolean(params.enableFeesAndSwish);
 
-  const pinStart = PIN_REGEX.test(params.pinStart || '') ? params.pinStart! : '1100';
-  const pinReadout = PIN_REGEX.test(params.pinReadout || '') ? params.pinReadout! : '2200';
-  const pinForest = PIN_REGEX.test(params.pinForest || '') ? params.pinForest! : '3300';
-  const pinSpeaker = PIN_REGEX.test(params.pinSpeaker || '') ? params.pinSpeaker! : '4400';
-  const pinsCustomized = Boolean(params.pinsCustomized);
-
   // Required keys per firestore.rules isValidCloudCompetition.
   const compDocData = {
     competitionId,
@@ -4543,11 +4519,6 @@ export async function createCompetitionInFirestore(
     finishedCount: 0,
     brokenControls: [] as number[],
     controlTimeOffsets: {},
-    pinStart,
-    pinReadout,
-    pinForest,
-    pinSpeaker,
-    pinsCustomized,
     ownerUid,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

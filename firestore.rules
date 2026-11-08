@@ -266,11 +266,6 @@ service cloud.firestore {
           'competitorCount',
           'finishedCount',
           'brokenControls',
-          'pinStart',
-          'pinReadout',
-          'pinForest',
-          'pinSpeaker',
-          'pinsCustomized',
           'ownerUid',
           'createdAt',
           'updatedAt'
@@ -334,11 +329,23 @@ service cloud.firestore {
             data.controlTimeOffsets.size() <= 64
           )
         ) &&
-        data.pinStart is string && data.pinStart.size() >= 4 && data.pinStart.size() <= 6 && data.pinStart.matches('^\\d{4,6}$') &&
-        data.pinReadout is string && data.pinReadout.size() >= 4 && data.pinReadout.size() <= 6 && data.pinReadout.matches('^\\d{4,6}$') &&
-        data.pinForest is string && data.pinForest.size() >= 4 && data.pinForest.size() <= 6 && data.pinForest.matches('^\\d{4,6}$') &&
-        data.pinSpeaker is string && data.pinSpeaker.size() >= 4 && data.pinSpeaker.size() <= 6 && data.pinSpeaker.matches('^\\d{4,6}$') &&
-        data.pinsCustomized is bool &&
+        (
+          !data.keys().hasAny(['pinStart']) ||
+          (data.pinStart is string && data.pinStart.size() >= 4 && data.pinStart.size() <= 6 && data.pinStart.matches('^\\d{4,6}$'))
+        ) &&
+        (
+          !data.keys().hasAny(['pinReadout']) ||
+          (data.pinReadout is string && data.pinReadout.size() >= 4 && data.pinReadout.size() <= 6 && data.pinReadout.matches('^\\d{4,6}$'))
+        ) &&
+        (
+          !data.keys().hasAny(['pinForest']) ||
+          (data.pinForest is string && data.pinForest.size() >= 4 && data.pinForest.size() <= 6 && data.pinForest.matches('^\\d{4,6}$'))
+        ) &&
+        (
+          !data.keys().hasAny(['pinSpeaker']) ||
+          (data.pinSpeaker is string && data.pinSpeaker.size() >= 4 && data.pinSpeaker.size() <= 6 && data.pinSpeaker.matches('^\\d{4,6}$'))
+        ) &&
+        (!data.keys().hasAny(['pinsCustomized']) || data.pinsCustomized is bool) &&
         data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 && data.ownerUid.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;

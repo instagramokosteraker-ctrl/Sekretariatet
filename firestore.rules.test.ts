@@ -24,7 +24,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
   try {
     const now = new Date();
 
-    // Seed baseline fixtures with rules disabled
+    // Seed legacy competition documents with PIN fields to verify the transition path.
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       const adminDb = ctx.firestore();
       await adminDb.doc('admins/race_admin_1').set({
@@ -261,7 +261,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
-    // New competitions no longer include the mobile self-registration setting.
+    // New competition documents omit legacy PIN fields and optional self-registration.
     await assertSucceeds(
       raceAdminCtx.firestore().doc('competitions/evt_new').set({
         competitionId: 'evt_new',
@@ -278,16 +278,13 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         competitorCount: 0,
         finishedCount: 0,
         brokenControls: [],
-        pinStart: '1100',
-        pinReadout: '2200',
-        pinForest: '3300',
-        pinSpeaker: '4400',
-        pinsCustomized: false,
         ownerUid: 'race_admin_1',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
     );
+    await assertSucceeds(raceAdminCtx.firestore().doc('competitions/evt_live').get());
+    await assertSucceeds(raceAdminCtx.firestore().doc('competitions/evt_new').get());
 
     // 7. Identity Spoofing (ownerUid) -> DENIED
     await assertFails(
@@ -306,11 +303,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         competitorCount: 0,
         finishedCount: 0,
         brokenControls: [],
-        pinStart: '1100',
-        pinReadout: '2200',
-        pinForest: '3300',
-        pinSpeaker: '4400',
-        pinsCustomized: false,
         ownerUid: 'someone_else',
         createdAt: now,
         updatedAt: now,
