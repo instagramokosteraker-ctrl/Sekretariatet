@@ -915,6 +915,9 @@ export default function App() {
               customTextColor: prev.customTextColor,
               customAccentColor: prev.customAccentColor,
               eventorOrgId: prev.eventorOrgId,
+              defaultDirectEntryFeeSek: prev.defaultDirectEntryFeeSek,
+              rentalCardFeeSek: prev.rentalCardFeeSek,
+              missingRentalFeeSek: prev.missingRentalFeeSek,
             }
           : {}),
       }));

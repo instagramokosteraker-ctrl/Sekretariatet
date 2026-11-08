@@ -6,7 +6,7 @@ Last updated: 2026-11-08
 
 - **Frontend:** React/Vite application, intended to be hosted on Vercel.
 - **Authentication and authorization:** Google Sign-In through Firebase Auth. User roles are stored in Firestore and include `SUPER_ADMIN`, `RACE_ADMIN`, `START`, `READOUT`, `FOREST`, and `SPEAKER`.
-- **Cloud data:** Firestore is used for role data, club settings, and cloud season synchronization. `clubSettings/default.activeEventId`, branding settings (`portalTitle`, `logoDataUrl`, `customBgColor`, `customTextColor`, `customAccentColor`), and `eventorOrgId` are canonical in Firestore. Express `seasonDb` values remain temporary compatibility mirrors for existing routes.
+- **Cloud data:** Firestore is used for role data, club settings, and cloud season synchronization. `clubSettings/default.activeEventId`, branding settings (`portalTitle`, `logoDataUrl`, `customBgColor`, `customTextColor`, `customAccentColor`), `eventorOrgId`, and fee defaults (`defaultDirectEntryFeeSek`, `rentalCardFeeSek`, `missingRentalFeeSek`) are canonical in Firestore. Express `seasonDb` values remain temporary compatibility mirrors for existing routes.
 - **Fees:** Swish configuration and Swish-specific UI have been removed. Generic fee tracking remains available under `feeTrackingEnabled`; older competition documents are read compatibly and new documents use only the renamed field.
 - **Backend:** The Express application in `server.ts` still exists and serves API routes, serves the production frontend when configured to do so, and hosts the `/api/ws` WebSocket endpoint. It also retains server-side integration and persistence responsibilities.
 - **Eventor:** Eventor settings are managed in the administration UI and stored privately in Firestore. Eventor calls have **not** been migrated to Firebase Functions and still depend on the Express backend.
@@ -90,6 +90,10 @@ Full-season sync no longer writes branding fields to an existing `clubSettings/d
 ## Firestore-owned Eventor organization ID
 
 `clubSettings/default.eventorOrgId` is canonical. Full-season sync may seed it only when creating a missing club-settings document; it does not include this field in updates to an existing document. Authenticated UI state also ignores the Eventor ID in Express state snapshots and keeps the value from the Firestore listener. Admin saves continue to write Firestore first and may mirror the value to Express for compatibility. Cloud export/hydration and server-side JSON can still carry or store the legacy mirror, but cannot update the canonical Firestore value.
+
+## Firestore-owned fee defaults
+
+`defaultDirectEntryFeeSek`, `rentalCardFeeSek`, and `missingRentalFeeSek` in `clubSettings/default` are canonical. Admin settings continue to save these fields to Firestore first and then mirror them to Express when available. Full-season sync only seeds them when creating a missing club-settings document; updates to an existing document preserve the Firestore values. Authenticated state snapshots also preserve the values from the Firestore listener rather than accepting stale Express settings. Cloud export and hydration may continue to use `seasonDb` as a compatibility mirror but cannot change Firestore fee defaults. These defaults affect new/default fee calculations only; existing class `feeSek` values and competitor payment/return fields remain stored per record and are not rewritten by this migration.
 
 ## Swish removal
 

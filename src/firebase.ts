@@ -1294,14 +1294,6 @@ export async function syncFullSeasonToFirestore(
   const clubPath = 'clubSettings/default';
   const clubMutable = {
     clubName: (snapshot.clubSettings.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
-    defaultDirectEntryFeeSek: clampInt(
-      snapshot.clubSettings.defaultDirectEntryFeeSek,
-      0,
-      10000,
-      100
-    ),
-    rentalCardFeeSek: clampInt(snapshot.clubSettings.rentalCardFeeSek, 0, 5000, 30),
-    missingRentalFeeSek: clampInt(snapshot.clubSettings.missingRentalFeeSek, 0, 20000, 650),
     demoCleared: Boolean(snapshot.demoCleared),
     competitionIds,
   };
@@ -1325,7 +1317,7 @@ export async function syncFullSeasonToFirestore(
     handleWriteOrOfflineError(err, OperationType.GET, clubPath);
   }
 
-  // Preserve existing indexed IDs; branding is only imported when this document is first created.
+  // Preserve Firestore-owned settings while retaining the legacy initial seed behavior.
   if (existingClubDoc) {
     if (clubMutable.competitionIds.length === 0 && Array.isArray(existingClubDoc.competitionIds) && existingClubDoc.competitionIds.length > 0) {
       clubMutable.competitionIds = existingClubDoc.competitionIds as string[];
@@ -1337,6 +1329,19 @@ export async function syncFullSeasonToFirestore(
       await setDoc(doc(db, 'clubSettings', 'default'), {
         settingId: 'default',
         ...clubMutable,
+        defaultDirectEntryFeeSek: clampInt(
+          snapshot.clubSettings.defaultDirectEntryFeeSek,
+          0,
+          10000,
+          100
+        ),
+        rentalCardFeeSek: clampInt(snapshot.clubSettings.rentalCardFeeSek, 0, 5000, 30),
+        missingRentalFeeSek: clampInt(
+          snapshot.clubSettings.missingRentalFeeSek,
+          0,
+          20000,
+          650
+        ),
         eventorOrgId: (snapshot.clubSettings.eventorOrgId || '').trim().slice(0, 32),
         ...legacyBranding,
         activeEventId: snapshot.activeEventId
