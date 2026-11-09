@@ -10,6 +10,7 @@ import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
 } from './src/services/seriesStandings';
+import { logSIAssignmentBypass } from './src/utils/siAssignmentDiagnostics';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2653,6 +2654,13 @@ async function startServer() {
         cardPunches: [],
         validation: null,
       };
+      logCompetitorAssignmentBypass(
+        'cloud readout auto-create from runner database',
+        'CREATE',
+        ev.competition.id,
+        runner,
+        'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.'
+      );
       ev.competitors.unshift(runner);
     }
 
@@ -3219,6 +3227,25 @@ async function startServer() {
     );
   }
 
+  function logCompetitorAssignmentBypass(
+    source: string,
+    operation: Parameters<typeof logSIAssignmentBypass>[0]['operation'],
+    competitionId: string,
+    competitor: Competitor,
+    detail: string,
+    previousSiNumber?: number
+  ): void {
+    logSIAssignmentBypass({
+      source,
+      operation,
+      competitionId,
+      competitorId: competitor.id,
+      siNumber: Number(competitor.siNumber),
+      ...(previousSiNumber !== undefined ? { previousSiNumber } : {}),
+      detail,
+    });
+  }
+
   function requireEventorAdminRequest(
     req: express.Request,
     res: express.Response
@@ -3450,6 +3477,21 @@ async function startServer() {
   app.get('/api/system/cloud-export', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
     const clubSettings = ensureClubSettings(seasonDb);
+    for (const event of Object.values(seasonDb.eventsMap)) {
+      if (event.competitors.length > 0) {
+        console.warn(
+          `[si-assignment-bypass] ${JSON.stringify({
+            source: '/api/system/cloud-export',
+            operation: 'SNAPSHOT_EXPORT',
+            competitionId: event.competition.id,
+            competitorCount: event.competitors.length,
+            assignmentAware: false,
+            enforcementActive: false,
+            detail: 'Exported competitors do not carry SI assignment records or validation.',
+          })}`
+        );
+      }
+    }
     const events: CloudEventExportItem[] = Object.values(seasonDb.eventsMap).map((ev) => ({
       competition: {
         id: ev.competition.id,
@@ -3554,8 +3596,35 @@ async function startServer() {
         events: existingLocal?.events ?? [],
         processedClientIds: existingLocal?.processedClientIds ?? [],
       };
+      for (const competitor of evRec.competitors) {
+        logCompetitorAssignmentBypass(
+          '/api/system/cloud-hydrate',
+          'SNAPSHOT_HYDRATE',
+          evRec.competition.id,
+          competitor,
+          'Cloud snapshot hydration replaces the local competitor list without SI assignment validation.'
+        );
+      }
       recalculateEventFromRawReadouts(evRec);
       nextMap[evRec.competition.id] = evRec;
+    }
+
+    for (const existingEvent of Object.values(seasonDb.eventsMap)) {
+      const hydratedEvent = nextMap[existingEvent.competition.id];
+      for (const competitor of existingEvent.competitors) {
+        if (
+          !hydratedEvent ||
+          !hydratedEvent.competitors.some((candidate) => candidate.id === competitor.id)
+        ) {
+          logCompetitorAssignmentBypass(
+            '/api/system/cloud-hydrate',
+            'DELETE',
+            existingEvent.competition.id,
+            competitor,
+            'Snapshot hydration removes a local competitor without retiring its SI assignment.'
+          );
+        }
+      }
     }
 
     seasonDb.eventsMap = nextMap;
@@ -3576,6 +3645,17 @@ async function startServer() {
   app.post('/api/system/clear-demo', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
     const body = req.body as { clearRunnerDb?: boolean } | undefined;
+    for (const event of Object.values(seasonDb.eventsMap)) {
+      for (const competitor of event.competitors) {
+        logCompetitorAssignmentBypass(
+          '/api/system/clear-demo',
+          'DELETE',
+          event.competition.id,
+          competitor,
+          'Clearing the legacy season removes competitors without retiring SI assignments.'
+        );
+      }
+    }
     seasonDb.eventsMap = {};
     seasonDb.activeEventId = '';
     seasonDb.demoCleared = true;
@@ -4020,6 +4100,16 @@ async function startServer() {
       res.status(404).json({ error: 'Tävlingen hittades inte.' });
       return;
     }
+    const deletedEvent = seasonDb.eventsMap[targetId];
+    for (const competitor of deletedEvent.competitors) {
+      logCompetitorAssignmentBypass(
+        '/api/competitions/:id',
+        'DELETE',
+        targetId,
+        competitor,
+        'Deleting the Express competition removes its competitor mirror without retiring SI assignments.'
+      );
+    }
     delete seasonDb.eventsMap[targetId];
     const remainingKeys = Object.keys(seasonDb.eventsMap);
     if (remainingKeys.length === 0) {
@@ -4234,6 +4324,13 @@ async function startServer() {
         cardPunches: [],
         validation: null,
       };
+      logCompetitorAssignmentBypass(
+        'readout auto-create from runner database',
+        'CREATE',
+        db.competition.id,
+        runner,
+        'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.'
+      );
       db.competitors.unshift(runner);
       autoCreatedFromDb = true;
     }
@@ -4730,6 +4827,13 @@ async function startServer() {
       cardPunches: [],
       validation: null,
     };
+    logCompetitorAssignmentBypass(
+      '/api/competitors',
+      'CREATE',
+      db.competition.id,
+      created,
+      'Express competitor creation does not create an SI assignment.'
+    );
 
     if (body.pendingReadout && Array.isArray(body.pendingReadout.punches)) {
       const effStart =
@@ -4829,6 +4933,14 @@ async function startServer() {
     const nextSi = body.siNumber !== undefined ? Number(body.siNumber) : existing.siNumber;
 
     if (nextSi !== existing.siNumber) {
+      logCompetitorAssignmentBypass(
+        '/api/competitors/:id',
+        'UPDATE',
+        db.competition.id,
+        { ...existing, siNumber: nextSi },
+        'Express changed the SI number without updating the SI assignment.',
+        existing.siNumber
+      );
       const activeConflict = db.competitors.find(
         (c) =>
           c.siNumber === nextSi &&
@@ -4983,6 +5095,16 @@ async function startServer() {
 
   app.delete('/api/competitors/:id', (req, res) => {
     const db = getActiveEvent();
+    const deleted = db.competitors.find((competitor) => competitor.id === req.params.id);
+    if (deleted) {
+      logCompetitorAssignmentBypass(
+        '/api/competitors/:id',
+        'DELETE',
+        db.competition.id,
+        deleted,
+        'Express competitor deletion does not retire or update the SI assignment.'
+      );
+    }
     db.competitors = db.competitors.filter((c) => c.id !== req.params.id);
     recomputeAllSplitRanks(db);
     saveSeasonDatabase(seasonDb);
@@ -5506,7 +5628,7 @@ async function startServer() {
       const si = ent.siNumber > 0 ? ent.siNumber : 8900000 + nextBib;
       if (db.competitors.some((c) => c.siNumber === si)) continue;
 
-      db.competitors.push({
+      const importedCompetitor: Competitor = {
         id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         bib: nextBib++,
         fullName: ent.fullName,
@@ -5528,7 +5650,15 @@ async function startServer() {
         radioSplits: [],
         cardPunches: [],
         validation: null,
-      });
+      };
+      logCompetitorAssignmentBypass(
+        '/api/import/batch',
+        'IMPORT',
+        db.competition.id,
+        importedCompetitor,
+        'IOF XML import creates the Express competitor without validating or creating its SI assignment.'
+      );
+      db.competitors.push(importedCompetitor);
       addedEntries++;
     }
 
@@ -6024,7 +6154,7 @@ async function startServer() {
         const si = ent.siNumber > 0 ? ent.siNumber : 8900000 + nextBib;
         if (db.competitors.some((c) => c.siNumber === si)) continue;
 
-        db.competitors.push({
+        const importedCompetitor: Competitor = {
           id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           bib: nextBib++,
           fullName: ent.fullName,
@@ -6046,7 +6176,15 @@ async function startServer() {
           radioSplits: [],
           cardPunches: [],
           validation: null,
-        });
+        };
+        logCompetitorAssignmentBypass(
+          '/api/eventor/import-event',
+          'IMPORT',
+          db.competition.id,
+          importedCompetitor,
+          'Eventor import creates the Express competitor without validating or creating its SI assignment.'
+        );
+        db.competitors.push(importedCompetitor);
         addedEntries++;
       }
 
@@ -6179,7 +6317,34 @@ async function startServer() {
     }
 
     const eventsMap = candidate.eventsMap as Record<string, SingleEventRecord>;
+    const restoredIds = new Set(
+      Object.values(eventsMap).flatMap((event) =>
+        (event.competitors || []).map((competitor) => competitor.id)
+      )
+    );
+    for (const currentEvent of Object.values(seasonDb.eventsMap)) {
+      for (const competitor of currentEvent.competitors) {
+        if (!restoredIds.has(competitor.id)) {
+          logCompetitorAssignmentBypass(
+            '/api/system/restore',
+            'DELETE',
+            currentEvent.competition.id,
+            competitor,
+            'Backup restore removes a current competitor without retiring its SI assignment.'
+          );
+        }
+      }
+    }
     for (const ev of Object.values(eventsMap)) {
+      for (const competitor of ev.competitors || []) {
+        logCompetitorAssignmentBypass(
+          '/api/system/restore',
+          'RESTORE',
+          ev.competition.id,
+          competitor,
+          'Backup restore accepts competitor records without validating or restoring SI assignments.'
+        );
+      }
       ev.competition.feeTrackingEnabled = Boolean(ev.competition.feeTrackingEnabled);
       if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
       if (!ev.roc) ev.roc = buildDefaultRocStatus('1042');

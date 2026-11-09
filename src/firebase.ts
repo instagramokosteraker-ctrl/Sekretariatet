@@ -69,6 +69,7 @@ import {
   buildSICardAssignmentValidationReport,
   parseSICardAssignmentDocument,
 } from './utils/siCardAssignments';
+import { logSIAssignmentBypass } from './utils/siAssignmentDiagnostics';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -1982,6 +1983,14 @@ export async function syncFullSeasonToFirestore(
         continue;
       }
 
+      logSIAssignmentBypass({
+        source: 'syncFullSeasonToFirestore',
+        operation: 'SNAPSHOT_SEED',
+        competitionId,
+        competitorId,
+        siNumber: Number(cmp.siNumber),
+        detail: 'Legacy snapshot may seed a missing competitor without creating an SI assignment.',
+      });
       childOps.push({
         kind: 'set',
         ref: cmpRef,
@@ -2795,13 +2804,15 @@ export async function saveCompetitionImportToFirestore(params: {
     id: string,
     mutable: Record<string, unknown>,
     createData: Record<string, unknown>
-  ) => {
+  ): Promise<{ existing: boolean; existingData?: Record<string, unknown> }> => {
     const ref = doc(db, 'competitions', competitionId, collectionName, id);
     const snap = await getDoc(ref);
     if (snap.exists() && snap.data().ownerUid !== ownerUid && !isSuperAdmin) {
       throw new Error('Importerad data tillhör ett annat konto.');
     }
+    const existingData = snap.exists() ? snap.data() : undefined;
     operations.push({ ref, existing: snap.exists(), mutable, createData });
+    return { existing: snap.exists(), existingData };
   };
 
   for (const course of params.courses) {
@@ -2892,12 +2903,25 @@ export async function saveCompetitionImportToFirestore(params: {
       punchCodes: punches.map((punch) => clampInt(punch.code, 1, 999, 31)),
       punchTimes: punches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
     };
-    await addOperation('competitors', id, mutable, {
+    const competitorOperation = await addOperation('competitors', id, mutable, {
       competitorId: id,
       competitionId,
       ...mutable,
       ownerUid,
       ...nowFields,
+    });
+    const currentSiNumber = Number(competitor.siNumber);
+    const previousSiNumber = Number(competitorOperation.existingData?.siNumber);
+    logSIAssignmentBypass({
+      source: 'saveCompetitionImportToFirestore',
+      operation: 'IMPORT',
+      competitionId,
+      competitorId: id,
+      siNumber: currentSiNumber,
+      ...(Number.isFinite(previousSiNumber) ? { previousSiNumber } : {}),
+      detail: competitorOperation.existing
+        ? 'Import updates competitor data without validating or updating SI assignment ownership.'
+        : 'Import creates competitor data without creating an SI assignment.',
     });
   }
 
@@ -3607,6 +3631,20 @@ export async function updateCompetitorInFirestore(
     if (competition.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
       throw new Error('Ditt konto saknar behörighet att uppdatera deltagaren.');
     }
+    if (
+      typeof mutable.siNumber === 'number' &&
+      Number(existing.siNumber) !== mutable.siNumber
+    ) {
+      logSIAssignmentBypass({
+        source: 'updateCompetitorInFirestore',
+        operation: 'UPDATE',
+        competitionId: context.competitionId,
+        competitorId: id,
+        siNumber: mutable.siNumber,
+        previousSiNumber: Number(existing.siNumber),
+        detail: 'SI number changed without updating the SI assignment document.',
+      });
+    }
     transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
     if (typeof mutable.status === 'string') {
       const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
@@ -3707,6 +3745,14 @@ export async function deleteCompetitorFromFirestore(
     if (competition.status === 'COMPLETED' && !context.isSuperAdmin) {
       throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
     }
+    logSIAssignmentBypass({
+      source: 'deleteCompetitorFromFirestore',
+      operation: 'DELETE',
+      competitionId: context.competitionId,
+      competitorId: sanitizeFirestoreId(competitorId, 'cmp'),
+      siNumber: Number(competitor.siNumber),
+      detail: 'Competitor deletion does not retire or update the SI assignment.',
+    });
     const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
     transaction.delete(competitorRef);
     transaction.update(competitionRef, {
@@ -4710,6 +4756,14 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   };
   const nextCompetitorCount = existingCompetitors.length + 1;
   const batch = writeBatch(db);
+  logSIAssignmentBypass({
+    source: 'saveDirectCompetitionEntryToFirestore',
+    operation: 'CREATE',
+    competitionId,
+    competitorId,
+    siNumber,
+    detail: 'Direct-entry write does not create an SI assignment.',
+  });
   batch.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
     competitorId,
     competitionId,
