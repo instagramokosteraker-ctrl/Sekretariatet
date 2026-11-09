@@ -75,6 +75,7 @@ import {
 } from '../firebase';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { EventorIntegrationSettingsView } from './EventorIntegrationSettingsView';
+import { SIAssignmentInventoryView } from './SIAssignmentInventoryView';
 import {
   CLUB_COLOR_PRESETS,
   applyClubThemeToDocument,
@@ -118,7 +119,14 @@ interface AccessControlViewProps {
   onUpdateClubSettings?: (settings: ClubSettings) => void;
 }
 
-type AdminWorkspaceTab = 'events' | 'series' | 'admins' | 'club' | 'eventor' | 'rentals_series';
+type AdminWorkspaceTab =
+  | 'events'
+  | 'series'
+  | 'admins'
+  | 'club'
+  | 'eventor'
+  | 'rentals_series'
+  | 'si_inventory';
 
 const OFFICIAL_ROLE_LABELS: Record<OfficialRole, string> = {
   START: 'Start',
@@ -1948,6 +1956,17 @@ export function AccessControlView({
             >
               Hyrbrickor ({unreturnedRentalsCount})
             </button>
+            <button
+              type="button"
+              onClick={() => setSubTab('si_inventory')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'si_inventory'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              SI-inventering
+            </button>
           </div>
         )}
       </div>
@@ -2743,6 +2762,8 @@ export function AccessControlView({
 
         </div>
       )}
+
+      {view === 'admin' && subTab === 'si_inventory' && <SIAssignmentInventoryView />}
 
       {view === 'admin' && subTab === 'eventor' && (
         <EventorIntegrationSettingsView

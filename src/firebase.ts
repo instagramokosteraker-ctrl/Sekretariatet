@@ -69,6 +69,10 @@ import {
   buildSICardAssignmentValidationReport,
   parseSICardAssignmentDocument,
 } from './utils/siCardAssignments';
+import {
+  buildSIAssignmentInventory,
+  type SIAssignmentInventoryReport,
+} from './utils/siAssignmentInventory';
 import { declareCompetitorMutation } from './utils/siAssignmentDiagnostics';
 
 const app = initializeApp(firebaseConfig);
@@ -700,6 +704,52 @@ export async function validateCompetitionSICardAssignments(
     });
 
   return report;
+}
+
+export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssignmentInventoryReport> {
+  const authorization = await getCurrentFirebaseRoles();
+  if (!authorization.adminTier) {
+    throw new Error('Endast SUPER_ADMIN och RACE_ADMIN får skapa SI-inventeringen.');
+  }
+
+  const competitionSnapshot = await getDocs(collection(db, 'competitions'));
+  const competitions: SIAssignmentInventoryReport['competitions'] = [];
+  let competitorCount = 0;
+  let assignmentCount = 0;
+
+  for (const competitionDoc of competitionSnapshot.docs) {
+    const [competitorSnapshot, assignmentSnapshot] = await Promise.all([
+      getDocs(collection(db, 'competitions', competitionDoc.id, 'competitors')),
+      getDocs(getCompetitionSICardAssignmentsCollection(competitionDoc.id)),
+    ]);
+    const competitionData = competitionDoc.data();
+    const inventory = buildSIAssignmentInventory({
+      competitionId: competitionDoc.id,
+      competitionName:
+        typeof competitionData.name === 'string' && competitionData.name.trim()
+          ? competitionData.name.trim()
+          : competitionDoc.id,
+      competitors: competitorSnapshot.docs.map((competitorDoc) => ({
+        documentId: competitorDoc.id,
+        data: competitorDoc.data() as Record<string, unknown>,
+      })),
+      assignments: assignmentSnapshot.docs.map((assignmentDoc) => ({
+        documentId: assignmentDoc.id,
+        data: assignmentDoc.data() as Record<string, unknown>,
+      })),
+    });
+    competitions.push(inventory);
+    competitorCount += inventory.competitorCount;
+    assignmentCount += inventory.assignmentCount;
+  }
+
+  return {
+    generatedAtIso: new Date().toISOString(),
+    competitionCount: competitions.length,
+    competitorCount,
+    assignmentCount,
+    competitions,
+  };
 }
 
 export async function createCompetitionSICardAssignment(params: {
