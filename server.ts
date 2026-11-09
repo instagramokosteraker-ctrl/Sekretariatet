@@ -10,7 +10,7 @@ import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
 } from './src/services/seriesStandings';
-import { logSIAssignmentBypass } from './src/utils/siAssignmentDiagnostics';
+import { declareCompetitorMutation } from './src/utils/siAssignmentDiagnostics';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1302,6 +1302,18 @@ function recomputeAllSplitRanks(ev: SingleEventRecord): void {
  */
 function recalculateEventFromRawReadouts(ev: SingleEventRecord): number {
   let recalculatedCount = 0;
+  if (ev.competitors.some((runner) => runner.rawReadout || runner.readoutAt)) {
+    declareCompetitorMutation({
+      source: 'recalculateEventFromRawReadouts',
+      operation: 'UPDATE',
+      competitionId: ev.competition.id,
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: 'Result recalculation updates derived competitor state without changing SI identity.',
+      },
+      identityAffecting: false,
+    });
+  }
   for (const runner of ev.competitors) {
     const raw = runner.rawReadout;
     const sourcePunches = raw ? raw.punches : runner.cardPunches;
@@ -2691,6 +2703,13 @@ async function startServer() {
         rawHex: params.rawHex,
       };
     } else {
+      logCompetitorAssignmentBypass(
+        'legacy station processing',
+        'UPDATE',
+        ev.competition.id,
+        runner,
+        'Station processing updates competitor state without validating SI assignment ownership.'
+      );
       runner.lastSeenControl = station.stationCode;
       runner.lastSeenTimeSec = effectiveSec;
 
@@ -3229,20 +3248,30 @@ async function startServer() {
 
   function logCompetitorAssignmentBypass(
     source: string,
-    operation: Parameters<typeof logSIAssignmentBypass>[0]['operation'],
+    operation: Parameters<typeof declareCompetitorMutation>[0]['operation'],
     competitionId: string,
     competitor: Competitor,
     detail: string,
     previousSiNumber?: number
   ): void {
-    logSIAssignmentBypass({
+    declareCompetitorMutation({
       source,
       operation,
       competitionId,
       competitorId: competitor.id,
       siNumber: Number(competitor.siNumber),
       ...(previousSiNumber !== undefined ? { previousSiNumber } : {}),
-      detail,
+      assignmentHandling: { mode: 'LEGACY', reason: detail },
+      identityAffecting:
+        operation === 'CREATE' ||
+        operation === 'DELETE' ||
+        operation === 'IMPORT' ||
+        operation === 'RESTORE' ||
+        operation === 'SNAPSHOT_HYDRATE' ||
+        operation === 'SNAPSHOT_SEED' ||
+        (operation === 'UPDATE' &&
+          previousSiNumber !== undefined &&
+          previousSiNumber !== Number(competitor.siNumber)),
     });
   }
 
@@ -3479,17 +3508,16 @@ async function startServer() {
     const clubSettings = ensureClubSettings(seasonDb);
     for (const event of Object.values(seasonDb.eventsMap)) {
       if (event.competitors.length > 0) {
-        console.warn(
-          `[si-assignment-bypass] ${JSON.stringify({
-            source: '/api/system/cloud-export',
-            operation: 'SNAPSHOT_EXPORT',
-            competitionId: event.competition.id,
-            competitorCount: event.competitors.length,
-            assignmentAware: false,
-            enforcementActive: false,
-            detail: 'Exported competitors do not carry SI assignment records or validation.',
-          })}`
-        );
+        declareCompetitorMutation({
+          source: '/api/system/cloud-export',
+          operation: 'SNAPSHOT_EXPORT',
+          competitionId: event.competition.id,
+          assignmentHandling: {
+            mode: 'LEGACY',
+            reason: 'Exported competitors do not carry SI assignment records or validation.',
+          },
+          identityAffecting: false,
+        });
       }
     }
     const events: CloudEventExportItem[] = Object.values(seasonDb.eventsMap).map((ev) => ({
@@ -4372,6 +4400,13 @@ async function startServer() {
     }
 
     const cls = db.classes.find((c) => c.id === runner.classId);
+    logCompetitorAssignmentBypass(
+      'legacy readout processing',
+      'UPDATE',
+      db.competition.id,
+      runner,
+      'Readout processing updates competitor results without validating SI assignment ownership.'
+    );
     // If runner used BSM8 Pinnstart (runner.startTimeSec already recorded) and the card holds a stale start time > first control punch, ignore stale card start
     const cardStartIsStale =
       typeof startTimeSec === 'number' &&
@@ -4542,6 +4577,13 @@ async function startServer() {
       return;
     }
 
+    logCompetitorAssignmentBypass(
+      '/api/emergency/manual-finish',
+      'UPDATE',
+      db.competition.id,
+      runner,
+      'Manual-finish update does not validate SI assignment ownership.'
+    );
     runner.manualFinishTimeSec = finSec;
     runner.finishTimeSec = finSec;
     const effStart =
@@ -4768,6 +4810,13 @@ async function startServer() {
         res.status(409).json({ error: 'Deltagar-ID används redan för en annan deltagare.' });
         return;
       }
+      logCompetitorAssignmentBypass(
+        '/api/competitors compatibility mirror',
+        'UPDATE',
+        db.competition.id,
+        existingMirror,
+        'Legacy Express mirror updates billing state without SI assignment validation.'
+      );
       logLegacyCompetitorFieldWrite('direct-entry compatibility mirror', existingMirror.id, [
         'feePaid',
         'rentalReturned',
@@ -4925,22 +4974,22 @@ async function startServer() {
     }
     const existing = db.competitors[idx];
     const body = req.body as Partial<Competitor>;
+    const nextSi = body.siNumber !== undefined ? Number(body.siNumber) : existing.siNumber;
+    logCompetitorAssignmentBypass(
+      '/api/competitors/:id',
+      'UPDATE',
+      db.competition.id,
+      { ...existing, siNumber: nextSi },
+      'Express competitor update does not validate or update the SI assignment.',
+      existing.siNumber
+    );
     logLegacyCompetitorFieldWrite(
       'competitor update',
       existing.id,
       Object.keys(body).filter((field) => firestoreOwnedCompetitorFields.has(field))
     );
-    const nextSi = body.siNumber !== undefined ? Number(body.siNumber) : existing.siNumber;
 
     if (nextSi !== existing.siNumber) {
-      logCompetitorAssignmentBypass(
-        '/api/competitors/:id',
-        'UPDATE',
-        db.competition.id,
-        { ...existing, siNumber: nextSi },
-        'Express changed the SI number without updating the SI assignment.',
-        existing.siNumber
-      );
       const activeConflict = db.competitors.find(
         (c) =>
           c.siNumber === nextSi &&
@@ -5556,6 +5605,13 @@ async function startServer() {
       if (fallbackClassId) {
         for (const comp of db.competitors) {
           if (!validClassIds.has(comp.classId)) {
+            logCompetitorAssignmentBypass(
+              '/api/import/batch class replacement',
+              'UPDATE',
+              db.competition.id,
+              comp,
+              'Import changes competitor class but does not validate SI assignment ownership.'
+            );
             comp.classId = fallbackClassId;
           }
         }

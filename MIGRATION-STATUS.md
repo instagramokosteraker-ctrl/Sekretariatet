@@ -43,10 +43,12 @@ Last updated: 2026-11-09
 
 ### Phase 4 — Atomic SI matching foundation
 
-**Status:** Phase A complete; Phase B complete; schema/rule alignment complete
+**Status:** Phase A complete; Phase B complete; schema/rule alignment complete; P0 Step 2 competitor-writer declarations implemented (diagnostic-only)
 **Purpose:** Add the canonical `competitions/{competitionId}/siCardAssignments/{siNumber}` collection and its schema support, then provide opt-in read-only lookup/resolver and admin validation helpers. The aligned document contract uses `state`, required `schemaVersion: 1`, Firestore `Timestamp` values, required identity/ownership fields, and explicitly optional retirement/conflict metadata. The parser, write helpers, Firestore rules, rules tests, and design document use this same contract, including `DUPLICATE_CONFIRMED`. Lookup hits, misses, retired assignments, and duplicate conditions produce diagnostic console logs, not durable audit records. The helpers are not called by competitor creation/edit or readout flows, so runtime behavior remains unchanged. No uniqueness is enforced yet.
 
-**Next:** Phase C adds uniqueness enforcement to competitor create/update operations using an atomic competitor/assignment transaction. It remains blocked until the single-writer and stale-snapshot prerequisites are satisfied, historical SI conflicts are inventoried, and the trusted transaction/write boundary is validated.
+**P0 Step 2:** A shared `declareCompetitorMutation` diagnostic boundary now records whether a mutation is `VALIDATED` or explicitly `LEGACY`. Current competitor create/update/delete/import, direct-entry, Eventor/IOF, restore/hydrate, snapshot-seed, billing, and non-identity result-update paths declare themselves legacy. The boundary logs `[competitor-mutation]` for declarations and `[si-assignment-bypass]` for legacy identity-affecting writes. It currently always permits the operation; no behavior is rejected and no uniqueness is enforced.
+
+**Next:** Phase C adds uniqueness enforcement to competitor create/update operations using an atomic competitor/assignment transaction. It remains blocked until legacy writers are redirected or disabled, Firestore rules fence direct writes, historical SI conflicts are inventoried, and the trusted transaction/write boundary is validated.
 
 ### Phase 5 — Move Eventor calls to Firebase Functions
 

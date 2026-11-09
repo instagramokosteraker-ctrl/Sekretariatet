@@ -69,7 +69,7 @@ import {
   buildSICardAssignmentValidationReport,
   parseSICardAssignmentDocument,
 } from './utils/siCardAssignments';
-import { logSIAssignmentBypass } from './utils/siAssignmentDiagnostics';
+import { declareCompetitorMutation } from './utils/siAssignmentDiagnostics';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -1983,13 +1983,17 @@ export async function syncFullSeasonToFirestore(
         continue;
       }
 
-      logSIAssignmentBypass({
+      declareCompetitorMutation({
         source: 'syncFullSeasonToFirestore',
         operation: 'SNAPSHOT_SEED',
         competitionId,
         competitorId,
         siNumber: Number(cmp.siNumber),
-        detail: 'Legacy snapshot may seed a missing competitor without creating an SI assignment.',
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Legacy snapshot may seed a missing competitor without creating an SI assignment.',
+        },
+        identityAffecting: true,
       });
       childOps.push({
         kind: 'set',
@@ -2912,16 +2916,20 @@ export async function saveCompetitionImportToFirestore(params: {
     });
     const currentSiNumber = Number(competitor.siNumber);
     const previousSiNumber = Number(competitorOperation.existingData?.siNumber);
-    logSIAssignmentBypass({
+    declareCompetitorMutation({
       source: 'saveCompetitionImportToFirestore',
       operation: 'IMPORT',
       competitionId,
       competitorId: id,
       siNumber: currentSiNumber,
       ...(Number.isFinite(previousSiNumber) ? { previousSiNumber } : {}),
-      detail: competitorOperation.existing
-        ? 'Import updates competitor data without validating or updating SI assignment ownership.'
-        : 'Import creates competitor data without creating an SI assignment.',
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: competitorOperation.existing
+          ? 'Import updates competitor data without validating or updating SI assignment ownership.'
+          : 'Import creates competitor data without creating an SI assignment.',
+      },
+      identityAffecting: true,
     });
   }
 
@@ -3631,20 +3639,21 @@ export async function updateCompetitorInFirestore(
     if (competition.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
       throw new Error('Ditt konto saknar behörighet att uppdatera deltagaren.');
     }
-    if (
-      typeof mutable.siNumber === 'number' &&
-      Number(existing.siNumber) !== mutable.siNumber
-    ) {
-      logSIAssignmentBypass({
-        source: 'updateCompetitorInFirestore',
-        operation: 'UPDATE',
-        competitionId: context.competitionId,
-        competitorId: id,
-        siNumber: mutable.siNumber,
-        previousSiNumber: Number(existing.siNumber),
-        detail: 'SI number changed without updating the SI assignment document.',
-      });
-    }
+    const nextSiNumber =
+      typeof mutable.siNumber === 'number' ? mutable.siNumber : Number(existing.siNumber);
+    declareCompetitorMutation({
+      source: 'updateCompetitorInFirestore',
+      operation: 'UPDATE',
+      competitionId: context.competitionId,
+      competitorId: id,
+      siNumber: nextSiNumber,
+      previousSiNumber: Number(existing.siNumber),
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: 'Competitor update does not validate or update the SI assignment.',
+      },
+      identityAffecting: nextSiNumber !== Number(existing.siNumber),
+    });
     transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
     if (typeof mutable.status === 'string') {
       const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
@@ -3703,6 +3712,18 @@ export async function updateCompetitorBillingFieldsInFirestore(
       throw new Error('Ekonomi- och hyrstatus kan inte ändras i en avslutad tävling.');
     }
 
+    declareCompetitorMutation({
+      source: 'updateCompetitorBillingFieldsInFirestore',
+      operation: 'UPDATE',
+      competitionId: safeCompetitionId,
+      competitorId: safeCompetitorId,
+      siNumber: Number(competitorSnap.data().siNumber),
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: 'Billing/rental mutation does not validate SI assignment because it does not change competitor identity.',
+      },
+      identityAffecting: false,
+    });
     transaction.update(competitorRef, {
       ...(hasFeeUpdate ? { feePaid: patch.feePaid } : {}),
       ...(hasRentalUpdate ? { rentalReturned: patch.rentalReturned } : {}),
@@ -3745,13 +3766,17 @@ export async function deleteCompetitorFromFirestore(
     if (competition.status === 'COMPLETED' && !context.isSuperAdmin) {
       throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
     }
-    logSIAssignmentBypass({
+    declareCompetitorMutation({
       source: 'deleteCompetitorFromFirestore',
       operation: 'DELETE',
       competitionId: context.competitionId,
       competitorId: sanitizeFirestoreId(competitorId, 'cmp'),
       siNumber: Number(competitor.siNumber),
-      detail: 'Competitor deletion does not retire or update the SI assignment.',
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: 'Competitor deletion does not retire or update the SI assignment.',
+      },
+      identityAffecting: true,
     });
     const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
     transaction.delete(competitorRef);
@@ -4092,6 +4117,18 @@ export async function recalculateCompetitionFromFirestore(
         updatedAt: serverTimestamp(),
       },
     });
+    declareCompetitorMutation({
+      source: 'recalculateCompetitionFromFirestore',
+      operation: 'UPDATE',
+      competitionId: context.competitionId,
+      competitorId: runner.id,
+      siNumber: runner.siNumber,
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: 'Result recalculation does not validate SI assignment ownership.',
+      },
+      identityAffecting: false,
+    });
     recalculatedCount += 1;
   }
 
@@ -4244,7 +4281,18 @@ export async function submitOnlinePunchToFirestore(
     if (!competitorSnap?.exists() || !competitorRef) {
       return { deduplicated: false };
     }
-
+    declareCompetitorMutation({
+      source: 'submitOnlinePunchToFirestore',
+      operation: 'UPDATE',
+      competitionId: context.competitionId,
+      competitorId,
+      siNumber: punch.siNumber,
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: 'Online punch status/time update does not validate SI assignment ownership.',
+      },
+      identityAffecting: false,
+    });
     const competitor = competitorSnap.data();
     const update: Record<string, unknown> = { updatedAt: serverTimestamp() };
     if (stationFunction === 'CHECK') {
@@ -4527,6 +4575,18 @@ export async function submitReadoutToFirestore(
     }
 
     const previousStatus = String(competitorSnap.data().status || 'REGISTERED');
+    declareCompetitorMutation({
+      source: 'submitReadoutToFirestore',
+      operation: 'UPDATE',
+      competitionId,
+      competitorId,
+      siNumber,
+      assignmentHandling: {
+        mode: 'LEGACY',
+        reason: 'Readout result update does not validate SI assignment ownership.',
+      },
+      identityAffecting: false,
+    });
     const wasFinished =
       previousStatus === 'OK' ||
       previousStatus === 'MP' ||
@@ -4756,13 +4816,17 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   };
   const nextCompetitorCount = existingCompetitors.length + 1;
   const batch = writeBatch(db);
-  logSIAssignmentBypass({
+  declareCompetitorMutation({
     source: 'saveDirectCompetitionEntryToFirestore',
     operation: 'CREATE',
     competitionId,
     competitorId,
     siNumber,
-    detail: 'Direct-entry write does not create an SI assignment.',
+    assignmentHandling: {
+      mode: 'LEGACY',
+      reason: 'Direct-entry write does not create an SI assignment.',
+    },
+    identityAffecting: true,
   });
   batch.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
     competitorId,
