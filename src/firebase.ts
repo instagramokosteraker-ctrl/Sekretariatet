@@ -1277,6 +1277,21 @@ export async function activateCompetitionInFirestore(
   });
 }
 
+const MIGRATED_COMPETITOR_FIELDS = new Set(['feePaid', 'rentalReturned']);
+
+function warnOnLegacyCompetitorFieldWrite(
+  source: string,
+  competitorId: string,
+  fields: Array<string>
+): void {
+  if (fields.length === 0) {
+    return;
+  }
+  console.warn(
+    `[single-writer] Ignoring legacy ${source} write to Firestore-owned competitor fields for ${competitorId}: ${fields.join(', ')}`
+  );
+}
+
 /**
  * Syncs legacy season data (clubSettings, competitions, competitors, SI punches,
  * and empty/demoCleared states) to Firestore under Zero-Trust rules.
@@ -1531,6 +1546,17 @@ export async function syncFullSeasonToFirestore(
           ? cmp.status
           : 'REGISTERED';
 
+      const legacyBillingFields = Object.keys(cmp).filter((key) =>
+        MIGRATED_COMPETITOR_FIELDS.has(key)
+      );
+      if (legacyBillingFields.length > 0) {
+        warnOnLegacyCompetitorFieldWrite(
+          'snapshot sync',
+          competitorId,
+          legacyBillingFields
+        );
+      }
+
       const cmpMutable = {
         bib: clampInt(cmp.bib, 1, 99999, 1),
         fullName: (cmp.fullName || 'Deltagare').trim().slice(0, 120) || 'Deltagare',
@@ -1567,8 +1593,6 @@ export async function syncFullSeasonToFirestore(
             competitorId,
             competitionId,
             ...cmpMutable,
-            rentalReturned: Boolean(cmp.rentalReturned),
-            feePaid: Boolean(cmp.feePaid),
             ownerUid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -2440,6 +2464,20 @@ export async function saveCompetitionImportToFirestore(params: {
 
   for (const competitor of params.competitors) {
     const id = sanitizeFirestoreId(competitor.id, 'cmp');
+    const legacyBillingFields: string[] = [];
+    if ('feePaid' in competitor && competitor.feePaid !== undefined) {
+      legacyBillingFields.push('feePaid');
+    }
+    if ('rentalReturned' in competitor && competitor.rentalReturned !== undefined) {
+      legacyBillingFields.push('rentalReturned');
+    }
+    if (legacyBillingFields.length > 0) {
+      warnOnLegacyCompetitorFieldWrite(
+        'import',
+        id,
+        legacyBillingFields
+      );
+    }
     const punches = (competitor.rawReadout?.punches ?? competitor.cardPunches ?? []).slice(0, 192);
     const mutable = {
       bib: clampInt(competitor.bib, 1, 99999, 1),
@@ -2464,8 +2502,6 @@ export async function saveCompetitionImportToFirestore(params: {
       competitorId: id,
       competitionId,
       ...mutable,
-      rentalReturned: Boolean(competitor.rentalReturned),
-      feePaid: Boolean(competitor.feePaid),
       ownerUid,
       ...nowFields,
     });
