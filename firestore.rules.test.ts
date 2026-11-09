@@ -43,6 +43,10 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: now,
         updatedAt: now,
       });
+      await adminDb.doc('roleAssignments/readout_uid').set({
+        uid: 'readout_uid',
+        role: 'READOUT',
+      });
       await adminDb.doc('adminInvites/inv_other').set({
         inviteId: 'inv_other',
         email: 'secret@klubb.se',
@@ -128,6 +132,10 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     });
     const otherRaceAdminCtx = testEnv.authenticatedContext('race_admin_2', {
       email: 'erik@klubb.se',
+      email_verified: true,
+    });
+    const readoutCtx = testEnv.authenticatedContext('readout_uid', {
+      email: 'readout@klubb.se',
       email_verified: true,
     });
 
@@ -415,6 +423,34 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
+    );
+
+    // READOUT officials may update rental return only, not payment status.
+    await assertSucceeds(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({
+          rentalReturned: true,
+          billingFieldsUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ feePaid: true, updatedAt: serverTimestamp() })
+    );
+    await assertFails(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({
+          rentalReturned: false,
+          status: 'OK',
+          updatedAt: serverTimestamp(),
+        })
     );
 
     // 12. Mismatched Punch Arrays -> DENIED

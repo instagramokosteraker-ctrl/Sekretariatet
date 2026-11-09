@@ -104,6 +104,11 @@ interface AccessControlViewProps {
       feeTrackingEnabled?: boolean;
     }
   ) => Promise<void>;
+  onUpdateRentalReturned: (
+    eventId: string,
+    competitorId: string,
+    rentalReturned: boolean
+  ) => Promise<void>;
   onOpenCreateCompetition: () => void;
   onOpenPublicEvent: (shortCode: string | null) => void;
   onApplySeriesScoringUpdate: (
@@ -136,6 +141,7 @@ export function AccessControlView({
   onApplyStateSnapshot,
   onActivateCompetition,
   onUpdateCompetitionMeta,
+  onUpdateRentalReturned,
   onOpenCreateCompetition,
   onOpenPublicEvent,
   onApplySeriesScoringUpdate,
@@ -204,6 +210,7 @@ export function AccessControlView({
 
   // Rental cards & Series state
   const [rentals, setRentals] = useState<RentalCardOverviewItem[]>([]);
+  const [rentalNotice, setRentalNotice] = useState<string | null>(null);
   const [rentalFilter, setRentalFilter] = useState<'UNRETURNED' | 'ALL'>('UNRETURNED');
   const [rentalBusyKey, setRentalBusyKey] = useState<string | null>(null);
   const [selectedSeriesName, setSelectedSeriesName] = useState<string>('');
@@ -286,10 +293,7 @@ export function AccessControlView({
     setLoadError(null);
     try {
       try {
-        const [manageRes, rentalsRes] = await Promise.all([
-          apiFetch('/api/auth/manage'),
-          apiFetch('/api/club/rentals'),
-        ]);
+        const manageRes = await apiFetch('/api/auth/manage');
         if (manageRes.ok) {
           const data = (await manageRes.json()) as AuthManagePayload;
           setAdmins(data.admins);
@@ -366,30 +370,50 @@ export function AccessControlView({
           }
         }
 
-        if (rentalsRes.ok) {
-          const rData = (await rentalsRes.json()) as { rentals?: RentalCardOverviewItem[] };
-          setRentals(rData.rentals ?? []);
-        } else {
-          const localRentals: RentalCardOverviewItem[] = competitors
-            .filter((c) => c.isRentalCard)
-            .map((c) => ({
-              eventId: activeEventId,
-              eventName: competitionName,
-              eventDate: getStockholmTodayIso(),
-              shortCode: '',
-              competitorId: c.id,
-              bib: c.bib,
-              fullName: c.fullName,
-              club: c.club,
-              className: classes.find((cl) => cl.id === c.classId)?.name || 'Klass',
-              siNumber: c.siNumber,
-              cardSeries: c.cardSeries || 'SI-Card 10',
-              rentalReturned: c.rentalReturned,
-              feePaid: Boolean(c.feePaid),
-              feeTrackingEnabled: true,
-              status: c.status,
-            }));
-          setRentals(localRentals);
+        try {
+          if (!firebaseReadyUser) {
+            throw new Error('Logga in med Google för att läsa hyr- och betalstatus från Firestore.');
+          }
+          const cloudSeason = await loadFullSeasonFromFirestore({
+            includeRunnerDb: false,
+          });
+          if (!cloudSeason) {
+            throw new Error('Firestore kunde inte läsa in hyr- och betalstatus.');
+          }
+          setRentals(
+            cloudSeason.events.flatMap((event) =>
+              event.competitors
+                .filter((competitor) => competitor.isRentalCard)
+                .map((competitor) => ({
+                  eventId: event.competition.id,
+                  eventName: event.competition.name,
+                  eventDate: event.competition.date,
+                  shortCode: event.competition.shortCode,
+                  competitorId: competitor.id,
+                  bib: competitor.bib,
+                  fullName: competitor.fullName,
+                  club: competitor.club,
+                  className:
+                    event.classes.find((candidate) => candidate.id === competitor.classId)
+                      ?.name ?? '—',
+                  siNumber: competitor.siNumber,
+                  cardSeries: competitor.cardSeries || 'SI-Card 10',
+                  rentalReturned: Boolean(competitor.rentalReturned),
+                  feePaid: Boolean(competitor.feePaid),
+                  feeTrackingEnabled: Boolean(event.competition.feeTrackingEnabled),
+                  status: competitor.status,
+                }))
+            )
+          );
+          setRentalNotice(null);
+        } catch (error) {
+          console.error('Kunde inte läsa hyr- och betalstatus från Firestore:', error);
+          setRentals([]);
+          setRentalNotice(
+            error instanceof Error
+              ? error.message
+              : 'Kunde inte läsa hyr- och betalstatus från Firestore.'
+          );
         }
       } catch {
         setAdmins([
@@ -427,10 +451,6 @@ export function AccessControlView({
       setLoading(false);
     }
   }, [
-    activeEventId,
-    classes,
-    competitionName,
-    competitors,
     currentUser,
     firebaseReadyUser,
   ]);
@@ -1371,24 +1391,24 @@ export function AccessControlView({
     const key = `${item.eventId}:${item.competitorId}`;
     setRentalBusyKey(key);
     try {
-      const res = await apiFetch(
-        `/api/club/rentals/${encodeURIComponent(item.eventId)}/${encodeURIComponent(
-          item.competitorId
-        )}/return`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rentalReturned: !item.rentalReturned }),
-        }
+      const rentalReturned = !item.rentalReturned;
+      await onUpdateRentalReturned(
+        item.eventId,
+        item.competitorId,
+        rentalReturned
       );
-      if (res.ok) {
-        const data = (await res.json()) as { rentals?: RentalCardOverviewItem[] };
-        setRentals(data.rentals ?? []);
-        const stateRes = await apiFetch('/api/state');
-        if (stateRes.ok) {
-          onApplyStateSnapshot((await stateRes.json()) as MeosAppState);
-        }
-      }
+      setRentals((current) =>
+        current.map((rental) =>
+          rental.eventId === item.eventId && rental.competitorId === item.competitorId
+            ? { ...rental, rentalReturned }
+            : rental
+        )
+      );
+      setRentalNotice(null);
+    } catch (error) {
+      setRentalNotice(
+        error instanceof Error ? error.message : 'Kunde inte uppdatera hyrstatus.'
+      );
     } finally {
       setRentalBusyKey(null);
     }
@@ -3334,6 +3354,11 @@ export function AccessControlView({
               </div>
             </div>
 
+            {rentalNotice && (
+              <div role="alert" className="px-4 py-2 text-xs text-red-700 dark:text-red-300">
+                {rentalNotice}
+              </div>
+            )}
             {visibleRentals.length === 0 ? (
               <div className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">
                 {rentalFilter === 'UNRETURNED'

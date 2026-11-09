@@ -1494,6 +1494,7 @@ export async function syncFullSeasonToFirestore(
 
     // 2a. Competitors (including raw punches & rental/payment flags)
     const existingCompIds = new Set<string>();
+    const billingUpdatedCompIds = new Set<string>();
     try {
       const cmpSnap = await getDocs(
         query(
@@ -1501,7 +1502,10 @@ export async function syncFullSeasonToFirestore(
           where('ownerUid', '==', ownerUid)
         )
       );
-      cmpSnap.docs.forEach((d) => existingCompIds.add(d.id));
+      cmpSnap.docs.forEach((d) => {
+        existingCompIds.add(d.id);
+        if (d.data().billingFieldsUpdatedAt) billingUpdatedCompIds.add(d.id);
+      });
     } catch (err) {
       handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/competitors`);
     }
@@ -1535,8 +1539,6 @@ export async function syncFullSeasonToFirestore(
         siNumber: clampInt(cmp.siNumber, 1, 99999999, 1000),
         cardSeries: (cmp.cardSeries || 'SI-Card 10').trim().slice(0, 24) || 'SI-Card 10',
         isRentalCard: Boolean(cmp.isRentalCard),
-        rentalReturned: Boolean(cmp.rentalReturned),
-        feePaid: Boolean(cmp.feePaid),
         status,
         allocatedStartSec: encodeNullableSec(cmp.allocatedStartSec),
         checkTimeSec: encodeNullableSec(cmp.rawReadout?.checkTimeSec ?? cmp.checkTimeSec),
@@ -1565,6 +1567,8 @@ export async function syncFullSeasonToFirestore(
             competitorId,
             competitionId,
             ...cmpMutable,
+            rentalReturned: Boolean(cmp.rentalReturned),
+            feePaid: Boolean(cmp.feePaid),
             ownerUid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -1573,7 +1577,7 @@ export async function syncFullSeasonToFirestore(
       }
     }
     for (const oldId of existingCompIds) {
-      if (!nextCompIds.has(oldId)) {
+      if (!nextCompIds.has(oldId) && !billingUpdatedCompIds.has(oldId)) {
         childOps.push({
           kind: 'delete',
           ref: doc(db, 'competitions', competitionId, 'competitors', oldId),
@@ -2174,6 +2178,33 @@ function parseRunnerDbDocument(id: string, data: Record<string, unknown>): Runne
     };
 }
 
+export function subscribeCompetitorBillingFieldsFromFirestore(
+  competitionId: string,
+  onFields: (
+    fields: Array<{
+      competitorId: string;
+      feePaid: boolean;
+      rentalReturned: boolean;
+    }>
+  ) => void,
+  onError: (error: Error) => void
+): () => void {
+  const competitionPath = sanitizeFirestoreId(competitionId, 'evt');
+  return onSnapshot(
+    collection(db, 'competitions', competitionPath, 'competitors'),
+    (snapshot) => {
+      onFields(
+        snapshot.docs.map((competitorDoc) => ({
+          competitorId: competitorDoc.id,
+          feePaid: Boolean(competitorDoc.data().feePaid),
+          rentalReturned: Boolean(competitorDoc.data().rentalReturned),
+        }))
+      );
+    },
+    (error) => onError(error)
+  );
+}
+
 async function loadRunnerDbFromFirestore(): Promise<RunnerDbEntry[]> {
   const authorization = await getCurrentFirebaseRoles();
   if (
@@ -2418,8 +2449,6 @@ export async function saveCompetitionImportToFirestore(params: {
       siNumber: clampInt(competitor.siNumber, 1, 99999999, 1000),
       cardSeries: competitor.cardSeries || 'SI-Card 10',
       isRentalCard: Boolean(competitor.isRentalCard),
-      rentalReturned: Boolean(competitor.rentalReturned),
-      feePaid: Boolean(competitor.feePaid),
       status: competitor.status || 'REGISTERED',
       allocatedStartSec: encodeNullableSec(competitor.allocatedStartSec),
       checkTimeSec: encodeNullableSec(competitor.checkTimeSec),
@@ -2435,6 +2464,8 @@ export async function saveCompetitionImportToFirestore(params: {
       competitorId: id,
       competitionId,
       ...mutable,
+      rentalReturned: Boolean(competitor.rentalReturned),
+      feePaid: Boolean(competitor.feePaid),
       ownerUid,
       ...nowFields,
     });
@@ -3163,6 +3194,53 @@ export async function updateCompetitorInFirestore(
         });
       }
     }
+  });
+}
+
+export async function updateCompetitorBillingFieldsInFirestore(
+  competitionId: string,
+  competitorId: string,
+  patch: Partial<Pick<Competitor, 'feePaid' | 'rentalReturned'>>
+): Promise<void> {
+  const authorization = await getCurrentFirebaseRoles();
+  const hasFeeUpdate = typeof patch.feePaid === 'boolean';
+  const hasRentalUpdate = typeof patch.rentalReturned === 'boolean';
+  const isRentalOfficial = authorization.officialRole === 'READOUT' && !hasFeeUpdate;
+  if ((!authorization.adminTier && !isRentalOfficial) || (!hasFeeUpdate && !hasRentalUpdate)) {
+    throw new Error('Ditt Google-konto saknar behörighet att ändra betalnings- eller hyrstatus.');
+  }
+
+  const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
+  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
+  const competitionRef = doc(db, 'competitions', safeCompetitionId);
+  const competitorRef = doc(
+    db,
+    'competitions',
+    safeCompetitionId,
+    'competitors',
+    safeCompetitorId
+  );
+  await runTransaction(db, async (transaction) => {
+    const [competitionSnap, competitorSnap] = await Promise.all([
+      transaction.get(competitionRef),
+      transaction.get(competitorRef),
+    ]);
+    if (!competitionSnap.exists() || !competitorSnap.exists()) {
+      throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+    }
+    if (
+      competitionSnap.data().status === 'COMPLETED' &&
+      authorization.adminTier !== 'SUPER_ADMIN'
+    ) {
+      throw new Error('Ekonomi- och hyrstatus kan inte ändras i en avslutad tävling.');
+    }
+
+    transaction.update(competitorRef, {
+      ...(hasFeeUpdate ? { feePaid: patch.feePaid } : {}),
+      ...(hasRentalUpdate ? { rentalReturned: patch.rentalReturned } : {}),
+      billingFieldsUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
@@ -4188,6 +4266,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     isRentalCard: competitor.isRentalCard,
     rentalReturned: false,
     feePaid: competitor.feePaid ?? false,
+    billingFieldsUpdatedAt: serverTimestamp(),
     status: competitor.status,
     allocatedStartSec: encodeNullableSec(allocatedStartSec),
     checkTimeSec: encodeNullableSec(competitor.checkTimeSec),

@@ -490,8 +490,13 @@ service cloud.firestore {
           'punchTimes',
           'ownerUid',
           'createdAt',
+          'billingFieldsUpdatedAt',
           'updatedAt'
         ]) &&
+        (
+          !data.keys().hasAny(['billingFieldsUpdatedAt']) ||
+          data.billingFieldsUpdatedAt is timestamp
+        ) &&
         isValidId(data.competitorId) &&
         isValidId(data.competitionId) &&
         data.bib is int && data.bib >= 1 && data.bib <= 99999 &&
@@ -1131,6 +1136,13 @@ service cloud.firestore {
           incoming().ownerUid == existing().ownerUid &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
+          (
+            !incoming().diff(existing()).affectedKeys().hasAny([
+              'feePaid',
+              'rentalReturned'
+            ]) ||
+            incoming().billingFieldsUpdatedAt == request.time
+          ) &&
           parentCompetitionExists(competitionId) &&
           (
             (
@@ -1370,6 +1382,7 @@ service cloud.firestore {
                 'readoutAtIso',
                 'punchCodes',
                 'punchTimes',
+                'billingFieldsUpdatedAt',
                 'updatedAt'
               ]) &&
               isAdmin()
@@ -1396,6 +1409,7 @@ service cloud.firestore {
                 'readoutAtIso',
                 'punchCodes',
                 'punchTimes',
+                'billingFieldsUpdatedAt',
                 'updatedAt'
               ])
             ) ||
@@ -1416,6 +1430,14 @@ service cloud.firestore {
                   'readoutAtIso',
                   'punchCodes',
                   'punchTimes',
+                  'updatedAt'
+                ])
+              ) ||
+              (
+                hasOfficialRole('READOUT') &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'rentalReturned',
+                  'billingFieldsUpdatedAt',
                   'updatedAt'
                 ])
               ) ||

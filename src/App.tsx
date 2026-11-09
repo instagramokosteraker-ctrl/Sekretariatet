@@ -109,6 +109,7 @@ import {
   saveStationToFirestore,
   deleteStationFromFirestore,
   updateCompetitorInFirestore,
+  updateCompetitorBillingFieldsInFirestore,
   deleteCompetitorFromFirestore,
   deleteRunnerDbEntryFromFirestore,
   saveRunnerDbEntriesToFirestore,
@@ -123,6 +124,7 @@ import {
   subscribeClubSettingsFromFirestore,
   subscribeActiveEventIdFromFirestore,
   subscribeRunnerDbFromFirestore,
+  subscribeCompetitorBillingFieldsFromFirestore,
   loadRunnerDbEntriesFromFirestore,
   saveLearnedRunnerDbEntryToFirestore,
 } from './firebase';
@@ -570,6 +572,7 @@ export default function App() {
   const [activeEventId, setActiveEventId] = useState<string>('');
   const activeEventIdRef = useRef<string>('');
   const activeEventIdFromFirestoreRef = useRef(false);
+  const billingFieldsLoadedEventIdRef = useRef<string>('');
   const mirroredActiveEventIdRef = useRef<string | null>(null);
   const mirroredSeriesScoringSettingsRef = useRef<string | null>(null);
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
@@ -729,6 +732,36 @@ export default function App() {
       console.error('Kunde inte prenumerera på löpardatabasen från Firestore:', error);
     });
   }, [firebaseUserUid]);
+  useEffect(() => {
+    if (!firebaseUserUid || !activeEventId) {
+      billingFieldsLoadedEventIdRef.current = '';
+      return;
+    }
+    return subscribeCompetitorBillingFieldsFromFirestore(
+      activeEventId,
+      (fields) => {
+        billingFieldsLoadedEventIdRef.current = activeEventId;
+        const fieldsById = new Map(
+          fields.map((item) => [item.competitorId, item])
+        );
+        setCompetitors((current) =>
+          current.map((competitor) => {
+            const canonical = fieldsById.get(competitor.id);
+            return canonical
+              ? {
+                  ...competitor,
+                  feePaid: canonical.feePaid,
+                  rentalReturned: canonical.rentalReturned,
+                }
+              : competitor;
+          })
+        );
+      },
+      (error) => {
+        console.error('Kunde inte prenumerera på betalnings- och hyrstatus från Firestore:', error);
+      }
+    );
+  }, [activeEventId, firebaseUserUid]);
   useEffect(() => {
     if (!firebaseUserUid || !activeEventId) return;
     return subscribeCoursesFromFirestore(
@@ -1092,7 +1125,21 @@ export default function App() {
       setClasses(snap.classes);
     }
     setStations(snap.stations);
-    setCompetitors(snap.competitors);
+    setCompetitors((current) => {
+      if (!hasFirestoreIdentity) return snap.competitors;
+      if (billingFieldsLoadedEventIdRef.current !== snap.activeEventId) return current;
+      const currentById = new Map(current.map((competitor) => [competitor.id, competitor]));
+      return snap.competitors.map((competitor) => {
+        const canonical = currentById.get(competitor.id);
+        return canonical
+          ? {
+              ...competitor,
+              feePaid: Boolean(canonical.feePaid),
+              rentalReturned: Boolean(canonical.rentalReturned),
+            }
+          : competitor;
+      });
+    });
     if (!hasFirestoreIdentity) {
       setRunnerDb(snap.runnerDb ?? []);
     }
@@ -1358,7 +1405,7 @@ export default function App() {
       competitors
         .map(
           (cp) =>
-            `${cp.id}:${cp.siNumber}:${cp.classId}:${cp.status}:${cp.checkTimeSec ?? -1}:${cp.startTimeSec ?? -1}:${cp.runningTimeSec ?? -1}:${String(cp.feePaid)}:${String(cp.rentalReturned)}`
+            `${cp.id}:${cp.siNumber}:${cp.classId}:${cp.status}:${cp.checkTimeSec ?? -1}:${cp.startTimeSec ?? -1}:${cp.runningTimeSec ?? -1}`
         )
         .join('|'),
     ].join('::');
@@ -1485,6 +1532,64 @@ export default function App() {
     }
   };
 
+  const updateActiveCompetitorBillingFields = async (
+    competitorId: string,
+    patch: Partial<Pick<Competitor, 'feePaid' | 'rentalReturned'>>
+  ) => {
+    await updateCompetitorBillingFieldsInFirestore(activeEventId, competitorId, patch);
+    setCompetitors((current) =>
+      current.map((competitor) =>
+        competitor.id === competitorId ? { ...competitor, ...patch } : competitor
+      )
+    );
+    try {
+      const response = await apiFetch(`/api/competitors/${encodeURIComponent(competitorId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok && response.status !== 404 && response.status !== 405) {
+        console.warn(
+          `Betalnings- eller hyrstatus sparades i Firestore men Express-spegeln svarade HTTP ${response.status}.`
+        );
+      }
+    } catch (error) {
+      console.warn('Betalnings- eller hyrstatus sparades i Firestore men Express-spegeln kunde inte uppdateras:', error);
+    }
+  };
+
+  const updateRentalReturnedFromOverview = async (
+    eventId: string,
+    competitorId: string,
+    rentalReturned: boolean
+  ) => {
+    await updateCompetitorBillingFieldsInFirestore(eventId, competitorId, { rentalReturned });
+    if (eventId === activeEventId) {
+      setCompetitors((current) =>
+        current.map((competitor) =>
+          competitor.id === competitorId ? { ...competitor, rentalReturned } : competitor
+        )
+      );
+    }
+    try {
+      const response = await apiFetch(
+        `/api/club/rentals/${encodeURIComponent(eventId)}/${encodeURIComponent(competitorId)}/return`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rentalReturned }),
+        }
+      );
+      if (!response.ok && response.status !== 404 && response.status !== 405) {
+        console.warn(
+          `Hyrstatus sparades i Firestore men Express-spegeln svarade HTTP ${response.status}.`
+        );
+      }
+    } catch (error) {
+      console.warn('Hyrstatus sparades i Firestore men Express-spegeln kunde inte uppdateras:', error);
+    }
+  };
+
   const saveDirectEntryToFirestore = async (
     payload: Parameters<typeof saveDirectCompetitionEntryToFirestore>[0]['payload']
   ) => {
@@ -1546,56 +1651,55 @@ export default function App() {
   const handleCreateDirectEntry = async (
     payload: Parameters<typeof saveDirectCompetitionEntryToFirestore>[0]['payload']
   ): Promise<string | null> => {
+    const hasFirestoreIdentity = Boolean(firebaseUserPresent || auth.currentUser);
+    let firestoreSaved: Awaited<ReturnType<typeof saveDirectEntryToFirestore>> | null = null;
     let response: Response | null = null;
+
+    if (hasFirestoreIdentity) {
+      try {
+        firestoreSaved = await saveDirectEntryToFirestore(payload);
+      } catch (error) {
+        console.error('Kunde inte spara direktanmälan till Firestore:', error);
+        return error instanceof Error ? error.message : 'Kunde inte spara anmälan i Firestore.';
+      }
+    }
+
     try {
       response = await apiFetch('/api/competitors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          ...(firestoreSaved ? { id: firestoreSaved.competitor.id } : {}),
+        }),
       });
     } catch (error) {
-      if (!(error instanceof TypeError)) throw error;
+      if (firestoreSaved) {
+        console.warn('Direktanmälan sparades i Firestore men Express-spegeln kunde inte uppdateras:', error);
+      } else if (!(error instanceof TypeError)) {
+        throw error;
+      }
     }
 
-    if (response?.ok) {
-      const siNumber = Number(payload.siNumber);
-      if (
-        (firebaseUserPresent || auth.currentUser) &&
-        !payload.isRentalCard &&
-        !payload.isBorrowedCard &&
-        Number.isInteger(siNumber) &&
-        siNumber > 0
-      ) {
-        const learnedRunner = await saveLearnedRunnerDbEntryToFirestore({
-          id: String(siNumber),
-          siNumber,
-          cardSeries: payload.cardSeries ?? inferCardSeries(siNumber),
-          fullName: payload.fullName || '',
-          club: payload.club || 'Klubblös',
-          birthYear: null,
-          defaultClassName:
-            classes.find((candidate) => candidate.id === payload.classId)?.name ?? null,
-          eventorPersonId: null,
-          eventorOrgId: null,
-          source: 'LEARNED_ENTRY',
-          updatedAt: new Date().toISOString(),
-        });
-        if (learnedRunner) {
-          setRunnerDb((current) => [
-            learnedRunner,
-            ...current.filter((runner) => runner.siNumber !== learnedRunner.siNumber),
-          ]);
-        }
-      }
+    if (firestoreSaved && response && !response.ok && response.status !== 404 && response.status !== 405) {
+      console.warn(
+        `Direktanmälan sparades i Firestore men Express-spegeln svarade HTTP ${response.status}.`
+      );
+    }
+
+    if (response?.ok && !firestoreSaved) {
       return null;
     }
+
     if (response && response.status !== 404 && response.status !== 405) {
-      const err = (await response.json().catch(() => ({}))) as { error?: string };
-      return err.error ?? 'Kunde inte spara anmälan.';
+      if (!firestoreSaved) {
+        const err = (await response.json().catch(() => ({}))) as { error?: string };
+        return err.error ?? 'Kunde inte spara anmälan.';
+      }
     }
 
     try {
-      const saved = await saveDirectEntryToFirestore(payload);
+      const saved = firestoreSaved ?? (await saveDirectEntryToFirestore(payload));
       setCompetitors((current) => [saved.competitor, ...current]);
       const savedIsFinished =
         saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
@@ -3353,23 +3457,7 @@ export default function App() {
                   selectedRunnerId={selectedRunnerId}
                   onSelectRunner={(id) => setSelectedRunnerId(id)}
                   onMarkRentalReturned={async (id) => {
-                    const patch = { rentalReturned: true };
-                    const useFirestore = await apiRequestUnavailable(
-                      `/api/competitors/${id}`,
-                      {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(patch),
-                      },
-                      'Kunde inte uppdatera hyrbrickan.'
-                    );
-                    if (!useFirestore) return;
-                    await updateCompetitorInFirestore(activeEventId, id, patch);
-                    setCompetitors((current) =>
-                      current.map((competitor) =>
-                        competitor.id === id ? { ...competitor, ...patch } : competitor
-                      )
-                    );
+                    await updateActiveCompetitorBillingFields(id, { rentalReturned: true });
                   }}
                   onSimulateFullReadout={handleSimulateFullReadout}
                   onSimulateOnlinePunch={handleSimulateOnlinePunch}
@@ -3479,6 +3567,14 @@ export default function App() {
                     }
                   }}
                   onUpdateCompetitor={async (id, patch) => {
+                    const patchFields = Object.keys(patch);
+                    if (
+                      patchFields.length > 0 &&
+                      patchFields.every((field) => field === 'feePaid' || field === 'rentalReturned')
+                    ) {
+                      await updateActiveCompetitorBillingFields(id, patch);
+                      return;
+                    }
                     const useFirestore = await apiRequestUnavailable(
                       `/api/competitors/${id}`,
                       {
@@ -3593,6 +3689,14 @@ export default function App() {
                   }}
                   onCreateCompetitor={handleCreateDirectEntry}
                   onUpdateCompetitor={async (id, patch) => {
+                    const patchFields = Object.keys(patch);
+                    if (
+                      patchFields.length > 0 &&
+                      patchFields.every((field) => field === 'feePaid' || field === 'rentalReturned')
+                    ) {
+                      await updateActiveCompetitorBillingFields(id, patch);
+                      return;
+                    }
                     const useFirestore = await apiRequestUnavailable(
                       `/api/competitors/${id}`,
                       {
@@ -4401,6 +4505,7 @@ export default function App() {
                   onApplyStateSnapshot={applySnapshot}
                   onActivateCompetition={handleActivateCompetition}
                   onUpdateCompetitionMeta={handleUpdateCompetitionMetadata}
+                  onUpdateRentalReturned={updateRentalReturnedFromOverview}
                   onOpenCreateCompetition={() => {
                     setNewEvtFeeTracking(false);
                     setCreateEventModalOpen(true);

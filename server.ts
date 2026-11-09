@@ -4609,6 +4609,34 @@ async function startServer() {
       res.status(400).json({ error: 'Ange giltigt SI-bricknummer och löparens namn.' });
       return;
     }
+    const requestedId =
+      typeof body.id === 'string' && /^cmp_[A-Za-z0-9_-]{1,120}$/.test(body.id)
+        ? body.id
+        : null;
+    if (body.id !== undefined && !requestedId) {
+      res.status(400).json({ error: 'Ogiltigt deltagar-ID.' });
+      return;
+    }
+
+    const existingMirror = requestedId
+      ? db.competitors.find((competitor) => competitor.id === requestedId)
+      : undefined;
+    if (existingMirror) {
+      if (
+        existingMirror.siNumber !== siNumber ||
+        existingMirror.fullName.trim() !== body.fullName.trim()
+      ) {
+        res.status(409).json({ error: 'Deltagar-ID används redan för en annan deltagare.' });
+        return;
+      }
+      existingMirror.feePaid = Boolean(body.feePaid);
+      existingMirror.rentalReturned = Boolean(body.rentalReturned);
+      persistUserMutation();
+      broadcastFullState(db.competition.shortCode);
+      res.status(200).json(existingMirror);
+      return;
+    }
+
     const activeConflict = db.competitors.find(
       (c) =>
         c.siNumber === siNumber &&
@@ -4629,7 +4657,7 @@ async function startServer() {
     const cls = db.classes.find((c) => c.id === classId);
 
     const created: Competitor = {
-      id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: requestedId ?? `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       bib: body.bib ?? maxBib + 1,
       fullName: body.fullName.trim(),
       club: body.club?.trim() || 'Klubblös',
