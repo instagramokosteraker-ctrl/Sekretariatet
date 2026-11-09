@@ -21,6 +21,7 @@ Current status:
 - Architecture design is complete.
 - Competitor Phase 2 has not started.
 - Atomic SI matching Phase A is now in place as schema-only support: the Firestore collection, TypeScript model, helper functions, and rules skeleton exist without changing runtime mutation behavior.
+- The legacy full-season snapshot writer now skips updates to existing competitor documents and refuses snapshot-driven deletion of existing records; changed-field and omission attempts are logged. Express competitor and rental mirror routes log protected-field write attempts but continue existing mirror behavior. This does not disable explicit competitor mutations or prevent legacy snapshots from seeding missing records.
 - Before Competitor Phase 2 can begin, the following P0 risks must be resolved:
   1. Single-writer authority
   2. Atomic competitor/readout transactions
@@ -584,7 +585,9 @@ Create a durable outbox that ensures every accepted mutation results in a corres
 - [ ] Current architecture design and requirements documentation.
 - [ ] Legacy path inventory and migration blocker list.
 - [ ] Planned transaction and idempotency model.
-- [ ] Required stale snapshot protections are defined but not yet implemented.
+- [x] `syncFullSeasonToFirestore` blocks updates and deletions of existing Firestore competitor documents from legacy snapshots, with changed-field and omission logging; Express compatibility routes log protected-field writes.
+- [ ] Fence all remaining legacy mutation routes and snapshot-mediated create paths.
+- [ ] Validate the snapshot guard and remaining writer boundaries in the deployed environment.
 
 #### [ ] Complete
 
@@ -610,4 +613,4 @@ The project is ready for the next stage only after the P0 implementation plan ab
 
 This document converts the architecture P0 risks into an implementation roadmap. It clarifies what must be disabled, how the Firestore transaction model should work, how idempotency is enforced, how stale snapshots are prevented, and how the system is validated before any Phase 2 competitor CRUD migration begins.
 
-No application code changes were made.
+The competitor snapshot guard is implemented for `syncFullSeasonToFirestore`, but remaining Express mutation routes, explicit Firestore mutation paths, import updates, and create/resurrection risks still require review and enforcement before Phase 2.

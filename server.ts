@@ -3181,6 +3181,44 @@ async function startServer() {
     return sessionUser;
   }
 
+  const firestoreOwnedCompetitorFields = new Set([
+    'bib',
+    'fullName',
+    'club',
+    'classId',
+    'siNumber',
+    'cardSeries',
+    'isRentalCard',
+    'isBorrowedCard',
+    'rentalReturned',
+    'feePaid',
+    'status',
+    'allocatedStartSec',
+    'checkTimeSec',
+    'startTimeSec',
+    'finishTimeSec',
+    'manualFinishTimeSec',
+    'runningTimeSec',
+    'lastSeenControl',
+    'lastSeenTimeSec',
+    'readoutAt',
+    'radioSplits',
+    'cardPunches',
+    'rawReadout',
+    'validation',
+  ]);
+
+  function logLegacyCompetitorFieldWrite(
+    source: string,
+    competitorId: string,
+    fields: string[]
+  ): void {
+    if (fields.length === 0) return;
+    console.warn(
+      `[single-writer] Legacy Express ${source} wrote Firestore-owned competitor fields for ${competitorId}: ${fields.join(', ')}`
+    );
+  }
+
   function requireEventorAdminRequest(
     req: express.Request,
     res: express.Response
@@ -3396,6 +3434,10 @@ async function startServer() {
       return;
     }
     const body = req.body as { rentalReturned?: boolean; feePaid?: boolean };
+    logLegacyCompetitorFieldWrite('rental return mirror', cmp.id, [
+      'rentalReturned',
+      ...(body.feePaid !== undefined ? ['feePaid'] : []),
+    ]);
     cmp.rentalReturned = body.rentalReturned !== undefined ? Boolean(body.rentalReturned) : true;
     if (body.feePaid !== undefined) {
       cmp.feePaid = Boolean(body.feePaid);
@@ -4629,6 +4671,10 @@ async function startServer() {
         res.status(409).json({ error: 'Deltagar-ID används redan för en annan deltagare.' });
         return;
       }
+      logLegacyCompetitorFieldWrite('direct-entry compatibility mirror', existingMirror.id, [
+        'feePaid',
+        'rentalReturned',
+      ]);
       existingMirror.feePaid = Boolean(body.feePaid);
       existingMirror.rentalReturned = Boolean(body.rentalReturned);
       persistUserMutation();
@@ -4775,6 +4821,11 @@ async function startServer() {
     }
     const existing = db.competitors[idx];
     const body = req.body as Partial<Competitor>;
+    logLegacyCompetitorFieldWrite(
+      'competitor update',
+      existing.id,
+      Object.keys(body).filter((field) => firestoreOwnedCompetitorFields.has(field))
+    );
     const nextSi = body.siNumber !== undefined ? Number(body.siNumber) : existing.siNumber;
 
     if (nextSi !== existing.siNumber) {

@@ -130,11 +130,15 @@ Rollback must switch authenticated class reads and writes back together and shou
 
 ## Firestore-owned competitor payment and rental flags — Phase 1
 
-Only `feePaid` and `rentalReturned` are Firestore-authoritative in this initial competitor slice. Authenticated competitor loading and the rental overview read these fields from Firestore. A Firestore listener updates the active competitor list, and authenticated Express/WebSocket snapshots preserve the current Firestore values rather than replacing them.
+Only `feePaid` and `rentalReturned` are fully Firestore-authoritative in the initial competitor slice. Authenticated competitor loading and the rental overview read these fields from Firestore. A Firestore listener updates the active competitor list, and authenticated Express/WebSocket snapshots preserve the current Firestore values rather than replacing them.
 
 Payment and rental-return edits write Firestore first. Only after that succeeds does the client update its local state and attempt to update the Express compatibility mirror. The rental overview also writes Firestore before its event-scoped Express mirror. READOUT officials may update only `rentalReturned`; payment changes remain admin-only. Existing imports and `syncFullSeasonToFirestore` seed these fields when creating a missing competitor document but omit them from updates to existing documents.
 
-This does not migrate competitor CRUD or the rest of the competitor schema. Express/JSON remains authoritative for most competitor fields, including status, times, punches, readouts, validation, splits, and related server processing. Authenticated direct-entry creation now commits to Firestore before sending the same competitor ID to Express as a compatibility mirror; unauthenticated direct entry remains Express-first. A Firestore marker protects a document with updated billing fields from deletion by a stale full-season snapshot. Explicit Firestore competitor deletion remains supported.
+### P0 competitor snapshot protection
+
+`syncFullSeasonToFirestore` now treats every existing Firestore competitor document as protected from legacy snapshot updates: it skips the entire document update and logs changed fields when the incoming snapshot differs. It also refuses to delete an existing Firestore competitor omitted by a legacy snapshot and logs the attempted omission. Existing competitor documents are read across the full subcollection so this guard also prevents accidental replacement attempts against documents owned by another account. Express competitor-update and rental/payment mirror routes log attempts to write protected fields; they continue mirroring without changing runtime behavior. The function can still seed a missing competitor document from a legacy snapshot.
+
+This is a write guard, not a completed migration of competitor CRUD or the rest of the competitor schema. Express/JSON still owns most operational competitor processing, including status, times, punches, readouts, validation, and splits. Authenticated direct-entry creation commits to Firestore before sending the same competitor ID to Express as a compatibility mirror; unauthenticated direct entry remains Express-first. Explicit Firestore competitor updates, deletion, and imports remain separate mutation paths and are not disabled by this snapshot-only milestone.
 
 ## Firestore-owned competition metadata
 

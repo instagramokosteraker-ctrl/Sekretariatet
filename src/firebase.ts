@@ -33,6 +33,7 @@ import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
 } from './services/seriesStandings';
+import { getChangedSnapshotFields } from './utils/competitorSnapshotGuard';
 import firebaseConfig from '../firebase-applet-config.json';
 import type {
   CardPunch,
@@ -1437,7 +1438,7 @@ export async function activateCompetitionInFirestore(
   });
 }
 
-const MIGRATED_COMPETITOR_FIELDS = new Set(['feePaid', 'rentalReturned']);
+const FIRESTORE_OWNED_COMPETITOR_FIELDS = new Set(['feePaid', 'rentalReturned']);
 
 function warnOnLegacyCompetitorFieldWrite(
   source: string,
@@ -1564,7 +1565,7 @@ export async function syncFullSeasonToFirestore(
     }
   }
 
-  // 2. Sync each competition's legacy-owned metadata, classes, and competitors
+  // 2. Sync legacy competition metadata and seed missing competitor documents.
   let syncedEvents = 0;
   for (const ev of snapshot.events.slice(0, 100)) {
     const competitionId = sanitizeFirestoreId(ev.competition.id, 'evt');
@@ -1667,19 +1668,16 @@ export async function syncFullSeasonToFirestore(
 
     // Courses and classes are Firestore-owned and excluded from legacy snapshots.
 
-    // 2a. Competitors (including raw punches & rental/payment flags)
+    // Existing competitor documents are protected from legacy snapshot writes.
     const existingCompIds = new Set<string>();
-    const billingUpdatedCompIds = new Set<string>();
+    const existingCompetitors = new Map<string, Record<string, unknown>>();
     try {
       const cmpSnap = await getDocs(
-        query(
-          collection(db, 'competitions', competitionId, 'competitors'),
-          where('ownerUid', '==', ownerUid)
-        )
+        collection(db, 'competitions', competitionId, 'competitors')
       );
       cmpSnap.docs.forEach((d) => {
         existingCompIds.add(d.id);
-        if (d.data().billingFieldsUpdatedAt) billingUpdatedCompIds.add(d.id);
+        existingCompetitors.set(d.id, d.data());
       });
     } catch (err) {
       handleWriteOrOfflineError(err, OperationType.LIST, `competitions/${competitionId}/competitors`);
@@ -1707,7 +1705,7 @@ export async function syncFullSeasonToFirestore(
           : 'REGISTERED';
 
       const legacyBillingFields = Object.keys(cmp).filter((key) =>
-        MIGRATED_COMPETITOR_FIELDS.has(key)
+        FIRESTORE_OWNED_COMPETITOR_FIELDS.has(key)
       );
       if (legacyBillingFields.length > 0) {
         warnOnLegacyCompetitorFieldWrite(
@@ -1738,35 +1736,40 @@ export async function syncFullSeasonToFirestore(
       };
 
       if (existingCompIds.has(competitorId)) {
-        childOps.push({
-          kind: 'update',
-          ref: cmpRef,
-          path: cmpPath,
-          data: { ...cmpMutable, updatedAt: serverTimestamp() },
-        });
-      } else {
-        childOps.push({
-          kind: 'set',
-          ref: cmpRef,
-          path: cmpPath,
-          data: {
-            competitorId,
-            competitionId,
-            ...cmpMutable,
-            ownerUid,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-        });
+        const existingData = existingCompetitors.get(competitorId) ?? {};
+        const proposedFields: Record<string, unknown> = { ...cmpMutable };
+        if (typeof cmp.feePaid === 'boolean') proposedFields.feePaid = cmp.feePaid;
+        if (typeof cmp.rentalReturned === 'boolean') {
+          proposedFields.rentalReturned = cmp.rentalReturned;
+        }
+        const changedFields = getChangedSnapshotFields(existingData, proposedFields);
+        if (changedFields.length > 0) {
+          console.warn(
+            `[single-writer] Blocked legacy snapshot overwrite of Firestore competitor ${competitorId} in ${competitionId}; changed fields: ${changedFields.join(', ')}`
+          );
+        }
+        continue;
       }
+
+      childOps.push({
+        kind: 'set',
+        ref: cmpRef,
+        path: cmpPath,
+        data: {
+          competitorId,
+          competitionId,
+          ...cmpMutable,
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
     }
     for (const oldId of existingCompIds) {
-      if (!nextCompIds.has(oldId) && !billingUpdatedCompIds.has(oldId)) {
-        childOps.push({
-          kind: 'delete',
-          ref: doc(db, 'competitions', competitionId, 'competitors', oldId),
-          path: `competitions/${competitionId}/competitors/${oldId}`,
-        });
+      if (!nextCompIds.has(oldId)) {
+        console.warn(
+          `[single-writer] Blocked legacy snapshot omission from deleting Firestore competitor ${oldId} in ${competitionId}.`
+        );
       }
     }
 
