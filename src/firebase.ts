@@ -59,8 +59,15 @@ import type {
   RunnerStatus,
   SICardSeries,
   SIStation,
+  SICardAssignment,
+  SICardAssignmentAuditEvent,
+  SICardAssignmentValidationReport,
   StationFunction,
 } from './types/sportident';
+import {
+  buildSICardAssignmentValidationReport,
+  parseSICardAssignmentDocument,
+} from './utils/siCardAssignments';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -453,58 +460,244 @@ export function getCompetitionSICardAssignmentsCollection(
   return collection(db, 'competitions', safeCompetitionId, 'siCardAssignments');
 }
 
-export async function readCompetitionSICardAssignment(
+function logSICardAssignmentAudit(
+  action: SICardAssignmentAuditEvent['action'],
+  competitionId: string,
+  siNumber: number,
+  competitorId: string | null
+): void {
+  const event: SICardAssignmentAuditEvent = {
+    action,
+    competitionId,
+    siNumber,
+    competitorId,
+    timestamp: new Date().toISOString(),
+    ...(auth.currentUser?.uid ? { actorUid: auth.currentUser.uid } : {}),
+  };
+  const message = `[si-assignment] ${JSON.stringify(event)}`;
+  if (action === 'RETIRED_ASSIGNMENT' || action === 'DUPLICATE_ASSIGNMENT') {
+    console.warn(message);
+  } else {
+    console.info(message);
+  }
+}
+
+function validateSICardLookupInput(competitionId: string, siNumber: number): {
+  competitionId: string;
+  siNumber: number;
+} {
+  if (
+    !competitionId.trim() ||
+    !Number.isInteger(siNumber) ||
+    siNumber < 1 ||
+    siNumber > 99999999
+  ) {
+    throw new Error('Ogiltigt tävlings-ID eller SI-bricknummer för uppslag.');
+  }
+  return {
+    competitionId: sanitizeFirestoreId(competitionId, 'evt'),
+    siNumber,
+  };
+}
+
+export async function lookupCompetitionSICardAssignment(
   competitionId: string,
   siNumber: number
-): Promise<
-  | {
-      competitionId: string;
-      siNumber: number;
-      competitorId: string | null;
-      status: 'ACTIVE' | 'RETIRED' | 'REASSIGNED' | 'UNKNOWN';
-      assignmentVersion: number;
-      source: 'DIRECT_ENTRY' | 'EVENTOR_IMPORT' | 'MANUAL_ASSIGNMENT' | 'LEGACY_MIGRATION';
-      ownerUid: string | null;
-      assignedAtIso: string | null;
-      retiredAtIso: string | null;
-      retirementReason: string | null;
-      createdAtIso: string | null;
-      updatedAtIso: string | null;
-    }
-  | null
-> {
-  const ref = getCompetitionSICardAssignmentRef(competitionId, siNumber);
+): Promise<SICardAssignment | null> {
+  const input = validateSICardLookupInput(competitionId, siNumber);
+  const ref = getCompetitionSICardAssignmentRef(input.competitionId, input.siNumber);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
+    logSICardAssignmentAudit('LOOKUP_MISS', input.competitionId, input.siNumber, null);
     return null;
   }
-  const data = snap.data();
+  const assignment = parseSICardAssignmentDocument(
+    snap.id,
+    input.competitionId,
+    snap.data() as Record<string, unknown>
+  );
+  if (!assignment) {
+    console.error(
+      `[si-assignment] Invalid assignment document at ${ref.path}; expected document ID ${input.siNumber}.`
+    );
+    throw new Error(`SI-tilldelningen för ${input.siNumber} har ett ogiltigt format.`);
+  }
+  logSICardAssignmentAudit(
+    'LOOKUP_HIT',
+    input.competitionId,
+    input.siNumber,
+    assignment.competitorId
+  );
+  if (assignment.status === 'RETIRED') {
+    logSICardAssignmentAudit(
+      'RETIRED_ASSIGNMENT',
+      input.competitionId,
+      input.siNumber,
+      assignment.competitorId
+    );
+  } else if (assignment.status === 'DUPLICATE_CONFIRMED') {
+    logSICardAssignmentAudit(
+      'DUPLICATE_ASSIGNMENT',
+      input.competitionId,
+      input.siNumber,
+      assignment.competitorId
+    );
+  }
+  return assignment;
+}
+
+export const readCompetitionSICardAssignment = lookupCompetitionSICardAssignment;
+
+export type SICardAssignmentResolution =
+  | { status: 'MISSING'; assignment: null; competitorId: null }
+  | {
+      status: 'ACTIVE';
+      assignment: SICardAssignment;
+      competitorId: string;
+      competitorSiNumber: number;
+    }
+  | {
+      status: 'RETIRED' | 'REASSIGNED' | 'DUPLICATE' | 'UNKNOWN';
+      assignment: SICardAssignment;
+      competitorId: string | null;
+    }
+  | {
+      status: 'ORPHANED';
+      assignment: SICardAssignment;
+      competitorId: string;
+    }
+  | {
+      status: 'SI_MISMATCH';
+      assignment: SICardAssignment;
+      competitorId: string;
+      competitorSiNumber: number;
+    };
+
+export async function resolveCompetitionSICardAssignmentReadOnly(
+  competitionId: string,
+  siNumber: number
+): Promise<SICardAssignmentResolution> {
+  const assignment = await lookupCompetitionSICardAssignment(competitionId, siNumber);
+  if (!assignment) {
+    return { status: 'MISSING', assignment: null, competitorId: null };
+  }
+  if (assignment.status !== 'ACTIVE' || !assignment.competitorId) {
+    const status: 'RETIRED' | 'REASSIGNED' | 'DUPLICATE' | 'UNKNOWN' =
+      assignment.status === 'DUPLICATE_CONFIRMED'
+        ? 'DUPLICATE'
+        : assignment.status === 'ACTIVE'
+          ? 'UNKNOWN'
+          : assignment.status;
+    return {
+      status,
+      assignment,
+      competitorId: assignment.competitorId,
+    };
+  }
+
+  const input = validateSICardLookupInput(competitionId, siNumber);
+  const competitorRef = doc(
+    db,
+    'competitions',
+    input.competitionId,
+    'competitors',
+    sanitizeFirestoreId(assignment.competitorId, 'cmp')
+  );
+  const competitorSnap = await getDoc(competitorRef);
+  if (!competitorSnap.exists()) {
+    console.warn(
+      `[si-assignment] Active assignment ${input.siNumber} references missing competitor ${assignment.competitorId} in ${input.competitionId}.`
+    );
+    return {
+      status: 'ORPHANED',
+      assignment,
+      competitorId: assignment.competitorId,
+    };
+  }
+  const competitorSiNumber = Number(competitorSnap.data().siNumber);
+  if (competitorSiNumber !== assignment.siNumber) {
+    console.warn(
+      `[si-assignment] Assignment SI ${assignment.siNumber} does not match competitor ${assignment.competitorId} SI ${competitorSiNumber} in ${input.competitionId}.`
+    );
+    return {
+      status: 'SI_MISMATCH',
+      assignment,
+      competitorId: assignment.competitorId,
+      competitorSiNumber,
+    };
+  }
   return {
-    competitionId: String(data.competitionId ?? competitionId),
-    siNumber: Number(data.siNumber ?? siNumber),
-    competitorId: typeof data.competitorId === 'string' ? data.competitorId : null,
-    status:
-      data.status === 'ACTIVE' ||
-      data.status === 'RETIRED' ||
-      data.status === 'REASSIGNED' ||
-      data.status === 'UNKNOWN'
-        ? data.status
-        : 'UNKNOWN',
-    assignmentVersion: Number(data.assignmentVersion ?? 1),
-    source:
-      data.source === 'DIRECT_ENTRY' ||
-      data.source === 'EVENTOR_IMPORT' ||
-      data.source === 'MANUAL_ASSIGNMENT' ||
-      data.source === 'LEGACY_MIGRATION'
-        ? data.source
-        : 'LEGACY_MIGRATION',
-    ownerUid: typeof data.ownerUid === 'string' ? data.ownerUid : null,
-    assignedAtIso: typeof data.assignedAtIso === 'string' ? data.assignedAtIso : null,
-    retiredAtIso: typeof data.retiredAtIso === 'string' ? data.retiredAtIso : null,
-    retirementReason: typeof data.retirementReason === 'string' ? data.retirementReason : null,
-    createdAtIso: typeof data.createdAtIso === 'string' ? data.createdAtIso : null,
-    updatedAtIso: typeof data.updatedAtIso === 'string' ? data.updatedAtIso : null,
+    status: 'ACTIVE',
+    assignment,
+    competitorId: assignment.competitorId,
+    competitorSiNumber,
   };
+}
+
+export async function validateCompetitionSICardAssignments(
+  competitionId: string
+): Promise<SICardAssignmentValidationReport> {
+  const authorization = await getCurrentFirebaseRoles();
+  if (!authorization.adminTier) {
+    throw new Error('Endast tävlings- eller klubbadministratörer får granska SI-tilldelningar.');
+  }
+
+  const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
+  const [assignmentSnapshot, competitorSnapshot] = await Promise.all([
+    getDocs(getCompetitionSICardAssignmentsCollection(safeCompetitionId)),
+    getDocs(collection(db, 'competitions', safeCompetitionId, 'competitors')),
+  ]);
+  const competitorSiNumbers = new Map<string, number>();
+  competitorSnapshot.docs.forEach((competitorDoc) => {
+    const siNumber = Number(competitorDoc.data().siNumber);
+    if (Number.isInteger(siNumber) && siNumber > 0) {
+      competitorSiNumbers.set(competitorDoc.id, siNumber);
+    }
+  });
+  const report = buildSICardAssignmentValidationReport({
+    competitionId: safeCompetitionId,
+    records: assignmentSnapshot.docs.map((assignmentDoc) => ({
+      documentId: assignmentDoc.id,
+      data: assignmentDoc.data() as Record<string, unknown>,
+    })),
+    competitorSiNumbers,
+  });
+
+  assignmentSnapshot.docs.forEach((assignmentDoc) => {
+    const assignment = parseSICardAssignmentDocument(
+      assignmentDoc.id,
+      safeCompetitionId,
+      assignmentDoc.data() as Record<string, unknown>
+    );
+    if (assignment?.status === 'RETIRED') {
+      logSICardAssignmentAudit(
+        'RETIRED_ASSIGNMENT',
+        safeCompetitionId,
+        assignment.siNumber,
+        assignment.competitorId
+      );
+    }
+  });
+
+  report.issues
+    .filter(
+      (issue) =>
+        issue.code === 'DUPLICATE_SI_NUMBER' ||
+        issue.code === 'DUPLICATE_COMPETITOR_ASSIGNMENT' ||
+        issue.code === 'DUPLICATE_CONFIRMED'
+    )
+    .forEach((issue) => {
+      issue.siNumbers.forEach((duplicateSiNumber) =>
+        logSICardAssignmentAudit(
+          'DUPLICATE_ASSIGNMENT',
+          safeCompetitionId,
+          duplicateSiNumber,
+          issue.competitorIds[0] ?? null
+        )
+      );
+    });
+
+  return report;
 }
 
 export async function createCompetitionSICardAssignment(params: {

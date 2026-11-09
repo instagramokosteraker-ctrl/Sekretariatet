@@ -523,18 +523,22 @@ The SI matching layer is considered complete when all the following are true:
 
 ### 9.1 Required phases for implementation
 
-Phase A: collection + rules + audit
-- Create `siCardAssignments` collection.
-- Add admin-write rule.
-- Add audit logging model.
-- Confirm no client writes.
+Phase A: schema support
+- Create `siCardAssignments` collection and its model.
+- Add Firestore rules and schema tests.
+- Keep runtime behavior unchanged.
 
-Phase B: competitor create/update integration
-- Add assignment validation to create and edit operations.
-- Add duplicate rejection and manual review path.
-- Ensure all competitor mutations pass through transaction logic.
+Phase B: read-only lookups and validation
+- Add deterministic SI assignment lookup and resolver helpers.
+- Add admin-only integrity reporting and diagnostic audit logs.
+- Keep the helpers out of competitor creation, updates, and readout flows.
 
-Phase C: readout resolution integration
+Phase C: uniqueness enforcement
+- Add assignment validation to competitor create and edit operations.
+- Reject duplicate assignments and provide a manual review path.
+- Ensure competitor and assignment mutations use the same transaction.
+
+Phase D: readout resolution integration
 - Resolve SI assignments during readout processing.
 - Create `UNKNOWN` / rejected outcomes correctly.
 - Keep readout receipts immutable.

@@ -771,6 +771,30 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .doc('competitions/evt_live/siCardAssignments/8500111')
         .get()
     );
+    await assertSucceeds(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500111')
+        .get()
+    );
+    await assertSucceeds(
+      readoutCtx
+        .firestore()
+        .collection('competitions/evt_live/siCardAssignments')
+        .get()
+    );
+    await assertFails(
+      officialCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500111')
+        .get()
+    );
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .collection('competitions/evt_live/siCardAssignments')
+        .get()
+    );
     await assertFails(
       attackerCtx
         .firestore()

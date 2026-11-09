@@ -20,6 +20,7 @@ Current status:
 
 - Architecture design is complete.
 - Competitor Phase 2 has not started.
+- Atomic SI matching Phase B adds opt-in read-only lookup/resolution and admin validation/reporting helpers. Lookup hits, misses, and retired or duplicate assignments produce structured diagnostic logs; no competitor or readout path calls these helpers. Rules tests cover assignment reads for admins/READOUT and denial for unrelated roles; diagnostic logs are not durable audit records.
 - Atomic SI matching Phase A is now in place as schema-only support: the Firestore collection, TypeScript model, helper functions, and rules skeleton exist without changing runtime mutation behavior.
 - The legacy full-season snapshot writer now skips updates to existing competitor documents and refuses snapshot-driven deletion of existing records; changed-field and omission attempts are logged. Express competitor and rental mirror routes log protected-field write attempts but continue existing mirror behavior. This does not disable explicit competitor mutations or prevent legacy snapshots from seeding missing records.
 - Before Competitor Phase 2 can begin, the following P0 risks must be resolved:
@@ -614,3 +615,5 @@ The project is ready for the next stage only after the P0 implementation plan ab
 This document converts the architecture P0 risks into an implementation roadmap. It clarifies what must be disabled, how the Firestore transaction model should work, how idempotency is enforced, how stale snapshots are prevented, and how the system is validated before any Phase 2 competitor CRUD migration begins.
 
 The competitor snapshot guard is implemented for `syncFullSeasonToFirestore`, but remaining Express mutation routes, explicit Firestore mutation paths, import updates, and create/resurrection risks still require review and enforcement before Phase 2.
+
+Atomic SI Matching Phase B is read-only. Phase C uniqueness enforcement remains blocked on single-writer authority, stale-writer fencing, historical duplicate inventory, and atomic competitor/assignment transaction validation.

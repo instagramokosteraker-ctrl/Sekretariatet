@@ -353,7 +353,12 @@ export interface RunnerDbEntry {
   updatedAt: string;
 }
 
-export type SICardAssignmentStatus = 'ACTIVE' | 'RETIRED' | 'REASSIGNED' | 'UNKNOWN';
+export type SICardAssignmentStatus =
+  | 'ACTIVE'
+  | 'RETIRED'
+  | 'REASSIGNED'
+  | 'DUPLICATE_CONFIRMED'
+  | 'UNKNOWN';
 
 export type SICardAssignmentSource =
   | 'DIRECT_ENTRY'
@@ -374,6 +379,47 @@ export interface SICardAssignment {
   retirementReason: string | null;
   createdAtIso: string | null;
   updatedAtIso: string | null;
+}
+
+export type SICardAssignmentAuditAction =
+  | 'LOOKUP_HIT'
+  | 'LOOKUP_MISS'
+  | 'RETIRED_ASSIGNMENT'
+  | 'DUPLICATE_ASSIGNMENT';
+
+export interface SICardAssignmentAuditEvent {
+  action: SICardAssignmentAuditAction;
+  competitionId: string;
+  siNumber: number;
+  competitorId: string | null;
+  timestamp: string;
+  actorUid?: string;
+}
+
+export type SICardAssignmentIssueCode =
+  | 'INVALID_DOCUMENT'
+  | 'DOCUMENT_ID_MISMATCH'
+  | 'DUPLICATE_SI_NUMBER'
+  | 'DUPLICATE_COMPETITOR_ASSIGNMENT'
+  | 'ORPHANED_COMPETITOR'
+  | 'COMPETITOR_SI_MISMATCH'
+  | 'DUPLICATE_CONFIRMED';
+
+export interface SICardAssignmentValidationIssue {
+  code: SICardAssignmentIssueCode;
+  siNumbers: number[];
+  competitorIds: string[];
+  documentIds: string[];
+  message: string;
+}
+
+export interface SICardAssignmentValidationReport {
+  competitionId: string;
+  generatedAtIso: string;
+  assignmentCount: number;
+  activeCount: number;
+  retiredCount: number;
+  issues: SICardAssignmentValidationIssue[];
 }
 
 export interface EventorIntegrationStatus {

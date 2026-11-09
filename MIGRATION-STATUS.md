@@ -41,10 +41,12 @@ Last updated: 2026-11-09
 
 ## Future architecture migration phases
 
-### Phase 4 — Atomic SI matching schema support
+### Phase 4 — Atomic SI matching foundation
 
-**Status:** In progress  
-**Purpose:** Add the canonical `competitions/{competitionId}/siCardAssignments/{siNumber}` collection, schema types, and administrative Firestore rules scaffolding without changing runtime behavior. The collection is authoritative by design, but no readout or competitor logic yet reads or enforces it. This is the first migration step for the SI-number ownership model.
+**Status:** Phase A complete; Phase B complete
+**Purpose:** Add the canonical `competitions/{competitionId}/siCardAssignments/{siNumber}` collection and its schema support, then provide opt-in read-only lookup/resolver and admin validation helpers. Lookup hits, misses, retired assignments, and duplicate conditions produce structured diagnostic logs. Firestore rules permit verified admins and READOUT officials to get/list assignments; rules tests cover allowed and denied roles. These logs are diagnostic console output, not durable audit records. The helpers are not called by competitor creation/edit or readout flows, so runtime behavior remains unchanged. No uniqueness is enforced yet.
+
+**Next:** Phase C adds uniqueness enforcement to competitor create/update operations using an atomic competitor/assignment transaction. It must remain blocked until the single-writer and stale-snapshot prerequisites are satisfied.
 
 ### Phase 5 — Move Eventor calls to Firebase Functions
 
