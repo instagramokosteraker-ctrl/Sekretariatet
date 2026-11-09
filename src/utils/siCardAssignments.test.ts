@@ -1,22 +1,23 @@
+import { Timestamp } from 'firebase/firestore';
 import { describe, expect, it } from 'vitest';
 import {
   buildSICardAssignmentValidationReport,
   parseSICardAssignmentDocument,
 } from './siCardAssignments';
 
-const assignment = (siNumber: number, competitorId: string, status = 'ACTIVE') => ({
+const assignment = (siNumber: number, competitorId: string | null, state = 'ACTIVE') => ({
   competitionId: 'evt_test',
   siNumber,
+  cardSeries: 'SI-Card 10',
   competitorId,
-  status,
+  competitorDocumentId: competitorId,
+  state,
   assignmentVersion: 1,
   source: 'DIRECT_ENTRY',
   ownerUid: 'admin_uid',
-  assignedAtIso: null,
-  retiredAtIso: null,
-  retirementReason: null,
-  createdAtIso: null,
-  updatedAtIso: null,
+  schemaVersion: 1,
+  createdAt: Timestamp.fromDate(new Date('2026-01-01T00:00:00Z')),
+  updatedAt: Timestamp.fromDate(new Date('2026-01-01T00:00:00Z')),
 });
 
 describe('SI card assignment helpers', () => {
@@ -26,7 +27,7 @@ describe('SI card assignment helpers', () => {
         '8500111',
         'evt_test',
         assignment(8500111, 'cmp_1')
-      )?.status
+      )?.state
     ).toBe('ACTIVE');
     expect(
       parseSICardAssignmentDocument(
@@ -34,6 +35,31 @@ describe('SI card assignment helpers', () => {
         'evt_test',
         assignment(8500111, 'cmp_1')
       )
+    ).toBeNull();
+  });
+
+  it('requires the aligned schema and accepts confirmed duplicate state', () => {
+    const duplicate = assignment(8500115, 'cmp_4', 'DUPLICATE_CONFIRMED');
+    expect(
+      parseSICardAssignmentDocument('8500115', 'evt_test', duplicate)?.state
+    ).toBe('DUPLICATE_CONFIRMED');
+    expect(
+      parseSICardAssignmentDocument('8500115', 'evt_test', {
+        ...duplicate,
+        status: duplicate.state,
+      })
+    ).toBeNull();
+    expect(
+      parseSICardAssignmentDocument('8500115', 'evt_test', {
+        ...duplicate,
+        createdAt: new Date().toISOString(),
+      })
+    ).toBeNull();
+    expect(
+      parseSICardAssignmentDocument('8500115', 'evt_test', {
+        ...duplicate,
+        schemaVersion: 2,
+      })
     ).toBeNull();
   });
 

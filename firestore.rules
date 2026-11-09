@@ -593,46 +593,53 @@ service cloud.firestore {
       return data.keys().hasAll([
           'competitionId',
           'siNumber',
+          'cardSeries',
           'competitorId',
-          'status',
+          'competitorDocumentId',
+          'state',
           'assignmentVersion',
           'source',
           'ownerUid',
-          'assignedAtIso',
-          'retiredAtIso',
-          'retirementReason',
-          'createdAtIso',
-          'updatedAtIso',
-          'schemaVersion'
+          'schemaVersion',
+          'createdAt',
+          'updatedAt'
         ]) &&
         data.keys().hasOnly([
           'competitionId',
           'siNumber',
+          'cardSeries',
           'competitorId',
-          'status',
+          'competitorDocumentId',
+          'state',
           'assignmentVersion',
           'source',
           'ownerUid',
-          'assignedAtIso',
-          'retiredAtIso',
+          'schemaVersion',
+          'createdAt',
+          'updatedAt',
+          'previousCompetitorId',
+          'retiredAt',
           'retirementReason',
-          'createdAtIso',
-          'updatedAtIso',
-          'schemaVersion'
+          'conflictReason',
+          'lastValidatedAt'
         ]) &&
         isValidId(data.competitionId) &&
         data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
         (data.competitorId == null || (data.competitorId is string && data.competitorId.size() <= 128)) &&
-        data.status is string && (data.status == 'ACTIVE' || data.status == 'RETIRED' || data.status == 'REASSIGNED' || data.status == 'UNKNOWN') &&
+        data.cardSeries is string && data.cardSeries.size() >= 1 && data.cardSeries.size() <= 24 &&
+        data.competitorDocumentId == data.competitorId &&
+        data.state is string && (data.state == 'ACTIVE' || data.state == 'RETIRED' || data.state == 'DUPLICATE_CONFIRMED' || data.state == 'UNKNOWN') &&
         data.assignmentVersion is int && data.assignmentVersion >= 1 && data.assignmentVersion <= 65535 &&
-        data.source is string && (data.source == 'DIRECT_ENTRY' || data.source == 'EVENTOR_IMPORT' || data.source == 'MANUAL_ASSIGNMENT' || data.source == 'LEGACY_MIGRATION') &&
-        data.ownerUid is string && data.ownerUid.size() <= 128 &&
-        (data.assignedAtIso == null || (data.assignedAtIso is string && data.assignedAtIso.size() <= 40)) &&
-        (data.retiredAtIso == null || (data.retiredAtIso is string && data.retiredAtIso.size() <= 40)) &&
-        (data.retirementReason == null || (data.retirementReason is string && data.retirementReason.size() <= 200)) &&
-        (data.createdAtIso == null || (data.createdAtIso is string && data.createdAtIso.size() <= 40)) &&
-        (data.updatedAtIso == null || (data.updatedAtIso is string && data.updatedAtIso.size() <= 40)) &&
-        data.schemaVersion is int && data.schemaVersion >= 1 && data.schemaVersion <= 32;
+        data.source is string && (data.source == 'DIRECT_ENTRY' || data.source == 'IMPORT' || data.source == 'EVENTOR' || data.source == 'MANUAL' || data.source == 'READOUT' || data.source == 'SYSTEM') &&
+        isValidId(data.ownerUid) &&
+        data.schemaVersion == 1 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        (!('previousCompetitorId' in data) || data.previousCompetitorId == null || (data.previousCompetitorId is string && data.previousCompetitorId.size() <= 128)) &&
+        (!('retiredAt' in data) || data.retiredAt == null || data.retiredAt is timestamp) &&
+        (!('retirementReason' in data) || data.retirementReason == null || (data.retirementReason is string && data.retirementReason.size() <= 200)) &&
+        (!('conflictReason' in data) || data.conflictReason == null || (data.conflictReason is string && data.conflictReason.size() <= 200)) &&
+        (!('lastValidatedAt' in data) || data.lastValidatedAt == null || data.lastValidatedAt is timestamp);
     }
 
     // =========================================================================
@@ -1173,8 +1180,9 @@ service cloud.firestore {
           resource != null &&
           incoming().competitionId == existing().competitionId &&
           incoming().siNumber == existing().siNumber &&
-          incoming().createdAtIso == existing().createdAtIso &&
+          incoming().createdAt == existing().createdAt &&
           incoming().ownerUid == existing().ownerUid &&
+          incoming().schemaVersion == existing().schemaVersion &&
           parentCompetitionExists(competitionId) &&
           isAdmin();
 

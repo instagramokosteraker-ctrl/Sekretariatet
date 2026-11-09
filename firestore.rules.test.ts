@@ -747,16 +747,15 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     const siCardAssignment = {
       competitionId: 'evt_live',
       siNumber: 8500111,
+      cardSeries: 'SI-Card 10',
       competitorId: 'cmp_valid',
-      status: 'ACTIVE',
+      competitorDocumentId: 'cmp_valid',
+      state: 'ACTIVE',
       assignmentVersion: 1,
       source: 'DIRECT_ENTRY',
       ownerUid: 'race_admin_1',
-      assignedAtIso: new Date().toISOString(),
-      retiredAtIso: null,
-      retirementReason: null,
-      createdAtIso: new Date().toISOString(),
-      updatedAtIso: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       schemaVersion: 1,
     };
     await assertSucceeds(
@@ -813,6 +812,56 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .set({
           ...siCardAssignment,
           ownerUid: 'readout_uid',
+        })
+    );
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500113')
+        .set({
+          ...siCardAssignment,
+          siNumber: 8500113,
+          state: 'DUPLICATE_CONFIRMED',
+          conflictReason: 'Imported duplicate',
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500114')
+        .set({
+          siNumber: 8500114,
+          competitionId: 'evt_live',
+          cardSeries: 'SI-Card 10',
+          competitorId: 'cmp_valid',
+          competitorDocumentId: 'cmp_valid',
+          assignmentVersion: 1,
+          source: 'DIRECT_ENTRY',
+          ownerUid: 'race_admin_1',
+          schemaVersion: 1,
+          createdAt: now,
+          updatedAt: now,
+          status: 'ACTIVE',
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500115')
+        .set({
+          ...siCardAssignment,
+          siNumber: 8500115,
+          createdAt: new Date().toISOString(),
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500116')
+        .set({
+          ...siCardAssignment,
+          siNumber: 8500116,
+          schemaVersion: 2,
         })
     );
   } finally {

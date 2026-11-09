@@ -64,6 +64,7 @@ import type {
   SICardAssignmentValidationReport,
   StationFunction,
 } from './types/sportident';
+import { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from './types/sportident';
 import {
   buildSICardAssignmentValidationReport,
   parseSICardAssignmentDocument,
@@ -443,7 +444,7 @@ export function sanitizeFirestoreId(raw: string, fallbackPrefix = 'id'): string 
   return cleaned;
 }
 
-export const SI_CARD_ASSIGNMENT_SCHEMA_VERSION = 1;
+export { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from './types/sportident';
 
 export function getCompetitionSICardAssignmentRef(
   competitionId: string,
@@ -528,14 +529,14 @@ export async function lookupCompetitionSICardAssignment(
     input.siNumber,
     assignment.competitorId
   );
-  if (assignment.status === 'RETIRED') {
+  if (assignment.state === 'RETIRED') {
     logSICardAssignmentAudit(
       'RETIRED_ASSIGNMENT',
       input.competitionId,
       input.siNumber,
       assignment.competitorId
     );
-  } else if (assignment.status === 'DUPLICATE_CONFIRMED') {
+  } else if (assignment.state === 'DUPLICATE_CONFIRMED') {
     logSICardAssignmentAudit(
       'DUPLICATE_ASSIGNMENT',
       input.competitionId,
@@ -557,7 +558,7 @@ export type SICardAssignmentResolution =
       competitorSiNumber: number;
     }
   | {
-      status: 'RETIRED' | 'REASSIGNED' | 'DUPLICATE' | 'UNKNOWN';
+      status: 'RETIRED' | 'DUPLICATE' | 'UNKNOWN';
       assignment: SICardAssignment;
       competitorId: string | null;
     }
@@ -581,13 +582,13 @@ export async function resolveCompetitionSICardAssignmentReadOnly(
   if (!assignment) {
     return { status: 'MISSING', assignment: null, competitorId: null };
   }
-  if (assignment.status !== 'ACTIVE' || !assignment.competitorId) {
-    const status: 'RETIRED' | 'REASSIGNED' | 'DUPLICATE' | 'UNKNOWN' =
-      assignment.status === 'DUPLICATE_CONFIRMED'
+  if (assignment.state !== 'ACTIVE' || !assignment.competitorId) {
+    const status: 'RETIRED' | 'DUPLICATE' | 'UNKNOWN' =
+      assignment.state === 'DUPLICATE_CONFIRMED'
         ? 'DUPLICATE'
-        : assignment.status === 'ACTIVE'
+        : assignment.state === 'ACTIVE'
           ? 'UNKNOWN'
-          : assignment.status;
+          : assignment.state;
     return {
       status,
       assignment,
@@ -669,7 +670,7 @@ export async function validateCompetitionSICardAssignments(
       safeCompetitionId,
       assignmentDoc.data() as Record<string, unknown>
     );
-    if (assignment?.status === 'RETIRED') {
+    if (assignment?.state === 'RETIRED') {
       logSICardAssignmentAudit(
         'RETIRED_ASSIGNMENT',
         safeCompetitionId,
@@ -703,41 +704,58 @@ export async function validateCompetitionSICardAssignments(
 export async function createCompetitionSICardAssignment(params: {
   competitionId: string;
   siNumber: number;
+  cardSeries: string;
   competitorId: string | null;
-  status?: 'ACTIVE' | 'RETIRED' | 'REASSIGNED' | 'UNKNOWN';
+  state?: 'ACTIVE' | 'RETIRED' | 'DUPLICATE_CONFIRMED' | 'UNKNOWN';
   assignmentVersion?: number;
-  source?: 'DIRECT_ENTRY' | 'EVENTOR_IMPORT' | 'MANUAL_ASSIGNMENT' | 'LEGACY_MIGRATION';
-  ownerUid?: string | null;
-  assignedAtIso?: string | null;
-  retiredAtIso?: string | null;
+  source?: 'DIRECT_ENTRY' | 'IMPORT' | 'EVENTOR' | 'MANUAL' | 'READOUT' | 'SYSTEM';
+  ownerUid?: string;
+  previousCompetitorId?: string | null;
+  retiredAt?: Timestamp | null;
   retirementReason?: string | null;
+  conflictReason?: string | null;
+  lastValidatedAt?: Timestamp | null;
 }): Promise<void> {
   const current = await ensureValidFirestoreUser();
   if (!current || !current.emailVerified) {
     throw new Error('Ditt Google-konto saknar giltig Firestore-session för SI-kortstilldelning.');
   }
   const ref = getCompetitionSICardAssignmentRef(params.competitionId, params.siNumber);
-  const nowIso = new Date().toISOString();
+  const now = Timestamp.now();
+  const competitorId = params.competitorId;
   await setDoc(ref, {
     competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
     siNumber: Number(params.siNumber),
-    competitorId: params.competitorId,
-    status: params.status ?? 'ACTIVE',
+    cardSeries: params.cardSeries,
+    competitorId,
+    competitorDocumentId: competitorId,
+    state: params.state ?? 'ACTIVE',
     assignmentVersion: Number(params.assignmentVersion ?? 1),
-    source: params.source ?? 'MANUAL_ASSIGNMENT',
+    source: params.source ?? 'MANUAL',
     ownerUid: params.ownerUid ?? sanitizeFirestoreId(current.uid, 'usr'),
-    assignedAtIso: params.assignedAtIso ?? nowIso,
-    retiredAtIso: params.retiredAtIso ?? null,
-    retirementReason: params.retirementReason ?? null,
-    createdAtIso: nowIso,
-    updatedAtIso: nowIso,
     schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+    createdAt: now,
+    updatedAt: now,
+    ...(params.previousCompetitorId !== undefined
+      ? { previousCompetitorId: params.previousCompetitorId }
+      : {}),
+    ...(params.retiredAt !== undefined ? { retiredAt: params.retiredAt } : {}),
+    ...(params.retirementReason !== undefined
+      ? { retirementReason: params.retirementReason }
+      : {}),
+    ...(params.conflictReason !== undefined
+      ? { conflictReason: params.conflictReason }
+      : {}),
+    ...(params.lastValidatedAt !== undefined
+      ? { lastValidatedAt: params.lastValidatedAt }
+      : {}),
   });
 }
 
 export async function retireCompetitionSICardAssignment(params: {
   competitionId: string;
   siNumber: number;
+  cardSeries: string;
   competitorId: string | null;
   retirementReason?: string | null;
   ownerUid?: string | null;
@@ -747,25 +765,45 @@ export async function retireCompetitionSICardAssignment(params: {
     throw new Error('Ditt Google-konto saknar giltig Firestore-session för SI-kortstilldelning.');
   }
   const ref = getCompetitionSICardAssignmentRef(params.competitionId, params.siNumber);
-  const nowIso = new Date().toISOString();
+  const now = Timestamp.now();
+  const competitorId = params.competitorId;
+  const existingSnapshot = await getDoc(ref);
+  if (existingSnapshot.exists()) {
+    const existing = parseSICardAssignmentDocument(
+      existingSnapshot.id,
+      sanitizeFirestoreId(params.competitionId, 'evt'),
+      existingSnapshot.data() as Record<string, unknown>
+    );
+    if (!existing) {
+      throw new Error(`SI-tilldelningen för ${params.siNumber} har ett ogiltigt format.`);
+    }
+    await updateDoc(ref, {
+      state: 'RETIRED',
+      assignmentVersion: existing.assignmentVersion + 1,
+      updatedAt: now,
+      retiredAt: now,
+      retirementReason: params.retirementReason ?? 'retired',
+    });
+    return;
+  }
   await setDoc(
     ref,
     {
       competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
       siNumber: Number(params.siNumber),
-      competitorId: params.competitorId,
-      status: 'RETIRED',
+      cardSeries: params.cardSeries,
+      competitorId,
+      competitorDocumentId: competitorId,
+      state: 'RETIRED',
       assignmentVersion: 1,
-      source: 'MANUAL_ASSIGNMENT',
+      source: 'MANUAL',
       ownerUid: params.ownerUid ?? sanitizeFirestoreId(current.uid, 'usr'),
-      assignedAtIso: nowIso,
-      retiredAtIso: nowIso,
-      retirementReason: params.retirementReason ?? 'retired',
-      createdAtIso: nowIso,
-      updatedAtIso: nowIso,
       schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
-    },
-    { merge: true }
+      createdAt: now,
+      updatedAt: now,
+      retiredAt: now,
+      retirementReason: params.retirementReason ?? 'retired',
+    }
   );
 }
 

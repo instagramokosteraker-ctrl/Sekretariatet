@@ -36,15 +36,16 @@ interface SiCardAssignment {
   competitionId: string;
   siNumber: number;
   cardSeries: string;
-  competitorId: string;
-  competitorDocumentId: string;
+  competitorId: string | null;
+  competitorDocumentId: string | null;
   state: 'ACTIVE' | 'RETIRED' | 'DUPLICATE_CONFIRMED' | 'UNKNOWN';
   assignmentVersion: number;
-  previousCompetitorId?: string | null;
   source: 'DIRECT_ENTRY' | 'IMPORT' | 'EVENTOR' | 'MANUAL' | 'READOUT' | 'SYSTEM';
   ownerUid: string;
+  schemaVersion: 1;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+  previousCompetitorId?: string | null;
   retiredAt?: Timestamp | null;
   retirementReason?: string | null;
   conflictReason?: string | null;
@@ -52,13 +53,20 @@ interface SiCardAssignment {
 }
 ```
 
+`competitorDocumentId` is required and must equal `competitorId`. Both are nullable only
+when the assignment has no resolved competitor. `schemaVersion` is required and is
+currently exactly `1`; bumping it requires a coordinated model, parser, rules, and
+migration change. Timestamp fields are Firestore `Timestamp` values, never ISO strings.
+The four fields after `previousCompetitorId` are optional; when present, nullable values
+are accepted where indicated.
+
 ### 1.3 Field semantics
 
 - `competitionId`: competition scope for the assignment.
 - `siNumber`: normalized SI card number.
 - `cardSeries`: metadata and validation only; not uniqueness.
-- `competitorId`: current authoritative competitor the card belongs to.
-- `competitorDocumentId`: same as `competitorId`, retained for consistency with existing document naming conventions.
+- `competitorId`: current authoritative competitor the card belongs to, or `null` until resolved.
+- `competitorDocumentId`: required mirror of `competitorId`, including `null` when unresolved.
 - `state`:
   - `ACTIVE`: current valid assignment.
   - `RETIRED`: card intentionally removed or retired.
@@ -67,7 +75,8 @@ interface SiCardAssignment {
 - `assignmentVersion`: monotonic integer used for optimistic conflict detection and compatibility fallback.
 - `previousCompetitorId`: preserved if a card is reassigned or moved during a manual repair.
 - `source`: origin of the assignment creation or mutation; used for audit and troubleshooting.
-- `ownerUid`: the Firestore owner of the assignment record; used by rules and admin validation.
+- `ownerUid`: the verified administrator who created the assignment; stable across updates.
+- `schemaVersion`: required schema marker. Version `1` is the only version accepted by the current rules and parser.
 - `createdAt` / `updatedAt`: audit timestamps.
 - `retiredAt`: immutable retirement timestamp.
 - `retirementReason`: human-readable reason for a retirement or deletion.

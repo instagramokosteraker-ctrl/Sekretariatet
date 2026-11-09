@@ -617,3 +617,5 @@ This document converts the architecture P0 risks into an implementation roadmap.
 The competitor snapshot guard is implemented for `syncFullSeasonToFirestore`, but remaining Express mutation routes, explicit Firestore mutation paths, import updates, and create/resurrection risks still require review and enforcement before Phase 2.
 
 Atomic SI Matching Phase B is read-only. Phase C uniqueness enforcement remains blocked on single-writer authority, stale-writer fencing, historical duplicate inventory, and atomic competitor/assignment transaction validation.
+
+The Phase A/B assignment schema and Firestore rules are now aligned: `state` is the canonical lifecycle field; `schemaVersion` is required and fixed at `1`; `createdAt`, `updatedAt`, `retiredAt`, and `lastValidatedAt` use Firestore `Timestamp`; `DUPLICATE_CONFIRMED` is accepted; and required versus optional fields are enforced consistently by the model parser and rules. This resolves the schema-alignment prerequisite only. It does not implement uniqueness, conflict rejection, a trusted atomic write path, or durable audit; Phase C remains blocked by the gates above.

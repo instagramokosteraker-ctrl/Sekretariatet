@@ -1,25 +1,63 @@
+import { Timestamp } from 'firebase/firestore';
 import type {
   SICardAssignment,
   SICardAssignmentSource,
-  SICardAssignmentStatus,
+  SICardAssignmentState,
   SICardAssignmentValidationIssue,
   SICardAssignmentValidationReport,
 } from '../types/sportident';
+import { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from '../types/sportident';
 
-const ASSIGNMENT_STATUSES = new Set<SICardAssignmentStatus>([
+const ASSIGNMENT_STATES = new Set<SICardAssignmentState>([
   'ACTIVE',
   'RETIRED',
-  'REASSIGNED',
   'DUPLICATE_CONFIRMED',
   'UNKNOWN',
 ]);
 
 const ASSIGNMENT_SOURCES = new Set<SICardAssignmentSource>([
   'DIRECT_ENTRY',
-  'EVENTOR_IMPORT',
-  'MANUAL_ASSIGNMENT',
-  'LEGACY_MIGRATION',
+  'IMPORT',
+  'EVENTOR',
+  'MANUAL',
+  'READOUT',
+  'SYSTEM',
 ]);
+
+const REQUIRED_FIELDS = [
+  'competitionId',
+  'siNumber',
+  'cardSeries',
+  'competitorId',
+  'competitorDocumentId',
+  'state',
+  'assignmentVersion',
+  'source',
+  'ownerUid',
+  'schemaVersion',
+  'createdAt',
+  'updatedAt',
+];
+const OPTIONAL_FIELDS = [
+  'previousCompetitorId',
+  'retiredAt',
+  'retirementReason',
+  'conflictReason',
+  'lastValidatedAt',
+];
+const ALLOWED_FIELDS = new Set([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
+
+function isOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isOptionalTimestamp(value: unknown): value is Timestamp | null | undefined {
+  return value === undefined || value === null || value instanceof Timestamp;
+}
 
 export function parseSICardAssignmentDocument(
   documentId: string,
@@ -28,17 +66,42 @@ export function parseSICardAssignmentDocument(
 ): SICardAssignment | null {
   const siNumber = Number(data.siNumber);
   if (
+    Object.keys(data).some((field) => !ALLOWED_FIELDS.has(field)) ||
+    REQUIRED_FIELDS.some((field) => !(field in data)) ||
     data.competitionId !== competitionId ||
     !Number.isInteger(siNumber) ||
     siNumber < 1 ||
     siNumber > 99999999 ||
     documentId !== String(siNumber) ||
-    typeof data.status !== 'string' ||
-    !ASSIGNMENT_STATUSES.has(data.status as SICardAssignmentStatus) ||
+    typeof data.cardSeries !== 'string' ||
+    data.cardSeries.length < 1 ||
+    data.cardSeries.length > 24 ||
+    !isNullableString(data.competitorId) ||
+    (typeof data.competitorId === 'string' && data.competitorId.length > 128) ||
+    !isNullableString(data.competitorDocumentId) ||
+    data.competitorDocumentId !== data.competitorId ||
+    typeof data.state !== 'string' ||
+    !ASSIGNMENT_STATES.has(data.state as SICardAssignmentState) ||
     typeof data.source !== 'string' ||
     !ASSIGNMENT_SOURCES.has(data.source as SICardAssignmentSource) ||
+    typeof data.ownerUid !== 'string' ||
+    data.ownerUid.length < 1 ||
+    data.ownerUid.length > 128 ||
+    data.schemaVersion !== SI_CARD_ASSIGNMENT_SCHEMA_VERSION ||
     !Number.isInteger(data.assignmentVersion) ||
-    Number(data.assignmentVersion) < 1
+    Number(data.assignmentVersion) < 1 ||
+    Number(data.assignmentVersion) > 65535 ||
+    !(data.createdAt instanceof Timestamp) ||
+    !(data.updatedAt instanceof Timestamp) ||
+    !isOptionalString(data.previousCompetitorId) ||
+    (typeof data.previousCompetitorId === 'string' &&
+      data.previousCompetitorId.length > 128) ||
+    !isOptionalTimestamp(data.retiredAt) ||
+    !isOptionalString(data.retirementReason) ||
+    (typeof data.retirementReason === 'string' && data.retirementReason.length > 200) ||
+    !isOptionalString(data.conflictReason) ||
+    (typeof data.conflictReason === 'string' && data.conflictReason.length > 200) ||
+    !isOptionalTimestamp(data.lastValidatedAt)
   ) {
     return null;
   }
@@ -46,17 +109,27 @@ export function parseSICardAssignmentDocument(
   return {
     competitionId,
     siNumber,
-    competitorId: typeof data.competitorId === 'string' ? data.competitorId : null,
-    status: data.status as SICardAssignmentStatus,
+    cardSeries: data.cardSeries,
+    competitorId: data.competitorId,
+    competitorDocumentId: data.competitorDocumentId,
+    state: data.state as SICardAssignmentState,
     assignmentVersion: Number(data.assignmentVersion),
     source: data.source as SICardAssignmentSource,
-    ownerUid: typeof data.ownerUid === 'string' ? data.ownerUid : null,
-    assignedAtIso: typeof data.assignedAtIso === 'string' ? data.assignedAtIso : null,
-    retiredAtIso: typeof data.retiredAtIso === 'string' ? data.retiredAtIso : null,
-    retirementReason:
-      typeof data.retirementReason === 'string' ? data.retirementReason : null,
-    createdAtIso: typeof data.createdAtIso === 'string' ? data.createdAtIso : null,
-    updatedAtIso: typeof data.updatedAtIso === 'string' ? data.updatedAtIso : null,
+    ownerUid: data.ownerUid,
+    schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+    ...(data.previousCompetitorId !== undefined
+      ? { previousCompetitorId: data.previousCompetitorId }
+      : {}),
+    ...(data.retiredAt !== undefined ? { retiredAt: data.retiredAt } : {}),
+    ...(data.retirementReason !== undefined
+      ? { retirementReason: data.retirementReason }
+      : {}),
+    ...(data.conflictReason !== undefined ? { conflictReason: data.conflictReason } : {}),
+    ...(data.lastValidatedAt !== undefined
+      ? { lastValidatedAt: data.lastValidatedAt }
+      : {}),
   };
 }
 
@@ -107,16 +180,16 @@ export function buildSICardAssignmentValidationReport(params: {
     }
 
     parsed.push({ documentId: record.documentId, assignment });
-    if (assignment.status === 'ACTIVE') {
+    if (assignment.state === 'ACTIVE') {
       activeCount += 1;
       if (assignment.competitorId) {
         const siNumbers = activeByCompetitor.get(assignment.competitorId) ?? [];
         siNumbers.push(assignment.siNumber);
         activeByCompetitor.set(assignment.competitorId, siNumbers);
       }
-    } else if (assignment.status === 'RETIRED') {
+    } else if (assignment.state === 'RETIRED') {
       retiredCount += 1;
-    } else if (assignment.status === 'DUPLICATE_CONFIRMED') {
+    } else if (assignment.state === 'DUPLICATE_CONFIRMED') {
       issues.push({
         code: 'DUPLICATE_CONFIRMED',
         siNumbers: [assignment.siNumber],
@@ -154,7 +227,7 @@ export function buildSICardAssignmentValidationReport(params: {
         documentIds: parsed
           .filter(
             ({ assignment }) =>
-              assignment.status === 'ACTIVE' &&
+              assignment.state === 'ACTIVE' &&
               assignment.competitorId === competitorId
           )
           .map(({ documentId }) => documentId),
@@ -164,7 +237,7 @@ export function buildSICardAssignmentValidationReport(params: {
   }
 
   for (const { documentId, assignment } of parsed) {
-    if (assignment.status !== 'ACTIVE' || !assignment.competitorId) continue;
+    if (assignment.state !== 'ACTIVE' || !assignment.competitorId) continue;
     const competitorSiNumber = competitorSiNumbers.get(assignment.competitorId);
     if (competitorSiNumber === undefined) {
       issues.push({

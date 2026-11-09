@@ -1,3 +1,5 @@
+import type { Timestamp } from 'firebase/firestore';
+
 export type SICardSeries =
   | 'SI-Card 5'
   | 'SI-Card 6'
@@ -353,32 +355,40 @@ export interface RunnerDbEntry {
   updatedAt: string;
 }
 
-export type SICardAssignmentStatus =
+export const SI_CARD_ASSIGNMENT_SCHEMA_VERSION = 1;
+
+export type SICardAssignmentState =
   | 'ACTIVE'
   | 'RETIRED'
-  | 'REASSIGNED'
   | 'DUPLICATE_CONFIRMED'
   | 'UNKNOWN';
 
 export type SICardAssignmentSource =
   | 'DIRECT_ENTRY'
-  | 'EVENTOR_IMPORT'
-  | 'MANUAL_ASSIGNMENT'
-  | 'LEGACY_MIGRATION';
+  | 'IMPORT'
+  | 'EVENTOR'
+  | 'MANUAL'
+  | 'READOUT'
+  | 'SYSTEM';
 
 export interface SICardAssignment {
   competitionId: string;
   siNumber: number;
+  cardSeries: string;
   competitorId: string | null;
-  status: SICardAssignmentStatus;
+  competitorDocumentId: string | null;
+  state: SICardAssignmentState;
   assignmentVersion: number;
   source: SICardAssignmentSource;
-  ownerUid: string | null;
-  assignedAtIso: string | null;
-  retiredAtIso: string | null;
-  retirementReason: string | null;
-  createdAtIso: string | null;
-  updatedAtIso: string | null;
+  ownerUid: string;
+  schemaVersion: typeof SI_CARD_ASSIGNMENT_SCHEMA_VERSION;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  previousCompetitorId?: string | null;
+  retiredAt?: Timestamp | null;
+  retirementReason?: string | null;
+  conflictReason?: string | null;
+  lastValidatedAt?: Timestamp | null;
 }
 
 export type SICardAssignmentAuditAction =

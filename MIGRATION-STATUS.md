@@ -43,10 +43,10 @@ Last updated: 2026-11-09
 
 ### Phase 4 — Atomic SI matching foundation
 
-**Status:** Phase A complete; Phase B complete
-**Purpose:** Add the canonical `competitions/{competitionId}/siCardAssignments/{siNumber}` collection and its schema support, then provide opt-in read-only lookup/resolver and admin validation helpers. Lookup hits, misses, retired assignments, and duplicate conditions produce structured diagnostic logs. Firestore rules permit verified admins and READOUT officials to get/list assignments; rules tests cover allowed and denied roles. These logs are diagnostic console output, not durable audit records. The helpers are not called by competitor creation/edit or readout flows, so runtime behavior remains unchanged. No uniqueness is enforced yet.
+**Status:** Phase A complete; Phase B complete; schema/rule alignment complete
+**Purpose:** Add the canonical `competitions/{competitionId}/siCardAssignments/{siNumber}` collection and its schema support, then provide opt-in read-only lookup/resolver and admin validation helpers. The aligned document contract uses `state`, required `schemaVersion: 1`, Firestore `Timestamp` values, required identity/ownership fields, and explicitly optional retirement/conflict metadata. The parser, write helpers, Firestore rules, rules tests, and design document use this same contract, including `DUPLICATE_CONFIRMED`. Lookup hits, misses, retired assignments, and duplicate conditions produce diagnostic console logs, not durable audit records. The helpers are not called by competitor creation/edit or readout flows, so runtime behavior remains unchanged. No uniqueness is enforced yet.
 
-**Next:** Phase C adds uniqueness enforcement to competitor create/update operations using an atomic competitor/assignment transaction. It must remain blocked until the single-writer and stale-snapshot prerequisites are satisfied.
+**Next:** Phase C adds uniqueness enforcement to competitor create/update operations using an atomic competitor/assignment transaction. It remains blocked until the single-writer and stale-snapshot prerequisites are satisfied, historical SI conflicts are inventoried, and the trusted transaction/write boundary is validated.
 
 ### Phase 5 — Move Eventor calls to Firebase Functions
 
