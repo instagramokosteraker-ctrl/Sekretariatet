@@ -743,6 +743,54 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .doc('competitions/evt_live/stationPunches/op_test_1')
         .delete()
     );
+
+    const siCardAssignment = {
+      competitionId: 'evt_live',
+      siNumber: 8500111,
+      competitorId: 'cmp_valid',
+      status: 'ACTIVE',
+      assignmentVersion: 1,
+      source: 'DIRECT_ENTRY',
+      ownerUid: 'race_admin_1',
+      assignedAtIso: new Date().toISOString(),
+      retiredAtIso: null,
+      retirementReason: null,
+      createdAtIso: new Date().toISOString(),
+      updatedAtIso: new Date().toISOString(),
+      schemaVersion: 1,
+    };
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500111')
+        .set(siCardAssignment)
+    );
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500111')
+        .get()
+    );
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500112')
+        .set({
+          ...siCardAssignment,
+          siNumber: 8500112,
+          competitorId: 'cmp_attacker',
+          ownerUid: 'attacker_uid',
+        })
+    );
+    await assertFails(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500111')
+        .set({
+          ...siCardAssignment,
+          ownerUid: 'readout_uid',
+        })
+    );
   } finally {
     await testEnv.cleanup();
   }

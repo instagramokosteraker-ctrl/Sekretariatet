@@ -435,6 +435,166 @@ export function sanitizeFirestoreId(raw: string, fallbackPrefix = 'id'): string 
   return cleaned;
 }
 
+export const SI_CARD_ASSIGNMENT_SCHEMA_VERSION = 1;
+
+export function getCompetitionSICardAssignmentRef(
+  competitionId: string,
+  siNumber: number
+): DocumentReference {
+  const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
+  return doc(db, 'competitions', safeCompetitionId, 'siCardAssignments', String(siNumber));
+}
+
+export function getCompetitionSICardAssignmentsCollection(
+  competitionId: string
+): ReturnType<typeof collection> {
+  const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
+  return collection(db, 'competitions', safeCompetitionId, 'siCardAssignments');
+}
+
+export async function readCompetitionSICardAssignment(
+  competitionId: string,
+  siNumber: number
+): Promise<
+  | {
+      competitionId: string;
+      siNumber: number;
+      competitorId: string | null;
+      status: 'ACTIVE' | 'RETIRED' | 'REASSIGNED' | 'UNKNOWN';
+      assignmentVersion: number;
+      source: 'DIRECT_ENTRY' | 'EVENTOR_IMPORT' | 'MANUAL_ASSIGNMENT' | 'LEGACY_MIGRATION';
+      ownerUid: string | null;
+      assignedAtIso: string | null;
+      retiredAtIso: string | null;
+      retirementReason: string | null;
+      createdAtIso: string | null;
+      updatedAtIso: string | null;
+    }
+  | null
+> {
+  const ref = getCompetitionSICardAssignmentRef(competitionId, siNumber);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    return null;
+  }
+  const data = snap.data();
+  return {
+    competitionId: String(data.competitionId ?? competitionId),
+    siNumber: Number(data.siNumber ?? siNumber),
+    competitorId: typeof data.competitorId === 'string' ? data.competitorId : null,
+    status:
+      data.status === 'ACTIVE' ||
+      data.status === 'RETIRED' ||
+      data.status === 'REASSIGNED' ||
+      data.status === 'UNKNOWN'
+        ? data.status
+        : 'UNKNOWN',
+    assignmentVersion: Number(data.assignmentVersion ?? 1),
+    source:
+      data.source === 'DIRECT_ENTRY' ||
+      data.source === 'EVENTOR_IMPORT' ||
+      data.source === 'MANUAL_ASSIGNMENT' ||
+      data.source === 'LEGACY_MIGRATION'
+        ? data.source
+        : 'LEGACY_MIGRATION',
+    ownerUid: typeof data.ownerUid === 'string' ? data.ownerUid : null,
+    assignedAtIso: typeof data.assignedAtIso === 'string' ? data.assignedAtIso : null,
+    retiredAtIso: typeof data.retiredAtIso === 'string' ? data.retiredAtIso : null,
+    retirementReason: typeof data.retirementReason === 'string' ? data.retirementReason : null,
+    createdAtIso: typeof data.createdAtIso === 'string' ? data.createdAtIso : null,
+    updatedAtIso: typeof data.updatedAtIso === 'string' ? data.updatedAtIso : null,
+  };
+}
+
+export async function createCompetitionSICardAssignment(params: {
+  competitionId: string;
+  siNumber: number;
+  competitorId: string | null;
+  status?: 'ACTIVE' | 'RETIRED' | 'REASSIGNED' | 'UNKNOWN';
+  assignmentVersion?: number;
+  source?: 'DIRECT_ENTRY' | 'EVENTOR_IMPORT' | 'MANUAL_ASSIGNMENT' | 'LEGACY_MIGRATION';
+  ownerUid?: string | null;
+  assignedAtIso?: string | null;
+  retiredAtIso?: string | null;
+  retirementReason?: string | null;
+}): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) {
+    throw new Error('Ditt Google-konto saknar giltig Firestore-session för SI-kortstilldelning.');
+  }
+  const ref = getCompetitionSICardAssignmentRef(params.competitionId, params.siNumber);
+  const nowIso = new Date().toISOString();
+  await setDoc(ref, {
+    competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
+    siNumber: Number(params.siNumber),
+    competitorId: params.competitorId,
+    status: params.status ?? 'ACTIVE',
+    assignmentVersion: Number(params.assignmentVersion ?? 1),
+    source: params.source ?? 'MANUAL_ASSIGNMENT',
+    ownerUid: params.ownerUid ?? sanitizeFirestoreId(current.uid, 'usr'),
+    assignedAtIso: params.assignedAtIso ?? nowIso,
+    retiredAtIso: params.retiredAtIso ?? null,
+    retirementReason: params.retirementReason ?? null,
+    createdAtIso: nowIso,
+    updatedAtIso: nowIso,
+    schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+  });
+}
+
+export async function retireCompetitionSICardAssignment(params: {
+  competitionId: string;
+  siNumber: number;
+  competitorId: string | null;
+  retirementReason?: string | null;
+  ownerUid?: string | null;
+}): Promise<void> {
+  const current = await ensureValidFirestoreUser();
+  if (!current || !current.emailVerified) {
+    throw new Error('Ditt Google-konto saknar giltig Firestore-session för SI-kortstilldelning.');
+  }
+  const ref = getCompetitionSICardAssignmentRef(params.competitionId, params.siNumber);
+  const nowIso = new Date().toISOString();
+  await setDoc(
+    ref,
+    {
+      competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
+      siNumber: Number(params.siNumber),
+      competitorId: params.competitorId,
+      status: 'RETIRED',
+      assignmentVersion: 1,
+      source: 'MANUAL_ASSIGNMENT',
+      ownerUid: params.ownerUid ?? sanitizeFirestoreId(current.uid, 'usr'),
+      assignedAtIso: nowIso,
+      retiredAtIso: nowIso,
+      retirementReason: params.retirementReason ?? 'retired',
+      createdAtIso: nowIso,
+      updatedAtIso: nowIso,
+      schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+    },
+    { merge: true }
+  );
+}
+
+export async function ensureCompetitionSICardAssignmentSchema(
+  competitionId: string
+): Promise<void> {
+  const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
+  const schemaDocRef = doc(db, 'competitions', safeCompetitionId, '_schema', 'siCardAssignments');
+  await setDoc(
+    schemaDocRef,
+    {
+      competitionId: safeCompetitionId,
+      collectionName: 'siCardAssignments',
+      schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+      createdAtIso: new Date().toISOString(),
+      updatedAtIso: new Date().toISOString(),
+      authoritativeSource: 'firestore',
+      runtimeUsage: 'phase-a-schema-only',
+    },
+    { merge: true }
+  );
+}
+
 /**
  * Deterministic, collision-safe invite document ID derived from normalized lowercase email.
  * Matches ^[a-zA-Z0-9_\-]+$ and stays <= 128 characters.

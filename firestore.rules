@@ -589,6 +589,52 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidSICardAssignment(data) {
+      return data.keys().hasAll([
+          'competitionId',
+          'siNumber',
+          'competitorId',
+          'status',
+          'assignmentVersion',
+          'source',
+          'ownerUid',
+          'assignedAtIso',
+          'retiredAtIso',
+          'retirementReason',
+          'createdAtIso',
+          'updatedAtIso',
+          'schemaVersion'
+        ]) &&
+        data.keys().hasOnly([
+          'competitionId',
+          'siNumber',
+          'competitorId',
+          'status',
+          'assignmentVersion',
+          'source',
+          'ownerUid',
+          'assignedAtIso',
+          'retiredAtIso',
+          'retirementReason',
+          'createdAtIso',
+          'updatedAtIso',
+          'schemaVersion'
+        ]) &&
+        isValidId(data.competitionId) &&
+        data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
+        (data.competitorId == null || (data.competitorId is string && data.competitorId.size() <= 128)) &&
+        data.status is string && (data.status == 'ACTIVE' || data.status == 'RETIRED' || data.status == 'REASSIGNED' || data.status == 'UNKNOWN') &&
+        data.assignmentVersion is int && data.assignmentVersion >= 1 && data.assignmentVersion <= 65535 &&
+        data.source is string && (data.source == 'DIRECT_ENTRY' || data.source == 'EVENTOR_IMPORT' || data.source == 'MANUAL_ASSIGNMENT' || data.source == 'LEGACY_MIGRATION') &&
+        data.ownerUid is string && data.ownerUid.size() <= 128 &&
+        (data.assignedAtIso == null || (data.assignedAtIso is string && data.assignedAtIso.size() <= 40)) &&
+        (data.retiredAtIso == null || (data.retiredAtIso is string && data.retiredAtIso.size() <= 40)) &&
+        (data.retirementReason == null || (data.retirementReason is string && data.retirementReason.size() <= 200)) &&
+        (data.createdAtIso == null || (data.createdAtIso is string && data.createdAtIso.size() <= 40)) &&
+        (data.updatedAtIso == null || (data.updatedAtIso is string && data.updatedAtIso.size() <= 40)) &&
+        data.schemaVersion is int && data.schemaVersion >= 1 && data.schemaVersion <= 32;
+    }
+
     // =========================================================================
     // 1. /admins/{userId} — Non-PII RBAC Profiles
     // =========================================================================
@@ -1096,7 +1142,52 @@ service cloud.firestore {
         );
 
       // -----------------------------------------------------------------------
-      // 4a. /competitions/{competitionId}/courses/{courseId} (Master Gate)
+      // 4a. /competitions/{competitionId}/siCardAssignments/{siNumber}
+      // -----------------------------------------------------------------------
+      match /siCardAssignments/{siNumber} {
+        allow get: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(siNumber) &&
+          parentCompetitionExists(competitionId) &&
+          (isAdmin() || hasOfficialRole('READOUT'));
+
+        allow list: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          parentCompetitionExists(competitionId) &&
+          (isAdmin() || hasOfficialRole('READOUT'));
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(siNumber) &&
+          isValidSICardAssignment(incoming()) &&
+          incoming().competitionId == competitionId &&
+          incoming().siNumber == int(siNumber) &&
+          incoming().ownerUid == request.auth.uid &&
+          parentCompetitionExists(competitionId) &&
+          isAdmin();
+
+        allow update: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(siNumber) &&
+          isValidSICardAssignment(incoming()) &&
+          resource != null &&
+          incoming().competitionId == existing().competitionId &&
+          incoming().siNumber == existing().siNumber &&
+          incoming().createdAtIso == existing().createdAtIso &&
+          incoming().ownerUid == existing().ownerUid &&
+          parentCompetitionExists(competitionId) &&
+          isAdmin();
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(siNumber) &&
+          resource != null &&
+          parentCompetitionExists(competitionId) &&
+          isAdmin();
+      }
+
+      // -----------------------------------------------------------------------
+      // 4b. /competitions/{competitionId}/courses/{courseId} (Master Gate)
       // -----------------------------------------------------------------------
       match /courses/{courseId} {
         allow get: if isValidId(competitionId) &&

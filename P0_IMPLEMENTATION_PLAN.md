@@ -20,6 +20,7 @@ Current status:
 
 - Architecture design is complete.
 - Competitor Phase 2 has not started.
+- Atomic SI matching Phase A is now in place as schema-only support: the Firestore collection, TypeScript model, helper functions, and rules skeleton exist without changing runtime mutation behavior.
 - Before Competitor Phase 2 can begin, the following P0 risks must be resolved:
   1. Single-writer authority
   2. Atomic competitor/readout transactions

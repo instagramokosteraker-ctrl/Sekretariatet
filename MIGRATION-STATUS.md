@@ -41,7 +41,12 @@ Last updated: 2026-11-09
 
 ## Future architecture migration phases
 
-### Phase 4 — Move Eventor calls to Firebase Functions
+### Phase 4 — Atomic SI matching schema support
+
+**Status:** In progress  
+**Purpose:** Add the canonical `competitions/{competitionId}/siCardAssignments/{siNumber}` collection, schema types, and administrative Firestore rules scaffolding without changing runtime behavior. The collection is authoritative by design, but no readout or competitor logic yet reads or enforces it. This is the first migration step for the SI-number ownership model.
+
+### Phase 5 — Move Eventor calls to Firebase Functions
 
 **Status:** Not started  
 **Purpose:** Route Eventor operations through authenticated, role-checked Firebase Functions. Keep the API key server-side and read the private Eventor settings from Firestore. Retire the corresponding Express routes after the Functions are validated.

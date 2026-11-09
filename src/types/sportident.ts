@@ -353,6 +353,29 @@ export interface RunnerDbEntry {
   updatedAt: string;
 }
 
+export type SICardAssignmentStatus = 'ACTIVE' | 'RETIRED' | 'REASSIGNED' | 'UNKNOWN';
+
+export type SICardAssignmentSource =
+  | 'DIRECT_ENTRY'
+  | 'EVENTOR_IMPORT'
+  | 'MANUAL_ASSIGNMENT'
+  | 'LEGACY_MIGRATION';
+
+export interface SICardAssignment {
+  competitionId: string;
+  siNumber: number;
+  competitorId: string | null;
+  status: SICardAssignmentStatus;
+  assignmentVersion: number;
+  source: SICardAssignmentSource;
+  ownerUid: string | null;
+  assignedAtIso: string | null;
+  retiredAtIso: string | null;
+  retirementReason: string | null;
+  createdAtIso: string | null;
+  updatedAtIso: string | null;
+}
+
 export interface EventorIntegrationStatus {
   apiKeyConfigured: boolean;
   baseUrl: string;
