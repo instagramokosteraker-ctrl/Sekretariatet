@@ -642,6 +642,91 @@ service cloud.firestore {
         (!('lastValidatedAt' in data) || data.lastValidatedAt == null || data.lastValidatedAt is timestamp);
     }
 
+    function hasActiveSIAssignmentAfter(competitionId, siNumber) {
+      return existsAfter(
+          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
+        ) &&
+        getAfter(
+          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
+        ).data.state == 'ACTIVE';
+    }
+
+    function hasRetiredSIAssignmentAfter(competitionId, siNumber, competitorId) {
+      return existsAfter(
+          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
+        ) &&
+        getAfter(
+          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
+        ).data.state == 'RETIRED' &&
+        getAfter(
+          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
+        ).data.competitorId == competitorId;
+    }
+
+    function hasCompetitorSIOrLifecycleMutationAfter(competitionId, competitorId) {
+      return isValidId(competitorId) &&
+        (
+          !exists(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
+          ) ||
+          !existsAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
+          ) ||
+          getAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
+          ).data.status == 'DNS' ||
+          getAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
+          ).data.status == 'DNF' ||
+          getAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
+          ).data.diff(
+            get(
+              /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
+            ).data
+          )
+            .affectedKeys().hasAny(['siNumber', 'status'])
+        );
+    }
+
+    function assignmentMatchesCompetitorAfter(competitionId, assignment) {
+      return isValidId(assignment.competitorId) &&
+        (
+          assignment.state == 'ACTIVE'
+            ? existsAfter(
+                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+              ) &&
+              getAfter(
+                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+              ).data.siNumber == assignment.siNumber &&
+              getAfter(
+                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+              ).data.competitorId == assignment.competitorId
+            : assignment.state == 'RETIRED' &&
+              (
+                !existsAfter(
+                  /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+                ) ||
+                (
+                  getAfter(
+                    /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+                  ).data.competitorId == assignment.competitorId &&
+                  (
+                    getAfter(
+                      /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+                    ).data.siNumber != assignment.siNumber ||
+                    getAfter(
+                      /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+                    ).data.status == 'DNS' ||
+                    getAfter(
+                      /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+                    ).data.status == 'DNF'
+                  )
+                )
+              )
+        );
+    }
+
     // =========================================================================
     // 1. /admins/{userId} — Non-PII RBAC Profiles
     // =========================================================================
@@ -1151,10 +1236,8 @@ service cloud.firestore {
       // -----------------------------------------------------------------------
       // 4a. /competitions/{competitionId}/siCardAssignments/{siNumber}
       // -----------------------------------------------------------------------
-      // P0 Step 6 diagnostics-only preparation: these rules validate each
-      // document independently and do not yet bind assignment writes to a
-      // competitor write with getAfter(). Keep authorization behavior unchanged
-      // until all writers have moved behind the trusted atomic mutation path.
+      // P0 Step 7: assignment mutations must share a commit with the matching
+      // competitor identity/lifecycle mutation. This is not a uniqueness check.
       match /siCardAssignments/{siNumber} {
         allow get: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1175,6 +1258,11 @@ service cloud.firestore {
           incoming().siNumber == int(siNumber) &&
           incoming().ownerUid == request.auth.uid &&
           parentCompetitionExists(competitionId) &&
+          hasCompetitorSIOrLifecycleMutationAfter(
+            competitionId,
+            incoming().competitorId
+          ) &&
+          assignmentMatchesCompetitorAfter(competitionId, incoming()) &&
           isAdmin();
 
         allow update: if isVerifiedUser() &&
@@ -1188,14 +1276,14 @@ service cloud.firestore {
           incoming().ownerUid == existing().ownerUid &&
           incoming().schemaVersion == existing().schemaVersion &&
           parentCompetitionExists(competitionId) &&
+          hasCompetitorSIOrLifecycleMutationAfter(
+            competitionId,
+            incoming().competitorId
+          ) &&
+          assignmentMatchesCompetitorAfter(competitionId, incoming()) &&
           isAdmin();
 
-        allow delete: if isVerifiedUser() &&
-          isValidId(competitionId) &&
-          isValidId(siNumber) &&
-          resource != null &&
-          parentCompetitionExists(competitionId) &&
-          isAdmin();
+        allow delete: if false;
       }
 
       // -----------------------------------------------------------------------
@@ -1422,9 +1510,9 @@ service cloud.firestore {
       // -----------------------------------------------------------------------
       // 4c. /competitions/{competitionId}/competitors/{competitorId} (Master Gate)
       // -----------------------------------------------------------------------
-      // P0 Step 6 diagnostics-only preparation: identity writes remain allowed
-      // under the existing role/field checks. Cross-document SI consistency is
-      // observed by application diagnostics; it is not enforced by these rules.
+      // P0 Step 7: identity writes must update the corresponding SI assignment
+      // in the same commit; unrelated readout/status fields keep their existing
+      // role checks and do not run assignment uniqueness queries.
       match /competitors/{competitorId} {
         allow get: if isValidId(competitionId) &&
           isValidId(competitorId) &&
@@ -1443,6 +1531,10 @@ service cloud.firestore {
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
           parentCompetitionExists(competitionId) &&
+          hasActiveSIAssignmentAfter(
+            competitionId,
+            incoming().siNumber
+          ) &&
           (
             (
               (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
@@ -1464,6 +1556,20 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
           parentCompetitionExists(competitionId) &&
+          (
+            incoming().siNumber == existing().siNumber ||
+            (
+              hasRetiredSIAssignmentAfter(
+                competitionId,
+                existing().siNumber,
+                competitorId
+              ) &&
+              hasActiveSIAssignmentAfter(
+                competitionId,
+                incoming().siNumber
+              )
+            )
+          ) &&
           (
             (
               (existing().ownerUid == request.auth.uid || isAdmin()) &&
@@ -1564,6 +1670,11 @@ service cloud.firestore {
           isValidId(competitionId) &&
           isValidId(competitorId) &&
           resource != null &&
+          hasRetiredSIAssignmentAfter(
+            competitionId,
+            existing().siNumber,
+            competitorId
+          ) &&
           (
             (
               (existing().ownerUid == request.auth.uid || isAdmin()) &&

@@ -400,9 +400,21 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
-    // 11. Regular entries do not need the removed mobile self-registration marker.
-    await assertSucceeds(
-      raceAdminCtx.firestore().doc('competitions/evt_live/competitors/cmp_valid').set({
+    const siCardAssignment = {
+      competitionId: 'evt_live',
+      siNumber: 8500111,
+      cardSeries: 'SI-Card 10',
+      competitorId: 'cmp_valid',
+      competitorDocumentId: 'cmp_valid',
+      state: 'ACTIVE',
+      assignmentVersion: 1,
+      source: 'DIRECT_ENTRY',
+      ownerUid: 'race_admin_1',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      schemaVersion: 1,
+    };
+    const initialCompetitor = {
         competitorId: 'cmp_valid',
         competitionId: 'evt_live',
         bib: 101,
@@ -427,8 +439,18 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         ownerUid: 'race_admin_1',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      })
+    };
+    const initialCompetitorBatch = writeBatch(raceAdminCtx.firestore());
+    initialCompetitorBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid'),
+      initialCompetitor
     );
+    initialCompetitorBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500111'),
+      siCardAssignment
+    );
+    // Competitor creation is now accepted only with its matching assignment.
+    await assertSucceeds(initialCompetitorBatch.commit());
 
     // READOUT officials may update rental return only, not payment status.
     await assertSucceeds(
@@ -749,26 +771,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .delete()
     );
 
-    const siCardAssignment = {
-      competitionId: 'evt_live',
-      siNumber: 8500111,
-      cardSeries: 'SI-Card 10',
-      competitorId: 'cmp_valid',
-      competitorDocumentId: 'cmp_valid',
-      state: 'ACTIVE',
-      assignmentVersion: 1,
-      source: 'DIRECT_ENTRY',
-      ownerUid: 'race_admin_1',
-      createdAt: now,
-      updatedAt: now,
-      schemaVersion: 1,
-    };
-    await assertSucceeds(
-      raceAdminCtx
-        .firestore()
-        .doc('competitions/evt_live/siCardAssignments/8500111')
-        .set(siCardAssignment)
-    );
     await assertSucceeds(
       raceAdminCtx
         .firestore()
@@ -819,7 +821,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
           ownerUid: 'readout_uid',
         })
     );
-    await assertSucceeds(
+    await assertFails(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/siCardAssignments/8500113')
@@ -870,8 +872,8 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         })
     );
 
-    // P0 Step 6: document the existing cross-document write gap without
-    // changing rule behavior. The valid batch is the expected atomic pattern.
+    // P0 Step 7: verify the paired reassignment succeeds, while independent
+    // identity and assignment mutations are fenced by rules.
     const reassignmentBatch = writeBatch(raceAdminCtx.firestore());
     const competitorReassignment: DocumentData = {
       siNumber: 8500112,
@@ -904,15 +906,29 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     );
     await assertSucceeds(reassignmentBatch.commit());
 
-    // Each of these writes is independently permitted today and is therefore
-    // a known bypass that the diagnostics helper must report.
+    // This paired-transaction fence is not a uniqueness check: duplicates are
+    // still accepted when the requested SI already has an ACTIVE assignment.
     await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_duplicate')
+        .set({
+          ...initialCompetitor,
+          competitorId: 'cmp_duplicate',
+          bib: 102,
+          siNumber: 8500112,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+
+    await assertFails(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/competitors/cmp_valid')
         .update({ siNumber: 8500113, updatedAt: serverTimestamp() })
     );
-    await assertSucceeds(
+    await assertFails(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/siCardAssignments/8500112')
@@ -925,9 +941,9 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         })
     );
 
-    // Mismatched assignment identity is schema-valid and currently allowed:
-    // the rules do not compare this record with the competitor's SI number.
-    await assertSucceeds(
+    // Mismatched assignment identity is schema-valid but cannot be committed
+    // without a matching competitor mutation.
+    await assertFails(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/siCardAssignments/8500117')
@@ -938,10 +954,35 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
           updatedAt: serverTimestamp(),
         })
     );
-    await assertSucceeds(
+    await assertFails(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/siCardAssignments/8500117')
+        .delete()
+    );
+
+    const retirementBatch = writeBatch(raceAdminCtx.firestore());
+    retirementBatch.delete(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid')
+    );
+    retirementBatch.delete(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_duplicate')
+    );
+    retirementBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500112'),
+      {
+        state: 'RETIRED',
+        assignmentVersion: 2,
+        updatedAt: serverTimestamp(),
+        retiredAt: serverTimestamp(),
+        retirementReason: 'competitor_deleted',
+      }
+    );
+    await assertSucceeds(retirementBatch.commit());
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500112')
         .delete()
     );
   } finally {
