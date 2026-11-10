@@ -30,8 +30,24 @@ export interface CompetitorMutationDeclaration {
   identityAffecting: boolean;
 }
 
+export function runCompetitorMutation<T>(
+  declaration: CompetitorMutationDeclaration,
+  mutation: () => T
+): T {
+  declareCompetitorMutation(declaration);
+  return mutation();
+}
+
+export function runCompetitorMutations<T>(
+  declarations: readonly CompetitorMutationDeclaration[],
+  mutation: () => T
+): T {
+  declarations.forEach(declareCompetitorMutation);
+  return mutation();
+}
+
 /**
- * Central declaration point for competitor writes. The legacy phase records
+ * Shared logging point for competitor writes. The pre-enforcement phase records
  * missing SI-assignment validation but deliberately never blocks the mutation.
  */
 export function declareCompetitorMutation(
@@ -51,6 +67,8 @@ export function declareCompetitorMutation(
 
   const diagnostic = {
     ...declaration,
+    mutationBoundary: 'CENTRALIZED',
+    enforcementReadiness: 'PRE_ENFORCEMENT',
     enforcementActive: false,
   };
   console.info(`[competitor-mutation] ${JSON.stringify(diagnostic)}`);

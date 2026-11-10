@@ -10,7 +10,12 @@ import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
 } from './src/services/seriesStandings';
-import { declareCompetitorMutation } from './src/utils/siAssignmentDiagnostics';
+import {
+  declareCompetitorMutation,
+  runCompetitorMutation,
+  runCompetitorMutations,
+  type CompetitorMutationDeclaration,
+} from './src/utils/siAssignmentDiagnostics';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2666,14 +2671,22 @@ async function startServer() {
         cardPunches: [],
         validation: null,
       };
-      logCompetitorAssignmentBypass(
-        'cloud readout auto-create from runner database',
-        'CREATE',
-        ev.competition.id,
-        runner,
-        'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.'
+      const autoCreatedRunner = runner;
+      runCompetitorMutation(
+        {
+          source: 'cloud readout auto-create from runner database',
+          operation: 'CREATE',
+          competitionId: ev.competition.id,
+          competitorId: autoCreatedRunner.id,
+          siNumber: autoCreatedRunner.siNumber,
+          assignmentHandling: {
+            mode: 'LEGACY',
+            reason: 'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.',
+          },
+          identityAffecting: true,
+        },
+        () => ev.competitors.unshift(autoCreatedRunner)
       );
-      ev.competitors.unshift(runner);
     }
 
     const clsName = runner
@@ -3568,6 +3581,7 @@ async function startServer() {
     seasonDb.demoCleared = Boolean(snap.demoCleared);
 
     const nextMap: Record<string, SingleEventRecord> = {};
+    const hydrationMutations: CompetitorMutationDeclaration[] = [];
     for (const item of snap.events) {
       if (!item?.competition?.id) continue;
       const existingLocal = seasonDb.eventsMap[item.competition.id];
@@ -3625,13 +3639,18 @@ async function startServer() {
         processedClientIds: existingLocal?.processedClientIds ?? [],
       };
       for (const competitor of evRec.competitors) {
-        logCompetitorAssignmentBypass(
-          '/api/system/cloud-hydrate',
-          'SNAPSHOT_HYDRATE',
-          evRec.competition.id,
-          competitor,
-          'Cloud snapshot hydration replaces the local competitor list without SI assignment validation.'
-        );
+        hydrationMutations.push({
+          source: '/api/system/cloud-hydrate',
+          operation: 'SNAPSHOT_HYDRATE',
+          competitionId: evRec.competition.id,
+          competitorId: competitor.id,
+          siNumber: competitor.siNumber,
+          assignmentHandling: {
+            mode: 'LEGACY',
+            reason: 'Cloud snapshot hydration replaces the local competitor list without SI assignment validation.',
+          },
+          identityAffecting: true,
+        });
       }
       recalculateEventFromRawReadouts(evRec);
       nextMap[evRec.competition.id] = evRec;
@@ -3644,18 +3663,25 @@ async function startServer() {
           !hydratedEvent ||
           !hydratedEvent.competitors.some((candidate) => candidate.id === competitor.id)
         ) {
-          logCompetitorAssignmentBypass(
-            '/api/system/cloud-hydrate',
-            'DELETE',
-            existingEvent.competition.id,
-            competitor,
-            'Snapshot hydration removes a local competitor without retiring its SI assignment.'
-          );
+          hydrationMutations.push({
+            source: '/api/system/cloud-hydrate',
+            operation: 'DELETE',
+            competitionId: existingEvent.competition.id,
+            competitorId: competitor.id,
+            siNumber: competitor.siNumber,
+            assignmentHandling: {
+              mode: 'LEGACY',
+              reason: 'Snapshot hydration removes a local competitor without retiring its SI assignment.',
+            },
+            identityAffecting: true,
+          });
         }
       }
     }
 
-    seasonDb.eventsMap = nextMap;
+    runCompetitorMutations(hydrationMutations, () => {
+      seasonDb.eventsMap = nextMap;
+    });
     const keys = Object.keys(nextMap);
     if (keys.length === 0) {
       seasonDb.activeEventId = '';
@@ -3673,19 +3699,24 @@ async function startServer() {
   app.post('/api/system/clear-demo', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
     const body = req.body as { clearRunnerDb?: boolean } | undefined;
-    for (const event of Object.values(seasonDb.eventsMap)) {
-      for (const competitor of event.competitors) {
-        logCompetitorAssignmentBypass(
-          '/api/system/clear-demo',
-          'DELETE',
-          event.competition.id,
-          competitor,
-          'Clearing the legacy season removes competitors without retiring SI assignments.'
-        );
-      }
-    }
-    seasonDb.eventsMap = {};
-    seasonDb.activeEventId = '';
+    const clearMutations = Object.values(seasonDb.eventsMap).flatMap((event) =>
+      event.competitors.map((competitor): CompetitorMutationDeclaration => ({
+        source: '/api/system/clear-demo',
+        operation: 'DELETE',
+        competitionId: event.competition.id,
+        competitorId: competitor.id,
+        siNumber: competitor.siNumber,
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Clearing the legacy season removes competitors without retiring SI assignments.',
+        },
+        identityAffecting: true,
+      }))
+    );
+    runCompetitorMutations(clearMutations, () => {
+      seasonDb.eventsMap = {};
+      seasonDb.activeEventId = '';
+    });
     seasonDb.demoCleared = true;
     if (body?.clearRunnerDb) {
       seasonDb.runnerDb = [];
@@ -4129,16 +4160,23 @@ async function startServer() {
       return;
     }
     const deletedEvent = seasonDb.eventsMap[targetId];
-    for (const competitor of deletedEvent.competitors) {
-      logCompetitorAssignmentBypass(
-        '/api/competitions/:id',
-        'DELETE',
-        targetId,
-        competitor,
-        'Deleting the Express competition removes its competitor mirror without retiring SI assignments.'
-      );
-    }
-    delete seasonDb.eventsMap[targetId];
+    const competitionDeleteMutations = deletedEvent.competitors.map(
+      (competitor): CompetitorMutationDeclaration => ({
+        source: '/api/competitions/:id',
+        operation: 'DELETE',
+        competitionId: targetId,
+        competitorId: competitor.id,
+        siNumber: competitor.siNumber,
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Deleting the Express competition removes its competitor mirror without retiring SI assignments.',
+        },
+        identityAffecting: true,
+      })
+    );
+    runCompetitorMutations(competitionDeleteMutations, () => {
+      delete seasonDb.eventsMap[targetId];
+    });
     const remainingKeys = Object.keys(seasonDb.eventsMap);
     if (remainingKeys.length === 0) {
       seasonDb.activeEventId = '';
@@ -4352,14 +4390,22 @@ async function startServer() {
         cardPunches: [],
         validation: null,
       };
-      logCompetitorAssignmentBypass(
-        'readout auto-create from runner database',
-        'CREATE',
-        db.competition.id,
-        runner,
-        'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.'
+      const autoCreatedRunner = runner;
+      runCompetitorMutation(
+        {
+          source: 'readout auto-create from runner database',
+          operation: 'CREATE',
+          competitionId: db.competition.id,
+          competitorId: autoCreatedRunner.id,
+          siNumber: autoCreatedRunner.siNumber,
+          assignmentHandling: {
+            mode: 'LEGACY',
+            reason: 'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.',
+          },
+          identityAffecting: true,
+        },
+        () => db.competitors.unshift(autoCreatedRunner)
       );
-      db.competitors.unshift(runner);
       autoCreatedFromDb = true;
     }
 
@@ -4876,14 +4922,6 @@ async function startServer() {
       cardPunches: [],
       validation: null,
     };
-    logCompetitorAssignmentBypass(
-      '/api/competitors',
-      'CREATE',
-      db.competition.id,
-      created,
-      'Express competitor creation does not create an SI assignment.'
-    );
-
     if (body.pendingReadout && Array.isArray(body.pendingReadout.punches)) {
       const effStart =
         body.pendingReadout.startTimeSec ??
@@ -4919,7 +4957,21 @@ async function startServer() {
       created.status = created.validation.ok ? 'OK' : 'MP';
     }
 
-    db.competitors.unshift(created);
+    runCompetitorMutation(
+      {
+        source: '/api/competitors',
+        operation: 'CREATE',
+        competitionId: db.competition.id,
+        competitorId: created.id,
+        siNumber: created.siNumber,
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Express competitor creation does not create an SI assignment.',
+        },
+        identityAffecting: true,
+      },
+      () => db.competitors.unshift(created)
+    );
     if (!created.isRentalCard && !created.isBorrowedCard) {
       upsertRunnerInSeasonDb(seasonDb, {
         siNumber: created.siNumber,
@@ -4975,14 +5027,6 @@ async function startServer() {
     const existing = db.competitors[idx];
     const body = req.body as Partial<Competitor>;
     const nextSi = body.siNumber !== undefined ? Number(body.siNumber) : existing.siNumber;
-    logCompetitorAssignmentBypass(
-      '/api/competitors/:id',
-      'UPDATE',
-      db.competition.id,
-      { ...existing, siNumber: nextSi },
-      'Express competitor update does not validate or update the SI assignment.',
-      existing.siNumber
-    );
     logLegacyCompetitorFieldWrite(
       'competitor update',
       existing.id,
@@ -5080,7 +5124,24 @@ async function startServer() {
       }
     }
 
-    db.competitors[idx] = updated;
+    runCompetitorMutation(
+      {
+        source: '/api/competitors/:id',
+        operation: 'UPDATE',
+        competitionId: db.competition.id,
+        competitorId: updated.id,
+        siNumber: updated.siNumber,
+        previousSiNumber: existing.siNumber,
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Express competitor update does not validate or update the SI assignment.',
+        },
+        identityAffecting: nextSi !== existing.siNumber,
+      },
+      () => {
+        db.competitors[idx] = updated;
+      }
+    );
     const updatedCls = db.classes.find((c) => c.id === updated.classId);
 
     if (
@@ -5146,15 +5207,26 @@ async function startServer() {
     const db = getActiveEvent();
     const deleted = db.competitors.find((competitor) => competitor.id === req.params.id);
     if (deleted) {
-      logCompetitorAssignmentBypass(
-        '/api/competitors/:id',
-        'DELETE',
-        db.competition.id,
-        deleted,
-        'Express competitor deletion does not retire or update the SI assignment.'
+      runCompetitorMutation(
+        {
+          source: '/api/competitors/:id',
+          operation: 'DELETE',
+          competitionId: db.competition.id,
+          competitorId: deleted.id,
+          siNumber: deleted.siNumber,
+          assignmentHandling: {
+            mode: 'LEGACY',
+            reason: 'Express competitor deletion does not retire or update the SI assignment.',
+          },
+          identityAffecting: true,
+        },
+        () => {
+          db.competitors = db.competitors.filter((competitor) => competitor.id !== req.params.id);
+        }
       );
+    } else {
+      db.competitors = db.competitors.filter((competitor) => competitor.id !== req.params.id);
     }
-    db.competitors = db.competitors.filter((c) => c.id !== req.params.id);
     recomputeAllSplitRanks(db);
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
@@ -5707,14 +5779,21 @@ async function startServer() {
         cardPunches: [],
         validation: null,
       };
-      logCompetitorAssignmentBypass(
-        '/api/import/batch',
-        'IMPORT',
-        db.competition.id,
-        importedCompetitor,
-        'IOF XML import creates the Express competitor without validating or creating its SI assignment.'
+      runCompetitorMutation(
+        {
+          source: '/api/import/batch',
+          operation: 'IMPORT',
+          competitionId: db.competition.id,
+          competitorId: importedCompetitor.id,
+          siNumber: importedCompetitor.siNumber,
+          assignmentHandling: {
+            mode: 'LEGACY',
+            reason: 'IOF XML import creates the Express competitor without validating or creating its SI assignment.',
+          },
+          identityAffecting: true,
+        },
+        () => db.competitors.push(importedCompetitor)
       );
-      db.competitors.push(importedCompetitor);
       addedEntries++;
     }
 
@@ -6233,14 +6312,21 @@ async function startServer() {
           cardPunches: [],
           validation: null,
         };
-        logCompetitorAssignmentBypass(
-          '/api/eventor/import-event',
-          'IMPORT',
-          db.competition.id,
-          importedCompetitor,
-          'Eventor import creates the Express competitor without validating or creating its SI assignment.'
+        runCompetitorMutation(
+          {
+            source: '/api/eventor/import-event',
+            operation: 'IMPORT',
+            competitionId: db.competition.id,
+            competitorId: importedCompetitor.id,
+            siNumber: importedCompetitor.siNumber,
+            assignmentHandling: {
+              mode: 'LEGACY',
+              reason: 'Eventor import creates the Express competitor without validating or creating its SI assignment.',
+            },
+            identityAffecting: true,
+          },
+          () => db.competitors.push(importedCompetitor)
         );
-        db.competitors.push(importedCompetitor);
         addedEntries++;
       }
 
@@ -6356,6 +6442,7 @@ async function startServer() {
   app.post('/api/system/restore', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
     const candidate = req.body as Partial<SeasonDatabase> | null;
+    const restoredRunnerDb = candidate?.runnerDb;
     const hasValidEventsObj =
       candidate && candidate.eventsMap && typeof candidate.eventsMap === 'object';
     const eventKeys = hasValidEventsObj ? Object.keys(candidate.eventsMap!) : [];
@@ -6364,7 +6451,7 @@ async function startServer() {
       typeof candidate !== 'object' ||
       !hasValidEventsObj ||
       (eventKeys.length === 0 && !candidate.demoCleared) ||
-      !Array.isArray(candidate.runnerDb)
+      !Array.isArray(restoredRunnerDb)
     ) {
       res.status(400).json({
         error: 'Ogiltig säkerhetskopia. Filen måste vara en giltig PasserSI säsongsdatabas (.json).',
@@ -6378,28 +6465,39 @@ async function startServer() {
         (event.competitors || []).map((competitor) => competitor.id)
       )
     );
+    const restoreMutations: CompetitorMutationDeclaration[] = [];
     for (const currentEvent of Object.values(seasonDb.eventsMap)) {
       for (const competitor of currentEvent.competitors) {
         if (!restoredIds.has(competitor.id)) {
-          logCompetitorAssignmentBypass(
-            '/api/system/restore',
-            'DELETE',
-            currentEvent.competition.id,
-            competitor,
-            'Backup restore removes a current competitor without retiring its SI assignment.'
-          );
+          restoreMutations.push({
+            source: '/api/system/restore',
+            operation: 'DELETE',
+            competitionId: currentEvent.competition.id,
+            competitorId: competitor.id,
+            siNumber: competitor.siNumber,
+            assignmentHandling: {
+              mode: 'LEGACY',
+              reason: 'Backup restore removes a current competitor without retiring its SI assignment.',
+            },
+            identityAffecting: true,
+          });
         }
       }
     }
     for (const ev of Object.values(eventsMap)) {
       for (const competitor of ev.competitors || []) {
-        logCompetitorAssignmentBypass(
-          '/api/system/restore',
-          'RESTORE',
-          ev.competition.id,
-          competitor,
-          'Backup restore accepts competitor records without validating or restoring SI assignments.'
-        );
+        restoreMutations.push({
+          source: '/api/system/restore',
+          operation: 'RESTORE',
+          competitionId: ev.competition.id,
+          competitorId: competitor.id,
+          siNumber: competitor.siNumber,
+          assignmentHandling: {
+            mode: 'LEGACY',
+            reason: 'Backup restore accepts competitor records without validating or restoring SI assignments.',
+          },
+          identityAffecting: true,
+        });
       }
       ev.competition.feeTrackingEnabled = Boolean(ev.competition.feeTrackingEnabled);
       if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
@@ -6417,16 +6515,18 @@ async function startServer() {
 
     const preservedAuth = ensureSeasonAuthConfig(seasonDb);
     const preservedClub = candidate.clubSettings ?? ensureClubSettings(seasonDb);
-    seasonDb = {
-      version: 3,
-      activeEventId: validActiveId,
-      demoCleared: Boolean(candidate.demoCleared || eventKeys.length === 0),
-      clubSettings: preservedClub,
-      eventsMap,
-      runnerDb: candidate.runnerDb,
-      eventor: candidate.eventor ?? seasonDb.eventor,
-      authConfig: preservedAuth,
-    };
+    runCompetitorMutations(restoreMutations, () => {
+      seasonDb = {
+        version: 3,
+        activeEventId: validActiveId,
+        demoCleared: Boolean(candidate.demoCleared || eventKeys.length === 0),
+        clubSettings: preservedClub,
+        eventsMap,
+        runnerDb: restoredRunnerDb,
+        eventor: candidate.eventor ?? seasonDb.eventor,
+        authConfig: preservedAuth,
+      };
+    });
     ensureClubSettings(seasonDb);
     persistUserMutation();
     broadcastFullState();

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { declareCompetitorMutation } from './siAssignmentDiagnostics';
+import {
+  declareCompetitorMutation,
+  runCompetitorMutation,
+  runCompetitorMutations,
+} from './siAssignmentDiagnostics';
 
 describe('competitor mutation declaration boundary', () => {
   afterEach(() => {
@@ -23,6 +27,9 @@ describe('competitor mutation declaration boundary', () => {
       expect.stringContaining('[si-assignment-bypass]')
     );
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('"enforcementActive":false'));
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('"enforcementReadiness":"PRE_ENFORCEMENT"')
+    );
   });
 
   it('records non-identity legacy writes without reporting an SI assignment bypass', () => {
@@ -61,5 +68,46 @@ describe('competitor mutation declaration boundary', () => {
 
     expect(result).toEqual({ allowed: true });
     expect(warning).not.toHaveBeenCalled();
+  });
+
+  it('declares a mutation before executing its writer and continues to allow it', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const write = vi.fn(() => 'written');
+
+    expect(
+      runCompetitorMutation(
+        {
+          source: 'test create',
+          operation: 'CREATE',
+          competitionId: 'evt_test',
+          competitorId: 'cmp_test',
+          siNumber: 12345,
+          assignmentHandling: { mode: 'LEGACY', reason: 'Pre-enforcement test.' },
+          identityAffecting: true,
+        },
+        write
+      )
+    ).toBe('written');
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('"mutationBoundary":"CENTRALIZED"')
+    );
+    expect(write).toHaveBeenCalledOnce();
+  });
+
+  it('declares a batch of mutations before running the shared writer', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const write = vi.fn();
+    const declaration = {
+      source: 'test import',
+      operation: 'IMPORT' as const,
+      competitionId: 'evt_test',
+      assignmentHandling: { mode: 'LEGACY' as const, reason: 'Pre-enforcement test.' },
+      identityAffecting: true,
+    };
+
+    runCompetitorMutations([declaration, declaration], write);
+
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledOnce();
   });
 });

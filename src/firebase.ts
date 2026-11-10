@@ -77,7 +77,12 @@ import {
   type MissingSIAssignmentSkip,
   type SIAssignmentInventoryReport,
 } from './utils/siAssignmentInventory';
-import { declareCompetitorMutation } from './utils/siAssignmentDiagnostics';
+import {
+  declareCompetitorMutation,
+  runCompetitorMutation,
+  runCompetitorMutations,
+  type CompetitorMutationDeclaration,
+} from './utils/siAssignmentDiagnostics';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -1793,6 +1798,7 @@ export async function deleteCompetitionFromFirestore(rawCompetitionId: string): 
   }
 
   const deleteOps: QueuedBatchOp[] = [];
+  const competitorDeletes: CompetitorMutationDeclaration[] = [];
   for (const subName of [
     'courses',
     'classes',
@@ -1814,20 +1820,41 @@ export async function deleteCompetitionFromFirestore(rawCompetitionId: string): 
           ref: doc(db, 'competitions', competitionId, subName, d.id),
           path: `${subPath}/${d.id}`,
         });
+        if (subName === 'competitors') {
+          competitorDeletes.push({
+            source: 'deleteCompetitionFromFirestore',
+            operation: 'DELETE',
+            competitionId,
+            competitorId: d.id,
+            siNumber: Number(d.data().siNumber),
+            assignmentHandling: {
+              mode: 'LEGACY',
+              reason: 'Competition deletion removes competitor documents without retiring their SI assignments.',
+            },
+            identityAffecting: true,
+          });
+        }
       }
     } catch (err) {
       handleWriteOrOfflineError(err, OperationType.LIST, subPath);
     }
   }
 
-  if (deleteOps.length > 0) {
-    await commitQueuedBatchOps(deleteOps);
-  }
+  const deleteCompetition = async () => {
+    if (deleteOps.length > 0) {
+      await commitQueuedBatchOps(deleteOps);
+    }
 
-  try {
-    await deleteDoc(doc(db, 'competitions', competitionId));
-  } catch (err) {
-    handleWriteOrOfflineError(err, OperationType.DELETE, compPath);
+    try {
+      await deleteDoc(doc(db, 'competitions', competitionId));
+    } catch (err) {
+      handleWriteOrOfflineError(err, OperationType.DELETE, compPath);
+    }
+  };
+  if (competitorDeletes.length > 0) {
+    await runCompetitorMutations(competitorDeletes, deleteCompetition);
+  } else {
+    await deleteCompetition();
   }
 
   const clubRef = doc(db, 'clubSettings', 'default');
@@ -2203,6 +2230,7 @@ export async function syncFullSeasonToFirestore(
     }
 
     const childOps: QueuedBatchOp[] = [];
+    const competitorMutations: CompetitorMutationDeclaration[] = [];
 
     // Courses and classes are Firestore-owned and excluded from legacy snapshots.
 
@@ -2289,7 +2317,7 @@ export async function syncFullSeasonToFirestore(
         continue;
       }
 
-      declareCompetitorMutation({
+      competitorMutations.push({
         source: 'syncFullSeasonToFirestore',
         operation: 'SNAPSHOT_SEED',
         competitionId,
@@ -2389,7 +2417,13 @@ export async function syncFullSeasonToFirestore(
     }
 
     if (childOps.length > 0) {
-      await commitQueuedBatchOps(childOps);
+      if (competitorMutations.length > 0) {
+        await runCompetitorMutations(competitorMutations, () =>
+          commitQueuedBatchOps(childOps)
+        );
+      } else {
+        await commitQueuedBatchOps(childOps);
+      }
     }
 
     // Keep derived counts and emergency settings mirrored without changing canonical metadata.
@@ -3107,6 +3141,7 @@ export async function saveCompetitionImportToFirestore(params: {
     mutable: Record<string, unknown>;
     createData: Record<string, unknown>;
   }> = [];
+  const competitorMutations: CompetitorMutationDeclaration[] = [];
   const nowFields = { createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
 
   const addOperation = async (
@@ -3222,7 +3257,7 @@ export async function saveCompetitionImportToFirestore(params: {
     });
     const currentSiNumber = Number(competitor.siNumber);
     const previousSiNumber = Number(competitorOperation.existingData?.siNumber);
-    declareCompetitorMutation({
+    competitorMutations.push({
       source: 'saveCompetitionImportToFirestore',
       operation: 'IMPORT',
       competitionId,
@@ -3290,20 +3325,22 @@ export async function saveCompetitionImportToFirestore(params: {
     }
   }
 
-  for (let offset = 0; offset < operations.length; offset += 400) {
-    const batch = writeBatch(db);
-    for (const operation of operations.slice(offset, offset + 400)) {
-      if (operation.existing) {
-        batch.update(operation.ref, {
-          ...operation.mutable,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        batch.set(operation.ref, operation.createData);
+  await runCompetitorMutations(competitorMutations, async () => {
+    for (let offset = 0; offset < operations.length; offset += 400) {
+      const batch = writeBatch(db);
+      for (const operation of operations.slice(offset, offset + 400)) {
+        if (operation.existing) {
+          batch.update(operation.ref, {
+            ...operation.mutable,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          batch.set(operation.ref, operation.createData);
+        }
       }
+      await batch.commit();
     }
-    await batch.commit();
-  }
+  });
 
   if (params.replaceCoursesAndClasses) {
     const retainedIds = {
@@ -3947,36 +3984,40 @@ export async function updateCompetitorInFirestore(
     }
     const nextSiNumber =
       typeof mutable.siNumber === 'number' ? mutable.siNumber : Number(existing.siNumber);
-    declareCompetitorMutation({
-      source: 'updateCompetitorInFirestore',
-      operation: 'UPDATE',
-      competitionId: context.competitionId,
-      competitorId: id,
-      siNumber: nextSiNumber,
-      previousSiNumber: Number(existing.siNumber),
-      assignmentHandling: {
-        mode: 'LEGACY',
-        reason: 'Competitor update does not validate or update the SI assignment.',
+    return runCompetitorMutation(
+      {
+        source: 'updateCompetitorInFirestore',
+        operation: 'UPDATE',
+        competitionId: context.competitionId,
+        competitorId: id,
+        siNumber: nextSiNumber,
+        previousSiNumber: Number(existing.siNumber),
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Competitor update does not validate or update the SI assignment.',
+        },
+        identityAffecting: nextSiNumber !== Number(existing.siNumber),
       },
-      identityAffecting: nextSiNumber !== Number(existing.siNumber),
-    });
-    transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
-    if (typeof mutable.status === 'string') {
-      const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
-      const previouslyFinished = finishedStatuses.has(String(existing.status));
-      const willBeFinished = finishedStatuses.has(mutable.status);
-      if (previouslyFinished !== willBeFinished) {
-        transaction.update(competitionRef, {
-          finishedCount: clampInt(
-            Number(competition.finishedCount || 0) + (willBeFinished ? 1 : -1),
-            0,
-            Number(competition.competitorCount || 0),
-            0
-          ),
-          updatedAt: serverTimestamp(),
-        });
+      () => {
+        transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
+        if (typeof mutable.status === 'string') {
+          const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
+          const previouslyFinished = finishedStatuses.has(String(existing.status));
+          const willBeFinished = finishedStatuses.has(mutable.status);
+          if (previouslyFinished !== willBeFinished) {
+            transaction.update(competitionRef, {
+              finishedCount: clampInt(
+                Number(competition.finishedCount || 0) + (willBeFinished ? 1 : -1),
+                0,
+                Number(competition.competitorCount || 0),
+                0
+              ),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
       }
-    }
+    );
   });
 }
 
@@ -4072,27 +4113,31 @@ export async function deleteCompetitorFromFirestore(
     if (competition.status === 'COMPLETED' && !context.isSuperAdmin) {
       throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
     }
-    declareCompetitorMutation({
-      source: 'deleteCompetitorFromFirestore',
-      operation: 'DELETE',
-      competitionId: context.competitionId,
-      competitorId: sanitizeFirestoreId(competitorId, 'cmp'),
-      siNumber: Number(competitor.siNumber),
-      assignmentHandling: {
-        mode: 'LEGACY',
-        reason: 'Competitor deletion does not retire or update the SI assignment.',
-      },
-      identityAffecting: true,
-    });
     const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
-    transaction.delete(competitorRef);
-    transaction.update(competitionRef, {
-      competitorCount: Math.max(0, Number(competition.competitorCount || 0) - 1),
-      ...(finished
-        ? { finishedCount: Math.max(0, Number(competition.finishedCount || 0) - 1) }
-        : {}),
-      updatedAt: serverTimestamp(),
-    });
+    runCompetitorMutation(
+      {
+        source: 'deleteCompetitorFromFirestore',
+        operation: 'DELETE',
+        competitionId: context.competitionId,
+        competitorId: sanitizeFirestoreId(competitorId, 'cmp'),
+        siNumber: Number(competitor.siNumber),
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Competitor deletion does not retire or update the SI assignment.',
+        },
+        identityAffecting: true,
+      },
+      () => {
+        transaction.delete(competitorRef);
+        transaction.update(competitionRef, {
+          competitorCount: Math.max(0, Number(competition.competitorCount || 0) - 1),
+          ...(finished
+            ? { finishedCount: Math.max(0, Number(competition.finishedCount || 0) - 1) }
+            : {}),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    );
   });
 }
 
@@ -5122,18 +5167,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   };
   const nextCompetitorCount = existingCompetitors.length + 1;
   const batch = writeBatch(db);
-  declareCompetitorMutation({
-    source: 'saveDirectCompetitionEntryToFirestore',
-    operation: 'CREATE',
-    competitionId,
-    competitorId,
-    siNumber,
-    assignmentHandling: {
-      mode: 'LEGACY',
-      reason: 'Direct-entry write does not create an SI assignment.',
-    },
-    identityAffecting: true,
-  });
   batch.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
     competitorId,
     competitionId,
@@ -5206,7 +5239,21 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   }
 
   try {
-    await batch.commit();
+    await runCompetitorMutation(
+      {
+        source: 'saveDirectCompetitionEntryToFirestore',
+        operation: 'CREATE',
+        competitionId,
+        competitorId,
+        siNumber,
+        assignmentHandling: {
+          mode: 'LEGACY',
+          reason: 'Direct-entry write does not create an SI assignment.',
+        },
+        identityAffecting: true,
+      },
+      () => batch.commit()
+    );
   } catch (err) {
     handleWriteOrOfflineError(
       err,
