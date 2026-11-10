@@ -92,6 +92,10 @@ import {
   planRetireSIAssignmentWrite,
 } from './utils/siAssignmentWrites';
 import {
+  inspectSIAssignmentRuleMutations,
+  logSIAssignmentRuleDiagnostics,
+} from './utils/siAssignmentRuleDiagnostics';
+import {
   declareCompetitorMutation,
   runAssignmentAwareCompetitorMutation,
   runCompetitorMutation,
@@ -1051,6 +1055,20 @@ export async function createCompetitionSICardAssignment(params: {
   const ref = getCompetitionSICardAssignmentRef(params.competitionId, params.siNumber);
   const now = Timestamp.now();
   const competitorId = params.competitorId;
+  logSIAssignmentRuleDiagnostics(
+    inspectSIAssignmentRuleMutations([
+      {
+        collection: 'siCardAssignments',
+        operation: 'create',
+        after: {
+          competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
+          siNumber: Number(params.siNumber),
+          competitorId,
+          state: params.state ?? 'ACTIVE',
+        },
+      },
+    ])
+  );
   await setDoc(ref, {
     competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
     siNumber: Number(params.siNumber),
@@ -1105,6 +1123,26 @@ export async function retireCompetitionSICardAssignment(params: {
     if (!existing) {
       throw new Error(`SI-tilldelningen för ${params.siNumber} har ett ogiltigt format.`);
     }
+    logSIAssignmentRuleDiagnostics(
+      inspectSIAssignmentRuleMutations([
+        {
+          collection: 'siCardAssignments',
+          operation: 'update',
+          before: {
+            competitionId: existing.competitionId,
+            siNumber: existing.siNumber,
+            competitorId: existing.competitorId,
+            state: existing.state,
+          },
+          after: {
+            competitionId: existing.competitionId,
+            siNumber: existing.siNumber,
+            competitorId: existing.competitorId,
+            state: 'RETIRED',
+          },
+        },
+      ])
+    );
     await updateDoc(ref, {
       state: 'RETIRED',
       assignmentVersion: existing.assignmentVersion + 1,
@@ -1114,6 +1152,20 @@ export async function retireCompetitionSICardAssignment(params: {
     });
     return;
   }
+  logSIAssignmentRuleDiagnostics(
+    inspectSIAssignmentRuleMutations([
+      {
+        collection: 'siCardAssignments',
+        operation: 'create',
+        after: {
+          competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
+          siNumber: Number(params.siNumber),
+          competitorId,
+          state: 'RETIRED',
+        },
+      },
+    ])
+  );
   await setDoc(
     ref,
     {

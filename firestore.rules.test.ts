@@ -8,7 +8,12 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, serverTimestamp, writeBatch } from 'firebase/firestore';
+import {
+  doc,
+  serverTimestamp,
+  writeBatch,
+  type DocumentData,
+} from 'firebase/firestore';
 import fs from 'fs';
 import path from 'path';
 
@@ -863,6 +868,81 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
           siNumber: 8500116,
           schemaVersion: 2,
         })
+    );
+
+    // P0 Step 6: document the existing cross-document write gap without
+    // changing rule behavior. The valid batch is the expected atomic pattern.
+    const reassignmentBatch = writeBatch(raceAdminCtx.firestore());
+    const competitorReassignment: DocumentData = {
+      siNumber: 8500112,
+      updatedAt: serverTimestamp(),
+    };
+    const retireOldAssignment: DocumentData = {
+      state: 'RETIRED',
+      assignmentVersion: 2,
+      updatedAt: serverTimestamp(),
+      retiredAt: serverTimestamp(),
+      retirementReason: 'si_reassigned',
+    };
+    const newAssignment: DocumentData = {
+      ...siCardAssignment,
+      siNumber: 8500112,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    reassignmentBatch.update<DocumentData, DocumentData>(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid'),
+      competitorReassignment
+    );
+    reassignmentBatch.update<DocumentData, DocumentData>(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500111'),
+      retireOldAssignment
+    );
+    reassignmentBatch.set<DocumentData, DocumentData>(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500112'),
+      newAssignment
+    );
+    await assertSucceeds(reassignmentBatch.commit());
+
+    // Each of these writes is independently permitted today and is therefore
+    // a known bypass that the diagnostics helper must report.
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ siNumber: 8500113, updatedAt: serverTimestamp() })
+    );
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500112')
+        .update({
+          state: 'RETIRED',
+          assignmentVersion: 2,
+          updatedAt: serverTimestamp(),
+          retiredAt: serverTimestamp(),
+          retirementReason: 'manual_rule_test',
+        })
+    );
+
+    // Mismatched assignment identity is schema-valid and currently allowed:
+    // the rules do not compare this record with the competitor's SI number.
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500117')
+        .set({
+          ...siCardAssignment,
+          siNumber: 8500117,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500117')
+        .delete()
     );
   } finally {
     await testEnv.cleanup();

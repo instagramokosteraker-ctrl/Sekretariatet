@@ -1151,6 +1151,10 @@ service cloud.firestore {
       // -----------------------------------------------------------------------
       // 4a. /competitions/{competitionId}/siCardAssignments/{siNumber}
       // -----------------------------------------------------------------------
+      // P0 Step 6 diagnostics-only preparation: these rules validate each
+      // document independently and do not yet bind assignment writes to a
+      // competitor write with getAfter(). Keep authorization behavior unchanged
+      // until all writers have moved behind the trusted atomic mutation path.
       match /siCardAssignments/{siNumber} {
         allow get: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1418,6 +1422,9 @@ service cloud.firestore {
       // -----------------------------------------------------------------------
       // 4c. /competitions/{competitionId}/competitors/{competitorId} (Master Gate)
       // -----------------------------------------------------------------------
+      // P0 Step 6 diagnostics-only preparation: identity writes remain allowed
+      // under the existing role/field checks. Cross-document SI consistency is
+      // observed by application diagnostics; it is not enforced by these rules.
       match /competitors/{competitorId} {
         allow get: if isValidId(competitionId) &&
           isValidId(competitorId) &&

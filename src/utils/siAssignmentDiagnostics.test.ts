@@ -33,6 +33,27 @@ describe('competitor mutation declaration boundary', () => {
     );
   });
 
+  it('warns when a legacy SI change has no assignment counterpart', () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(
+      declareCompetitorMutation({
+        source: 'test legacy SI change',
+        operation: 'UPDATE',
+        competitionId: 'evt_test',
+        competitorId: 'cmp_test',
+        previousSiNumber: 12345,
+        siNumber: 67890,
+        assignmentHandling: { mode: 'LEGACY', reason: 'Unmigrated writer.' },
+        identityAffecting: true,
+      })
+    ).toEqual({ allowed: true });
+
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('COMPETITOR_SI_UPDATE_WITHOUT_ASSIGNMENT_CHANGE')
+    );
+  });
+
   it('records non-identity legacy writes without reporting an SI assignment bypass', () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});

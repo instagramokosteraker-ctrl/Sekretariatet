@@ -1,3 +1,8 @@
+import {
+  inspectSIAssignmentRuleMutations,
+  logSIAssignmentRuleDiagnostics,
+} from './siAssignmentRuleDiagnostics';
+
 export type CompetitorMutationOperation =
   | 'CREATE'
   | 'UPDATE'
@@ -220,6 +225,33 @@ function recordMutationServiceUse(request: CompetitorMutationServiceRequest): vo
 export function declareCompetitorMutation(
   declaration: CompetitorMutationDeclaration
 ): { allowed: true } {
+  if (
+    declaration.identityAffecting &&
+    declaration.assignmentHandling.mode === 'LEGACY' &&
+    declaration.previousSiNumber !== undefined &&
+    declaration.siNumber !== undefined &&
+    declaration.previousSiNumber !== declaration.siNumber
+  ) {
+    logSIAssignmentRuleDiagnostics(
+      inspectSIAssignmentRuleMutations([
+        {
+          collection: 'competitors',
+          operation: 'update',
+          before: {
+            competitionId: declaration.competitionId,
+            competitorId: declaration.competitorId ?? '',
+            siNumber: declaration.previousSiNumber,
+          },
+          after: {
+            competitionId: declaration.competitionId,
+            competitorId: declaration.competitorId ?? '',
+            siNumber: declaration.siNumber,
+          },
+        },
+      ])
+    );
+  }
+
   if (
     declaration.assignmentHandling.mode === 'VALIDATED' &&
     (!Number.isInteger(declaration.assignmentHandling.validatedSiNumber) ||
