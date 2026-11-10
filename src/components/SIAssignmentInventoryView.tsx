@@ -55,7 +55,7 @@ export function SIAssignmentInventoryView() {
           SI Assignment Inventory
         </h2>
         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          Skrivskyddad skanning av alla tävlingars konkurrenter och SI-assignment-dokument.
+          Skrivskyddad kontroll av tävlingarnas löpare och SI-kopplingar.
           Rapporten innehåller endast ID:n och SI-nummer.
         </p>
       </div>
@@ -108,8 +108,8 @@ export function SIAssignmentInventoryView() {
       {report && (
         <div className="space-y-2">
           <p role="status" className="text-xs text-slate-600 dark:text-slate-300">
-            Skannade {report.competitionCount} tävlingar, {report.competitorCount} konkurrenter
-            och {report.assignmentCount} assignment-dokument.
+            Kontrollerade {report.competitionCount} tävlingar, {report.competitorCount} löpare
+            och {report.assignmentCount} SI-kopplingar.
           </p>
           <pre className="max-h-[32rem] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">
             {formatSIAssignmentInventoryMarkdown(report)}

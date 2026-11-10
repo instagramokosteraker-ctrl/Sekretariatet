@@ -71,6 +71,30 @@ const ACTIVE_COMPETITOR_STATUSES = new Set([
   'PRELIMINARY_FIN',
 ]);
 
+const CONFLICT_LABELS: Record<string, string> = {
+  SAKNAT_SI_NUMMER: 'Löpare saknar SI-nummer',
+  OGILTIGT_SI_NUMMER: 'Ogiltigt SI-nummer',
+  FELAKTIGT_ASSIGNMENT_DOKUMENT: 'Felaktigt SI-kopplingsdokument',
+  OGILTIGT_ASSIGNMENT_SI_NUMMER: 'Ogiltigt SI-nummer i kopplingsdokument',
+  FELAKTIGT_ASSIGNMENT_DOKUMENT_ID: 'Dokument-ID stämmer inte med SI-numret',
+  ASSIGNMENT_UTAN_KONKURRENT: 'SI-koppling utan löpare',
+  AKTIV_ASSIGNMENT_UTAN_KONKURRENT: 'Aktiv SI-koppling utan löpare',
+  BEKRAFTAD_SI_DUBBLETT: 'Bekräftad SI-dubblett',
+  PENSIONERAD_ASSIGNMENT_AKTIV_KONKURRENT: 'Avslutad SI-koppling med aktiv löpare',
+  ASSIGNMENT_SI_MISMATCH: 'SI-numret skiljer sig mellan löpare och koppling',
+  ASSIGNMENT_TAVLINGSMISMATCH: 'SI-kopplingen tillhör en annan tävling',
+  DUBBELT_SI_NUMMER: 'Samma SI-nummer används av flera löpare',
+  SI_TILLDELAT_FLERA_KONKURRENTER: 'SI-numret är kopplat till flera löpare',
+  KONKURRENT_UTAN_ASSIGNMENT: 'Löpare utan SI-koppling',
+  ASSIGNMENT_KONKURRENT_MISMATCH: 'SI-kopplingen pekar på en annan löpare',
+  KONKURRENT_EJ_AKTIV_ASSIGNMENT: 'Löparens SI-koppling är inte aktiv',
+  INGA_KONFLIKTER: 'Inga konflikter',
+};
+
+function getConflictLabel(conflictType: string): string {
+  return CONFLICT_LABELS[conflictType] ?? conflictType;
+}
+
 function displaySiNumber(value: unknown): string {
   if (value === undefined || value === null || value === '') return '—';
   return String(value);
@@ -117,7 +141,7 @@ export function buildSIAssignmentInventory(params: {
         'SAKNAT_SI_NUMMER',
         [competitor.documentId],
         rawSiNumber,
-        'Konkurrenten saknar SI-nummer.'
+        'Löparen saknar SI-nummer.'
       );
       continue;
     }
@@ -161,7 +185,7 @@ export function buildSIAssignmentInventory(params: {
         'FELAKTIGT_ASSIGNMENT_DOKUMENT',
         [assignment.competitorId],
         assignment.siNumber ?? assignment.data.siNumber,
-        `Assignment-dokumentet ${assignment.documentId} avviker från det definierade schemat.`
+        `SI-kopplingsdokumentet ${assignment.documentId} avviker från det definierade schemat.`
       );
     }
 
@@ -171,7 +195,7 @@ export function buildSIAssignmentInventory(params: {
         'OGILTIGT_ASSIGNMENT_SI_NUMMER',
         [assignment.competitorId],
         assignment.data.siNumber,
-        `Assignment-dokumentet ${assignment.documentId} innehåller ett ogiltigt SI-nummer.`
+        `SI-kopplingsdokumentet ${assignment.documentId} innehåller ett ogiltigt SI-nummer.`
       );
     } else {
       const group = assignmentGroupsBySi.get(assignment.siNumber) ?? [];
@@ -184,7 +208,7 @@ export function buildSIAssignmentInventory(params: {
           'FELAKTIGT_ASSIGNMENT_DOKUMENT-ID',
           [assignment.competitorId],
           assignment.siNumber,
-          `Dokument-ID ${assignment.documentId} matchar inte SI-numret.`
+          `Dokument-ID ${assignment.documentId} stämmer inte med SI-numret.`
         );
       }
     }
@@ -199,7 +223,7 @@ export function buildSIAssignmentInventory(params: {
         'ASSIGNMENT_UTAN_KONKURRENT',
         [assignment.competitorId],
         assignment.siNumber ?? assignment.data.siNumber,
-        `Assignment-dokumentet ${assignment.documentId} refererar till en konkurrent som saknas.`
+        `SI-kopplingsdokumentet ${assignment.documentId} hänvisar till en löpare som saknas.`
       );
     }
 
@@ -209,7 +233,7 @@ export function buildSIAssignmentInventory(params: {
         'AKTIV_ASSIGNMENT_UTAN_KONKURRENT',
         [],
         assignment.siNumber ?? assignment.data.siNumber,
-        `Aktivt assignment-dokument ${assignment.documentId} saknar konkurrent-ID.`
+        `Det aktiva SI-kopplingsdokumentet ${assignment.documentId} saknar löpar-ID.`
       );
     }
 
@@ -219,7 +243,7 @@ export function buildSIAssignmentInventory(params: {
         'BEKRAFTAD_SI_DUBBLETT',
         [assignment.competitorId],
         assignment.siNumber ?? assignment.data.siNumber,
-        `Assignment-dokumentet ${assignment.documentId} är markerat DUPLICATE_CONFIRMED.`
+        `SI-kopplingen ${assignment.documentId} är markerad som bekräftad dubblett.`
       );
     }
 
@@ -231,7 +255,7 @@ export function buildSIAssignmentInventory(params: {
           'PENSIONERAD_ASSIGNMENT_AKTIV_KONKURRENT',
           [assignment.competitorId],
           assignment.siNumber ?? assignment.data.siNumber,
-          `Assignment-dokumentet ${assignment.documentId} är pensionerat men konkurrenten har status ${status}.`
+          `SI-kopplingen ${assignment.documentId} är avslutad, men löparens status är ${status}.`
         );
       }
     }
@@ -247,7 +271,7 @@ export function buildSIAssignmentInventory(params: {
         'ASSIGNMENT_SI_MISMATCH',
         [assignment.competitorId],
         assignment.siNumber,
-        `Assignment-dokumentet pekar på SI ${assignment.siNumber}, men konkurrentdokumentet innehåller ${displaySiNumber(linkedCompetitor.data.siNumber)}.`
+        `SI-kopplingen anger ${assignment.siNumber}, men löparens uppgifter anger ${displaySiNumber(linkedCompetitor.data.siNumber)}.`
       );
     }
 
@@ -260,7 +284,7 @@ export function buildSIAssignmentInventory(params: {
         'ASSIGNMENT_TAVLINGSMISMATCH',
         [assignment.competitorId],
         assignment.siNumber ?? assignment.data.siNumber,
-        `Assignment-dokumentet ${assignment.documentId} innehåller ett annat tävlings-ID.`
+        `SI-kopplingsdokumentet ${assignment.documentId} innehåller ett annat tävlings-ID.`
       );
     }
   }
@@ -272,7 +296,7 @@ export function buildSIAssignmentInventory(params: {
         'DUBBELT_SI_NUMMER',
         group.map((competitor) => competitor.documentId),
         siNumber,
-        'Flera konkurrenter i samma tävling har samma SI-nummer.'
+        'Flera löpare i samma tävling har samma SI-nummer.'
       );
     }
   }
@@ -285,7 +309,7 @@ export function buildSIAssignmentInventory(params: {
         'SI_TILLDELAT_FLERA_KONKURRENTER',
         competitorIds,
         siNumber,
-        'SI-numret är kopplat till flera konkurrenter i assignment-dokumenten.'
+        'SI-numret är kopplat till flera löpare.'
       );
     }
   }
@@ -301,7 +325,7 @@ export function buildSIAssignmentInventory(params: {
         'KONKURRENT_UTAN_ASSIGNMENT',
         [competitor.documentId],
         siNumber,
-        'Konkurrenten saknar motsvarande SI-assignment-dokument.'
+        'Löparen saknar en motsvarande SI-koppling.'
       );
       continue;
     }
@@ -312,7 +336,7 @@ export function buildSIAssignmentInventory(params: {
         'ASSIGNMENT_KONKURRENT_MISMATCH',
         [competitor.documentId, assignment.competitorId],
         siNumber,
-        `SI-assignment-dokumentet pekar på ${assignment.competitorId ?? 'inget konkurrent-ID'}.`
+        `SI-kopplingen pekar på ${assignment.competitorId ?? 'inget löpar-ID'}.`
       );
     }
 
@@ -322,7 +346,7 @@ export function buildSIAssignmentInventory(params: {
         'KONKURRENT_EJ_AKTIV_ASSIGNMENT',
         [competitor.documentId],
         siNumber,
-        `Konkurrenten har SI-numret men assignment-dokumentets state är ${assignment.state ?? 'saknat'}.`
+        `Löparen har SI-numret, men kopplingens status är ${assignment.state ?? 'saknas'}.`
       );
     }
   }
@@ -355,15 +379,15 @@ export function formatSIAssignmentInventoryMarkdown(
   const count = (severity: SIAssignmentInventorySeverity) =>
     allIssues.filter((issue) => issue.severity === severity).length;
   const lines = [
-    '# SI Assignment Inventory',
+    '# Inventering av SI-kopplingar',
     '',
     `- Skannad: ${report.generatedAtIso}`,
     `- Tävlingar: ${report.competitionCount}`,
-    `- Konkurrenter: ${report.competitorCount}`,
-    `- SI-assignment-dokument: ${report.assignmentCount}`,
-    `- ERROR: ${count('ERROR')} | WARNING: ${count('WARNING')} | INFO: ${count('INFO')}`,
+    `- Löpare: ${report.competitorCount}`,
+    `- SI-kopplingar: ${report.assignmentCount}`,
+    `- FEL: ${count('ERROR')} | VARNING: ${count('WARNING')} | INFORMATION: ${count('INFO')}`,
     '',
-    'Inventeringen är skrivskyddad. Inga konkurrenter eller assignment-dokument har ändrats.',
+    'Inventeringen är skrivskyddad. Inga löpare eller SI-kopplingar har ändrats.',
     '',
   ];
 
@@ -371,10 +395,10 @@ export function formatSIAssignmentInventoryMarkdown(
     lines.push(
       `## ${competition.competitionName} (${competition.competitionId})`,
       '',
-      `- Konkurrenter: ${competition.competitorCount}`,
-      `- SI-assignment-dokument: ${competition.assignmentCount}`,
+      `- Löpare: ${competition.competitorCount}`,
+      `- SI-kopplingar: ${competition.assignmentCount}`,
       '',
-      '| Severity | Konflikttyp | Konkurrent-ID:n | SI-nummer | Detalj |',
+      '| Allvarlighetsgrad | Avvikelse | Löpar-ID | SI-nummer | Beskrivning |',
       '|---|---|---|---:|---|'
     );
 
@@ -384,7 +408,7 @@ export function formatSIAssignmentInventoryMarkdown(
         : '—';
       const detail = issue.detail.replace(/\|/g, '\\|');
       lines.push(
-        `| ${issue.severity} | ${issue.conflictType} | ${competitorIds} | ${issue.siNumber} | ${detail} |`
+        `| ${getSwedishSeverity(issue.severity)} | ${getConflictLabel(issue.conflictType)} | ${competitorIds} | ${issue.siNumber} | ${detail} |`
       );
     }
 
@@ -392,4 +416,15 @@ export function formatSIAssignmentInventoryMarkdown(
   }
 
   return lines.join('\n');
+}
+
+function getSwedishSeverity(severity: SIAssignmentInventorySeverity): string {
+  switch (severity) {
+    case 'ERROR':
+      return 'FEL';
+    case 'WARNING':
+      return 'VARNING';
+    case 'INFO':
+      return 'INFORMATION';
+  }
 }

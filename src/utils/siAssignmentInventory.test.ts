@@ -81,6 +81,7 @@ describe('SI assignment inventory', () => {
     expect(formatSIAssignmentInventoryMarkdown(report)).toContain(
       '## Test competition (evt_test)'
     );
-    expect(formatSIAssignmentInventoryMarkdown(report)).toContain('INGA_KONFLIKTER');
+    expect(formatSIAssignmentInventoryMarkdown(report)).toContain('Inga konflikter');
+    expect(formatSIAssignmentInventoryMarkdown(report)).toContain('Löpar-ID');
   });
 });
