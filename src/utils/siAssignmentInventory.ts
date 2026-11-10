@@ -35,6 +35,7 @@ export interface SIAssignmentInventoryIssue {
 export interface SIAssignmentInventoryCompetition {
   competitionId: string;
   competitionName: string;
+  competitionOwnerUid: string | null;
   competitorCount: number;
   assignmentCount: number;
   activeAssignmentCount: number;
@@ -43,7 +44,39 @@ export interface SIAssignmentInventoryCompetition {
   orphanAssignmentCount: number;
   orphanCompetitorCount: number;
   parityMismatchCount: number;
+  ownerUidForensicRecords: OwnerUidForensicRecord[];
   issues: SIAssignmentInventoryIssue[];
+}
+
+export interface OwnerUidForensicAssignment {
+  documentId: string;
+  siNumber: string;
+  state: string;
+  ownerUid: string | null;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+  retiredAt: string;
+  retirementReason: string;
+  previousCompetitorId: string;
+}
+
+export interface OwnerUidForensicRecord {
+  competitionId: string;
+  competitionName: string;
+  competitionOwnerUid: string | null;
+  competitorDocumentId: string;
+  competitorId: string | null;
+  siNumber: string;
+  assignmentState: string;
+  competitorOwnerUid: string | null;
+  assignmentOwnerUid: string | null;
+  competitorCreatedAt: string;
+  competitorUpdatedAt: string;
+  assignmentCreatedAt: string;
+  assignmentUpdatedAt: string;
+  retirementStatus: string;
+  reassignmentHistory: OwnerUidForensicAssignment[];
 }
 
 export interface SIAssignmentInventoryReport {
@@ -57,6 +90,7 @@ export interface SIAssignmentInventoryReport {
   orphanAssignmentCount: number;
   orphanCompetitorCount: number;
   parityMismatchCount: number;
+  ownerUidForensicRecords: OwnerUidForensicRecord[];
   competitions: SIAssignmentInventoryCompetition[];
 }
 
@@ -140,6 +174,24 @@ function displaySiNumber(value: unknown): string {
   return String(value);
 }
 
+function displayTimestamp(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'toDate' in value &&
+    typeof value.toDate === 'function'
+  ) {
+    const date = value.toDate();
+    return date instanceof Date ? date.toISOString() : '—';
+  }
+  return typeof value === 'string' ? value : '—';
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
 function distinct(values: Array<string | null>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
 }
@@ -221,11 +273,19 @@ export function planMissingSIAssignments(params: {
 export function buildSIAssignmentInventory(params: {
   competitionId: string;
   competitionName: string;
+  competitionOwnerUid?: string | null;
   competitors: SIAssignmentInventoryRecord[];
   assignments: SIAssignmentInventoryRecord[];
 }): SIAssignmentInventoryCompetition {
-  const { competitionId, competitionName, competitors, assignments } = params;
+  const {
+    competitionId,
+    competitionName,
+    competitionOwnerUid = null,
+    competitors,
+    assignments,
+  } = params;
   const issues: SIAssignmentInventoryIssue[] = [];
+  const ownerUidForensicRecords: OwnerUidForensicRecord[] = [];
   const competitorsById = new Map(competitors.map((record) => [record.documentId, record]));
   const competitorGroupsBySi = new Map<number, SIAssignmentInventoryRecord[]>();
   const assignmentGroupsBySi = new Map<number, AssignmentRecord[]>();
@@ -470,6 +530,61 @@ export function buildSIAssignmentInventory(params: {
     }
 
     if (linkedCompetitor && assignment.data.ownerUid !== linkedCompetitor.data.ownerUid) {
+      const currentCompetitorId = linkedCompetitor.documentId;
+      const reassignmentHistory = parsedAssignments
+        .filter(
+          (historyAssignment) =>
+            historyAssignment.competitorId === currentCompetitorId ||
+            historyAssignment.competitorDocumentId === currentCompetitorId
+        )
+        .sort(
+          (first, second) =>
+            (first.siNumber ?? 0) - (second.siNumber ?? 0)
+        )
+        .map((historyAssignment) => ({
+          documentId: historyAssignment.documentId,
+          siNumber: displaySiNumber(
+            historyAssignment.siNumber ?? historyAssignment.data.siNumber
+          ),
+          state: displaySiNumber(historyAssignment.state),
+          ownerUid: nullableString(historyAssignment.data.ownerUid),
+          source: displaySiNumber(historyAssignment.data.source),
+          createdAt: displayTimestamp(historyAssignment.data.createdAt),
+          updatedAt: displayTimestamp(historyAssignment.data.updatedAt),
+          retiredAt: displayTimestamp(historyAssignment.data.retiredAt),
+          retirementReason: displaySiNumber(
+            historyAssignment.data.retirementReason
+          ),
+          previousCompetitorId: displaySiNumber(
+            historyAssignment.data.previousCompetitorId
+          ),
+        }));
+      ownerUidForensicRecords.push({
+        competitionId,
+        competitionName,
+        competitionOwnerUid,
+        competitorDocumentId: linkedCompetitor.documentId,
+        competitorId:
+          typeof linkedCompetitor.data.competitorId === 'string'
+            ? linkedCompetitor.data.competitorId
+            : typeof linkedCompetitor.data.id === 'string'
+              ? linkedCompetitor.data.id
+              : null,
+        siNumber: displaySiNumber(
+          assignment.siNumber ?? assignment.data.siNumber
+        ),
+        assignmentState: displaySiNumber(assignment.state),
+        competitorOwnerUid: nullableString(linkedCompetitor.data.ownerUid),
+        assignmentOwnerUid: nullableString(assignment.data.ownerUid),
+        competitorCreatedAt: displayTimestamp(linkedCompetitor.data.createdAt),
+        competitorUpdatedAt: displayTimestamp(linkedCompetitor.data.updatedAt),
+        assignmentCreatedAt: displayTimestamp(assignment.data.createdAt),
+        assignmentUpdatedAt: displayTimestamp(assignment.data.updatedAt),
+        retirementStatus: assignment.state === 'RETIRED'
+          ? `RETIRED at ${displayTimestamp(assignment.data.retiredAt)}`
+          : 'ACTIVE',
+        reassignmentHistory,
+      });
       addIssue(
         'ERROR',
         'ASSIGNMENT_OWNER_UID_MISMATCH',
@@ -615,6 +730,7 @@ export function buildSIAssignmentInventory(params: {
   return {
     competitionId,
     competitionName,
+    competitionOwnerUid,
     competitorCount: competitors.length,
     assignmentCount: assignments.length,
     activeAssignmentCount,
@@ -623,6 +739,7 @@ export function buildSIAssignmentInventory(params: {
     orphanAssignmentCount: orphanAssignmentDocumentIds.size,
     orphanCompetitorCount: orphanCompetitorIds.size,
     parityMismatchCount,
+    ownerUidForensicRecords,
     issues,
   };
 }
@@ -807,6 +924,114 @@ export function formatConflictRemediationPlanV2Markdown(
     '## Safety rule',
     '',
     'Do not delete or rewrite assignment or competitor documents merely to make totals agree. Historical SI reassignments are expected to retain retired assignment records when the same competitor has a successor ACTIVE assignment.'
+  );
+  return lines.join('\n');
+}
+
+export function formatOwnerUidForensicAnalysisMarkdown(
+  report: SIAssignmentInventoryReport
+): string {
+  const records = report.competitions.flatMap(
+    (competition) => competition.ownerUidForensicRecords
+  );
+  const lines = [
+    '# OwnerUid Forensic Analysis',
+    '',
+    `- Read-only scan: ${report.generatedAtIso}`,
+    `- Competitions read: ${report.competitionCount}`,
+    `- OwnerUid mismatches: ${records.length}`,
+    '',
+    'Raw Firebase UIDs and timestamps are included for authorized forensic use. Handle this file as restricted operational data. No production data was modified.',
+    '',
+  ];
+
+  records.forEach((record, index) => {
+    lines.push(
+      `## ${index + 1}. ${record.competitionName} (${record.competitionId})`,
+      '',
+      `- competitorDocumentId: \`${record.competitorDocumentId}\``,
+      `- competitorId: \`${record.competitorId ?? '—'}\``,
+      `- siNumber: \`${record.siNumber}\``,
+      `- assignment state: \`${record.assignmentState}\``,
+      '- classification: **C — Current integrity violation** (active `ownerUid` parity failure; root cause remains unproven)',
+      `- competitor ownerUid: \`${record.competitorOwnerUid ?? '—'}\``,
+      `- assignment ownerUid: \`${record.assignmentOwnerUid ?? '—'}\``,
+      `- competition ownerUid: \`${record.competitionOwnerUid ?? '—'}\``,
+      `- competitor createdAt / updatedAt: \`${record.competitorCreatedAt}\` / \`${record.competitorUpdatedAt}\``,
+      `- assignment createdAt / updatedAt: \`${record.assignmentCreatedAt}\` / \`${record.assignmentUpdatedAt}\``,
+      `- retirement status: \`${record.retirementStatus}\``,
+      '- reassignment history:'
+    );
+    if (record.reassignmentHistory.length === 0) {
+      lines.push('  - No assignment history documents found for this competitor.');
+    } else {
+      for (const history of record.reassignmentHistory) {
+        lines.push(
+          `  - SI \`${history.siNumber}\`; document \`${history.documentId}\`; state \`${history.state}\`; ownerUid \`${history.ownerUid ?? '—'}\`; source \`${history.source}\`; createdAt \`${history.createdAt}\`; updatedAt \`${history.updatedAt}\`; retiredAt \`${history.retiredAt}\`; retirementReason \`${history.retirementReason}\`; previousCompetitorId \`${history.previousCompetitorId}\``
+        );
+      }
+    }
+    lines.push('');
+  });
+
+  lines.push(
+    '## Classification',
+    '',
+    'Each listed case is classified **C — Current integrity violation** because its assignment was ACTIVE and failed the ownerUid parity predicate at scan time. This establishes present integrity impact, not which ownerUid is authoritative.',
+    '',
+    'For all four Reflexcup#2 cases, the competitor ownerUid matches the competition ownerUid, while the ACTIVE assignment ownerUid is different; each assignment source is SYSTEM and was created about three days after the competitor document. For both Lång-TM cases, the ACTIVE assignment ownerUid matches the competition ownerUid, while the competitor and retired predecessor share another ownerUid. Each retired predecessor was retired at the exact timestamp its MANUAL ACTIVE successor was created. Those patterns are consistent with assignment ownership being written from a different identity during assignment creation/reassignment, but they do not prove whether that is historical pre-migration data (A) or an ownership migration defect (B). No external audit trail or historical deployed-writer version was available to establish A versus B. Classification D is unsupported because current ownership parity is required.',
+    '',
+    '## Decision',
+    '',
+    '- Data correction: required only after the authoritative owner is established; do not make a speculative correction.',
+    '- Code changes: not established by document comparison alone. The current repository transaction paths populate assignment ownerUid from the competitor identity; verify the historical writer/version and deployment provenance before concluding whether a code fix is needed.',
+    '- Inventory logic: do not ignore the condition. Keep active ownerUid parity mismatches visible and blocking.',
+    '- Historical retired assignments with active successors remain valid reassignment history and are not owner mismatches unless they independently fail the applicable historical ownership rule.'
+  );
+  return lines.join('\n');
+}
+
+export function formatOwnerUidRemediationPlanMarkdown(
+  report: SIAssignmentInventoryReport
+): string {
+  const records = report.competitions.flatMap(
+    (competition) => competition.ownerUidForensicRecords
+  );
+  const lines = [
+    '# OwnerUid Remediation Plan',
+    '',
+    `- Based on read-only scan: ${report.generatedAtIso}`,
+    `- Competitions: ${report.competitionCount}`,
+    `- OwnerUid mismatches: ${records.length}`,
+    '',
+    'No production data was changed. This plan is not authorization to update records.',
+    '',
+    '## Required steps',
+    '',
+    '1. Compare competitor, assignment, and competition owner IDs and timestamps within authorized access.',
+    '2. Check external import/snapshot/admin audit history. Firestore document timestamps alone do not prove which value is authoritative.',
+    '3. Obtain the competition owner’s confirmation of the correct owner identity for each competitor.',
+    '4. If correction is approved, use the canonical transaction boundary to reread and update the competitor and assignment together.',
+    '5. Rerun the read-only inventory; keep the mismatch blocking until parity is confirmed.',
+    '',
+    '## Cases',
+    '',
+    '| # | Competition | Competitor document ID | Competitor ID | SI | Assignment state | Competitor createdAt | Assignment createdAt | Retirement status |',
+    '|---:|---|---|---|---:|---|---|---|---|',
+  ];
+  records.forEach((record, index) => {
+    lines.push(
+      `| ${index + 1} | ${record.competitionName} (${record.competitionId}) | ${record.competitorDocumentId} | ${record.competitorId ?? '—'} | ${record.siNumber} | ${record.assignmentState} | ${record.competitorCreatedAt} | ${record.assignmentCreatedAt} | ${record.retirementStatus} |`
+    );
+  });
+  lines.push(
+    '',
+    '## Assessment',
+    '',
+    '- Data correction: potentially required; first establish authoritative ownership and approve the correction.',
+    '- Code change: not proven necessary by this scan; investigate the source of each value before deciding.',
+    '- Inventory logic: do not suppress ownerUid parity mismatches.',
+    '- Preserve retired assignments when a same-competitor ACTIVE successor establishes historical reassignment.'
   );
   return lines.join('\n');
 }

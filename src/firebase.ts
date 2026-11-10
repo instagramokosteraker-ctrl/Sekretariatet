@@ -892,6 +892,7 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
   let orphanAssignmentCount = 0;
   let orphanCompetitorCount = 0;
   let parityMismatchCount = 0;
+  const ownerUidForensicRecords: SIAssignmentInventoryReport['ownerUidForensicRecords'] = [];
 
   for (const competitionDoc of competitionSnapshot.docs) {
     const [competitorSnapshot, assignmentSnapshot] = await Promise.all([
@@ -923,6 +924,10 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
         typeof competitionData.name === 'string' && competitionData.name.trim()
           ? competitionData.name.trim()
           : competitionDoc.id,
+      competitionOwnerUid:
+        typeof competitionData.ownerUid === 'string'
+          ? competitionData.ownerUid
+          : null,
       competitors: competitorSnapshot.docs.map((competitorDoc) => ({
         documentId: competitorDoc.id,
         data: competitorDoc.data() as Record<string, unknown>,
@@ -941,6 +946,7 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
     orphanAssignmentCount += inventory.orphanAssignmentCount;
     orphanCompetitorCount += inventory.orphanCompetitorCount;
     parityMismatchCount += inventory.parityMismatchCount;
+    ownerUidForensicRecords.push(...inventory.ownerUidForensicRecords);
   }
 
   return {
@@ -954,6 +960,7 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
     orphanAssignmentCount,
     orphanCompetitorCount,
     parityMismatchCount,
+    ownerUidForensicRecords,
     competitions,
   };
 }

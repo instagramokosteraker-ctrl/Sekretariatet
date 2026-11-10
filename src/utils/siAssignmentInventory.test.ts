@@ -4,6 +4,8 @@ import {
   buildSIAssignmentInventory,
   formatConflictRemediationPlanV2Markdown,
   formatLiveIntegrityInventoryV2Markdown,
+  formatOwnerUidForensicAnalysisMarkdown,
+  formatOwnerUidRemediationPlanMarkdown,
   formatSIAssignmentInventoryMarkdown,
   planMissingSIAssignments,
   type SIAssignmentInventoryReport,
@@ -159,6 +161,7 @@ describe('SI assignment inventory', () => {
       orphanAssignmentCount: 0,
       orphanCompetitorCount: 0,
       parityMismatchCount: 0,
+      ownerUidForensicRecords: [],
       competitions: [competition],
     };
 
@@ -270,6 +273,7 @@ describe('SI assignment inventory', () => {
       orphanAssignmentCount: competition.orphanAssignmentCount,
       orphanCompetitorCount: competition.orphanCompetitorCount,
       parityMismatchCount: competition.parityMismatchCount,
+      ownerUidForensicRecords: competition.ownerUidForensicRecords,
       competitions: [competition],
     };
 
@@ -279,5 +283,61 @@ describe('SI assignment inventory', () => {
     expect(formatConflictRemediationPlanV2Markdown(report)).toContain(
       'Historical SI reassignments are expected'
     );
+  });
+
+  it('reports ownerUid mismatch provenance and assignment history without changing source records', () => {
+    const competitorRecord = competitor('cmp_owner', 222, 'REGISTERED', {
+      competitorId: 'runner-222',
+      createdAt: Timestamp.fromDate(new Date('2025-12-01T00:00:00.000Z')),
+      updatedAt: Timestamp.fromDate(new Date('2026-01-02T00:00:00.000Z')),
+    });
+    const assignmentRecord = assignment(222, 'cmp_owner', 'ACTIVE', 'evt_test', {
+      ownerUid: 'owner-2',
+      createdAt: Timestamp.fromDate(new Date('2025-12-02T00:00:00.000Z')),
+      updatedAt: Timestamp.fromDate(new Date('2026-01-03T00:00:00.000Z')),
+    });
+    const retiredRecord = assignment(111, 'cmp_owner', 'RETIRED');
+    const competition = buildSIAssignmentInventory({
+      competitionId: 'evt_test',
+      competitionName: 'Test',
+      competitionOwnerUid: 'competition-owner',
+      competitors: [competitorRecord],
+      assignments: [retiredRecord, assignmentRecord],
+    });
+    const report: SIAssignmentInventoryReport = {
+      generatedAtIso: '2026-11-10T00:00:00.000Z',
+      competitionCount: 1,
+      competitorCount: competition.competitorCount,
+      assignmentCount: competition.assignmentCount,
+      activeAssignmentCount: competition.activeAssignmentCount,
+      retiredAssignmentCount: competition.retiredAssignmentCount,
+      historicalReassignmentCount: competition.historicalReassignmentCount,
+      orphanAssignmentCount: competition.orphanAssignmentCount,
+      orphanCompetitorCount: competition.orphanCompetitorCount,
+      parityMismatchCount: competition.parityMismatchCount,
+      ownerUidForensicRecords: competition.ownerUidForensicRecords,
+      competitions: [competition],
+    };
+
+    expect(report.ownerUidForensicRecords).toHaveLength(1);
+    expect(report.ownerUidForensicRecords[0]).toMatchObject({
+      competitorDocumentId: 'cmp_owner',
+      competitorId: 'runner-222',
+      siNumber: '222',
+      assignmentState: 'ACTIVE',
+      competitorOwnerUid: 'owner-1',
+      assignmentOwnerUid: 'owner-2',
+      competitionOwnerUid: 'competition-owner',
+      competitorCreatedAt: '2025-12-01T00:00:00.000Z',
+      assignmentCreatedAt: '2025-12-02T00:00:00.000Z',
+    });
+    expect(report.ownerUidForensicRecords[0].reassignmentHistory).toHaveLength(2);
+    expect(formatOwnerUidForensicAnalysisMarkdown(report)).toContain(
+      'C — Current integrity violation'
+    );
+    expect(formatOwnerUidRemediationPlanMarkdown(report)).toContain(
+      'No production data was changed'
+    );
+    expect(assignmentRecord.data.ownerUid).toBe('owner-2');
   });
 });

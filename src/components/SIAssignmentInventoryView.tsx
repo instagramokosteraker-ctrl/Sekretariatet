@@ -7,6 +7,8 @@ import {
 import {
   formatConflictRemediationPlanV2Markdown,
   formatLiveIntegrityInventoryV2Markdown,
+  formatOwnerUidForensicAnalysisMarkdown,
+  formatOwnerUidRemediationPlanMarkdown,
   formatSIAssignmentInventoryMarkdown,
   SIAssignmentInventoryQueryError,
   type SIAssignmentInventoryReport,
@@ -128,7 +130,8 @@ export function SIAssignmentInventoryView() {
         </h2>
         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
           Skrivskyddad kontroll av tävlingarnas löpare och SI-kopplingar.
-          Rapporten innehåller endast ID:n och SI-nummer.
+          Standardrapporterna innehåller ID:n och SI-nummer. Den separata
+          ownerUid-forensikrapporten innehåller känsliga ägar-ID:n.
         </p>
       </div>
 
@@ -188,6 +191,32 @@ export function SIAssignmentInventoryView() {
             >
               <Download className="h-3.5 w-3.5" />
               Ladda ner CONFLICT_REMEDIATION_PLAN_V2.md
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                downloadV2Report(
+                  'OWNERUID_FORENSIC_ANALYSIS.md',
+                  formatOwnerUidForensicAnalysisMarkdown(report)
+                )
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Ladda ner OWNERUID_FORENSIC_ANALYSIS.md
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                downloadV2Report(
+                  'OWNERUID_REMEDIATION_PLAN.md',
+                  formatOwnerUidRemediationPlanMarkdown(report)
+                )
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Ladda ner OWNERUID_REMEDIATION_PLAN.md
             </button>
           </>
         )}
