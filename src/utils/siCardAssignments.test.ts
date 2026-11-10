@@ -1,6 +1,7 @@
 import { Timestamp } from 'firebase/firestore';
 import { describe, expect, it } from 'vitest';
 import {
+  assignmentMatchesCompetitorIdentity,
   buildSICardAssignmentValidationReport,
   parseSICardAssignmentDocument,
 } from './siCardAssignments';
@@ -21,6 +22,35 @@ const assignment = (siNumber: number, competitorId: string | null, state = 'ACTI
 });
 
 describe('SI card assignment helpers', () => {
+  it('requires SI, competitor, card-series, and owner parity', () => {
+    const parsed = parseSICardAssignmentDocument(
+      '8500111',
+      'evt_test',
+      assignment(8500111, 'cmp_1')
+    );
+    const identity = {
+      competitionId: 'evt_test',
+      competitorId: 'cmp_1',
+      siNumber: 8500111,
+      cardSeries: 'SI-Card 10',
+      ownerUid: 'admin_uid',
+    };
+
+    expect(assignmentMatchesCompetitorIdentity(parsed, identity)).toBe(true);
+    expect(
+      assignmentMatchesCompetitorIdentity(parsed, { ...identity, cardSeries: 'SI-Card 11' })
+    ).toBe(false);
+    expect(
+      assignmentMatchesCompetitorIdentity(parsed, { ...identity, ownerUid: 'other_admin' })
+    ).toBe(false);
+    expect(
+      assignmentMatchesCompetitorIdentity(parsed, { ...identity, competitorId: 'cmp_other' })
+    ).toBe(false);
+    expect(
+      assignmentMatchesCompetitorIdentity(parsed, { ...identity, siNumber: 8500112 })
+    ).toBe(false);
+  });
+
   it('parses valid documents and rejects mismatched document IDs', () => {
     expect(
       parseSICardAssignmentDocument(

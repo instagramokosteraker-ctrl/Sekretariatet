@@ -70,8 +70,8 @@ export function SIAssignmentInventoryView() {
       } else {
         setError(
           scanError instanceof Error
-            ? scanError.message
-            : 'SI-kopplingarna kunde inte skapas.'
+            ? `Bootstrapen avbröts: ${scanError.message} Tidigare SI-kopplingar kan redan ha skapats; kör inventeringen innan du försöker igen.`
+            : 'Bootstrapen avbröts. Tidigare SI-kopplingar kan redan ha skapats; kör inventeringen innan du försöker igen.'
         );
       }
     } finally {
@@ -88,7 +88,6 @@ export function SIAssignmentInventoryView() {
           `- Skapade SI-kopplingar: ${bootstrapSummary.createdCount}`,
           `- Överhoppade löpare: ${bootstrapSummary.skipped.length}`,
           `- SI-dubbletter att reda ut: ${bootstrapSummary.duplicates.length}`,
-          `- Misslyckade skapanden: ${bootstrapSummary.failures.length}`,
           '',
           '## Inventering före skapandet',
           '',
@@ -183,7 +182,6 @@ export function SIAssignmentInventoryView() {
               <p>Skapade SI-kopplingar: {bootstrapSummary.createdCount}</p>
               <p>Överhoppade löpare: {bootstrapSummary.skipped.length}</p>
               <p>Dubblettgrupper som kräver manuell hantering: {bootstrapSummary.duplicates.length}</p>
-              <p>Misslyckade skapanden: {bootstrapSummary.failures.length}</p>
               {bootstrapSummary.skipped.length > 0 && (
                 <ul className="list-inside list-disc text-slate-600 dark:text-slate-300">
                   {Object.entries(
@@ -199,11 +197,6 @@ export function SIAssignmentInventoryView() {
               {bootstrapSummary.duplicates.map((duplicate) => (
                 <p key={`${duplicate.competitionId}-${duplicate.siNumber}`} className="text-amber-700 dark:text-amber-300">
                   Dubblett i {duplicate.competitionId}: SI {duplicate.siNumber} — {duplicate.competitorIds.join(', ')} (överhoppad)
-                </p>
-              ))}
-              {bootstrapSummary.failures.map((failure) => (
-                <p key={`${failure.competitionId}-${failure.siNumber}`} role="alert" className="text-red-700 dark:text-red-300">
-                  Misslyckades: {failure.competitionId}, SI {failure.siNumber}, löpare {failure.competitorId}: {failure.message}
                 </p>
               ))}
             </section>

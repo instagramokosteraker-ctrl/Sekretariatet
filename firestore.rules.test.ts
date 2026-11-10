@@ -466,6 +466,31 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     // Competitor creation is now accepted only with its matching assignment.
     await assertSucceeds(initialCompetitorBatch.commit());
 
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ status: 'DNS', updatedAt: serverTimestamp() })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500111')
+        .update({
+          state: 'RETIRED',
+          assignmentVersion: 2,
+          updatedAt: serverTimestamp(),
+          retiredAt: serverTimestamp(),
+          retirementReason: 'assignment-only-dns-test',
+        })
+    );
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ status: 'REGISTERED', updatedAt: serverTimestamp() })
+    );
+
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       const adminDb = ctx.firestore();
       const seededAssignments = [
@@ -1193,13 +1218,43 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     await assertFails(
       raceAdminCtx
         .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ cardSeries: 'SI-Card 11', updatedAt: serverTimestamp() })
+    );
+    const cardSeriesBatch = writeBatch(raceAdminCtx.firestore());
+    cardSeriesBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid'),
+      { cardSeries: 'SI-Card 11', updatedAt: serverTimestamp() }
+    );
+    cardSeriesBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500112'),
+      {
+        cardSeries: 'SI-Card 11',
+        assignmentVersion: 2,
+        updatedAt: serverTimestamp(),
+      }
+    );
+    await assertSucceeds(cardSeriesBatch.commit());
+    await assertFails(
+      raceAdminCtx
+        .firestore()
         .doc('competitions/evt_live/siCardAssignments/8500112')
         .update({
           state: 'RETIRED',
-          assignmentVersion: 2,
+          assignmentVersion: 3,
           updatedAt: serverTimestamp(),
           retiredAt: serverTimestamp(),
           retirementReason: 'manual_rule_test',
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500112')
+        .update({
+          cardSeries: 'SI-Card 11',
+          assignmentVersion: 3,
+          updatedAt: serverTimestamp(),
         })
     );
 

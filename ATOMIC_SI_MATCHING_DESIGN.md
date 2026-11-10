@@ -1,6 +1,6 @@
 # Atomic SI Card Matching Design
 
-Status: implementation-ready design for the next P0 migration step.
+Status: architecture baseline. Repository hardening completed 2026-11-10 is documented in [ASSIGNMENT_BOUNDARY_HARDENING.md](./ASSIGNMENT_BOUNDARY_HARDENING.md); production inventory, deployed-rule, trusted-writer, and concurrency validation remain open in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).
 
 Source material:
 
@@ -154,7 +154,7 @@ Required flow:
 
 Important: a card is never “moved” through a best-effort write. The operation is atomic and fails closed.
 
-**Current Phase C Step 2 rollout behavior:** The Firestore client transaction now performs the old-assignment retirement, target create/reactivation, and competitor update together. Uniqueness enforcement is intentionally not active yet: if the target is actively assigned to another competitor, that assignment is preserved, a structured `REASSIGNMENT_CONFLICT` preview diagnostic is emitted, and the competitor write continues. Missing/malformed old assignments or assignment-version limits are reported as partial outcomes; they do not block the competitor write. A target in `RETIRED` state may be reactivated with its prior competitor recorded. The stricter reject-before-write behavior described above remains the intended enforcement policy, not the current rollout behavior.
+**Historical Phase C Step 2 rollout behavior (superseded 2026-11-10):** The initial rollout permitted competitor writes to continue after some assignment conflicts, missing/malformed old assignments, and assignment-version limits. That behavior is no longer current. Reassignment now validates the competitor and assignments inside one transaction, verifies identity/card-series/owner parity, and aborts on conflicts or incomplete assignment outcomes. See [ASSIGNMENT_BOUNDARY_HARDENING.md](./ASSIGNMENT_BOUNDARY_HARDENING.md) for the current exported-writer inventory and verification limits.
 
 ### 2.3 Competitor deletion
 

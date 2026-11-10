@@ -67,6 +67,7 @@ import type {
 } from './types/sportident';
 import { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from './types/sportident';
 import {
+  assignmentMatchesCompetitorIdentity,
   buildSICardAssignmentValidationReport,
   parseSICardAssignmentDocument,
 } from './utils/siCardAssignments';
@@ -92,10 +93,6 @@ import {
   planRetireSIAssignmentWrite,
 } from './utils/siAssignmentWrites';
 import {
-  inspectSIAssignmentRuleMutations,
-  logSIAssignmentRuleDiagnostics,
-} from './utils/siAssignmentRuleDiagnostics';
-import {
   declareCompetitorMutation,
   runAssignmentAwareCompetitorMutation,
   runCompetitorMutation,
@@ -105,7 +102,7 @@ import {
 } from './utils/siAssignmentDiagnostics';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -480,7 +477,7 @@ export function sanitizeFirestoreId(raw: string, fallbackPrefix = 'id'): string 
 
 export { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from './types/sportident';
 
-export function getCompetitionSICardAssignmentRef(
+function getCompetitionSICardAssignmentRef(
   competitionId: string,
   siNumber: number
 ): DocumentReference {
@@ -488,11 +485,67 @@ export function getCompetitionSICardAssignmentRef(
   return doc(db, 'competitions', safeCompetitionId, 'siCardAssignments', String(siNumber));
 }
 
-export function getCompetitionSICardAssignmentsCollection(
+function getCompetitionSICardAssignmentsCollection(
   competitionId: string
 ): ReturnType<typeof collection> {
   const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
   return collection(db, 'competitions', safeCompetitionId, 'siCardAssignments');
+}
+
+function getCompetitorSIAssignmentIdentity(
+  competitionId: string,
+  competitorId: string,
+  data: Record<string, unknown>
+): {
+  competitionId: string;
+  competitorId: string;
+  siNumber: number;
+  cardSeries: string;
+  ownerUid: string;
+} {
+  const siNumber = data.siNumber;
+  const cardSeries = data.cardSeries;
+  const ownerUid = data.ownerUid;
+  if (
+    data.competitionId !== competitionId ||
+    data.competitorId !== competitorId ||
+    !Number.isInteger(siNumber) ||
+    Number(siNumber) < 1 ||
+    Number(siNumber) > 99999999 ||
+    typeof cardSeries !== 'string' ||
+    cardSeries.length < 1 ||
+    cardSeries.length > 24 ||
+    typeof ownerUid !== 'string' ||
+    !SAFE_ID_REGEX.test(ownerUid) ||
+    ownerUid.length > 128
+  ) {
+    throw new Error(
+      `Deltagarens SI-identitet är ofullständig eller motsäger sökvägen: ${competitionId}/${competitorId}.`
+    );
+  }
+  return {
+    competitionId,
+    competitorId,
+    siNumber: Number(siNumber),
+    cardSeries,
+    ownerUid,
+  };
+}
+
+function assertSIAssignmentMatchesCompetitor(
+  assignment: SICardAssignment | null,
+  identity: ReturnType<typeof getCompetitorSIAssignmentIdentity>,
+  requiredState?: SICardAssignment['state']
+): asserts assignment is SICardAssignment {
+  if (
+    !assignment ||
+    !assignmentMatchesCompetitorIdentity(assignment, identity) ||
+    (requiredState !== undefined && assignment.state !== requiredState)
+  ) {
+    throw new Error(
+      `SI-tilldelningen för ${identity.competitorId} matchar inte deltagarens SI-identitet och ägare.`
+    );
+  }
 }
 
 function logSICardAssignmentAudit(
@@ -893,12 +946,6 @@ export async function generateMissingSIAssignmentsFromFirestore(): Promise<{
   createdCount: number;
   skipped: Array<MissingSIAssignmentSkip & { competitionId: string }>;
   duplicates: Array<MissingSIAssignmentDuplicate & { competitionId: string }>;
-  failures: Array<{
-    competitionId: string;
-    competitorId: string;
-    siNumber: number;
-    message: string;
-  }>;
 }> {
   const before = await scanSIAssignmentInventoryFromFirestore();
   const authorization = await getCurrentFirebaseRoles();
@@ -909,12 +956,6 @@ export async function generateMissingSIAssignmentsFromFirestore(): Promise<{
   const competitionsSnapshot = await getDocs(collection(db, 'competitions'));
   const skipped: Array<MissingSIAssignmentSkip & { competitionId: string }> = [];
   const duplicates: Array<MissingSIAssignmentDuplicate & { competitionId: string }> = [];
-  const failures: Array<{
-    competitionId: string;
-    competitorId: string;
-    siNumber: number;
-    message: string;
-  }> = [];
   let createdCount = 0;
 
   for (const competitionDoc of competitionsSnapshot.docs) {
@@ -956,14 +997,50 @@ export async function generateMissingSIAssignmentsFromFirestore(): Promise<{
     }
 
     for (const candidate of plan.candidates) {
+      const competitorRef = doc(
+        db,
+        'competitions',
+        competitionDoc.id,
+        'competitors',
+        candidate.competitorId
+      );
       const assignmentRef = getCompetitionSICardAssignmentRef(
         competitionDoc.id,
         candidate.siNumber
       );
       try {
         const wasCreated = await runTransaction(db, async (transaction) => {
-          const existingAssignment = await transaction.get(assignmentRef);
-          if (existingAssignment.exists()) return false;
+          const [competitorSnapshot, existingAssignment] = await Promise.all([
+            transaction.get(competitorRef),
+            transaction.get(assignmentRef),
+          ]);
+          if (!competitorSnapshot.exists()) {
+            throw new Error(
+              `Deltagaren ${candidate.competitorId} försvann under SI-bootstrapen.`
+            );
+          }
+          const identity = getCompetitorSIAssignmentIdentity(
+            competitionDoc.id,
+            candidate.competitorId,
+            competitorSnapshot.data()
+          );
+          if (
+            identity.siNumber !== candidate.siNumber ||
+            identity.cardSeries !== candidate.cardSeries
+          ) {
+            throw new Error(
+              `Deltagarens SI-identitet ändrades under bootstrapen: ${candidate.competitorId}.`
+            );
+          }
+          if (existingAssignment.exists()) {
+            const parsedAssignment = parseSICardAssignmentDocument(
+              existingAssignment.id,
+              competitionDoc.id,
+              existingAssignment.data()
+            );
+            assertSIAssignmentMatchesCompetitor(parsedAssignment, identity, 'ACTIVE');
+            return false;
+          }
 
           const now = Timestamp.now();
           transaction.set(assignmentRef, {
@@ -975,11 +1052,13 @@ export async function generateMissingSIAssignmentsFromFirestore(): Promise<{
             state: 'ACTIVE',
             assignmentVersion: 1,
             source: 'SYSTEM',
-            ownerUid: authorization.user.uid,
+            ownerUid: identity.ownerUid,
             schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
             createdAt: now,
             updatedAt: now,
           });
+          // Keep the bootstrap assignment paired with a competitor write.
+          transaction.update(competitorRef, { updatedAt: serverTimestamp() });
           return true;
         });
 
@@ -1005,20 +1084,13 @@ export async function generateMissingSIAssignmentsFromFirestore(): Promise<{
           });
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Okänt fel vid skapande av SI-koppling.';
-        failures.push({
-          competitionId: competitionDoc.id,
-          competitorId: candidate.competitorId,
-          siNumber: candidate.siNumber,
-          message,
-        });
         console.error('[si-assignment-bootstrap] assignment creation failed', {
           competitionId: competitionDoc.id,
           competitorId: candidate.competitorId,
           siNumber: candidate.siNumber,
           error,
         });
+        throw error;
       }
     }
   }
@@ -1028,163 +1100,8 @@ export async function generateMissingSIAssignmentsFromFirestore(): Promise<{
     createdCount,
     skippedCount: skipped.length,
     duplicateGroupCount: duplicates.length,
-    failureCount: failures.length,
   });
-  return { before, after, createdCount, skipped, duplicates, failures };
-}
-
-export async function createCompetitionSICardAssignment(params: {
-  competitionId: string;
-  siNumber: number;
-  cardSeries: string;
-  competitorId: string | null;
-  state?: 'ACTIVE' | 'RETIRED' | 'DUPLICATE_CONFIRMED' | 'UNKNOWN';
-  assignmentVersion?: number;
-  source?: 'DIRECT_ENTRY' | 'IMPORT' | 'EVENTOR' | 'MANUAL' | 'READOUT' | 'SYSTEM';
-  ownerUid?: string;
-  previousCompetitorId?: string | null;
-  retiredAt?: Timestamp | null;
-  retirementReason?: string | null;
-  conflictReason?: string | null;
-  lastValidatedAt?: Timestamp | null;
-}): Promise<void> {
-  const current = await ensureValidFirestoreUser();
-  if (!current || !current.emailVerified) {
-    throw new Error('Ditt Google-konto saknar giltig Firestore-session för SI-kortstilldelning.');
-  }
-  const ref = getCompetitionSICardAssignmentRef(params.competitionId, params.siNumber);
-  const now = Timestamp.now();
-  const competitorId = params.competitorId;
-  logSIAssignmentRuleDiagnostics(
-    inspectSIAssignmentRuleMutations([
-      {
-        collection: 'siCardAssignments',
-        operation: 'create',
-        after: {
-          competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
-          siNumber: Number(params.siNumber),
-          competitorId,
-          state: params.state ?? 'ACTIVE',
-        },
-      },
-    ])
-  );
-  await setDoc(ref, {
-    competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
-    siNumber: Number(params.siNumber),
-    cardSeries: params.cardSeries,
-    competitorId,
-    competitorDocumentId: competitorId,
-    state: params.state ?? 'ACTIVE',
-    assignmentVersion: Number(params.assignmentVersion ?? 1),
-    source: params.source ?? 'MANUAL',
-    ownerUid: params.ownerUid ?? sanitizeFirestoreId(current.uid, 'usr'),
-    schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
-    createdAt: now,
-    updatedAt: now,
-    ...(params.previousCompetitorId !== undefined
-      ? { previousCompetitorId: params.previousCompetitorId }
-      : {}),
-    ...(params.retiredAt !== undefined ? { retiredAt: params.retiredAt } : {}),
-    ...(params.retirementReason !== undefined
-      ? { retirementReason: params.retirementReason }
-      : {}),
-    ...(params.conflictReason !== undefined
-      ? { conflictReason: params.conflictReason }
-      : {}),
-    ...(params.lastValidatedAt !== undefined
-      ? { lastValidatedAt: params.lastValidatedAt }
-      : {}),
-  });
-}
-
-export async function retireCompetitionSICardAssignment(params: {
-  competitionId: string;
-  siNumber: number;
-  cardSeries: string;
-  competitorId: string | null;
-  retirementReason?: string | null;
-  ownerUid?: string | null;
-}): Promise<void> {
-  const current = await ensureValidFirestoreUser();
-  if (!current || !current.emailVerified) {
-    throw new Error('Ditt Google-konto saknar giltig Firestore-session för SI-kortstilldelning.');
-  }
-  const ref = getCompetitionSICardAssignmentRef(params.competitionId, params.siNumber);
-  const now = Timestamp.now();
-  const competitorId = params.competitorId;
-  const existingSnapshot = await getDoc(ref);
-  if (existingSnapshot.exists()) {
-    const existing = parseSICardAssignmentDocument(
-      existingSnapshot.id,
-      sanitizeFirestoreId(params.competitionId, 'evt'),
-      existingSnapshot.data() as Record<string, unknown>
-    );
-    if (!existing) {
-      throw new Error(`SI-tilldelningen för ${params.siNumber} har ett ogiltigt format.`);
-    }
-    logSIAssignmentRuleDiagnostics(
-      inspectSIAssignmentRuleMutations([
-        {
-          collection: 'siCardAssignments',
-          operation: 'update',
-          before: {
-            competitionId: existing.competitionId,
-            siNumber: existing.siNumber,
-            competitorId: existing.competitorId,
-            state: existing.state,
-          },
-          after: {
-            competitionId: existing.competitionId,
-            siNumber: existing.siNumber,
-            competitorId: existing.competitorId,
-            state: 'RETIRED',
-          },
-        },
-      ])
-    );
-    await updateDoc(ref, {
-      state: 'RETIRED',
-      assignmentVersion: existing.assignmentVersion + 1,
-      updatedAt: now,
-      retiredAt: now,
-      retirementReason: params.retirementReason ?? 'retired',
-    });
-    return;
-  }
-  logSIAssignmentRuleDiagnostics(
-    inspectSIAssignmentRuleMutations([
-      {
-        collection: 'siCardAssignments',
-        operation: 'create',
-        after: {
-          competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
-          siNumber: Number(params.siNumber),
-          competitorId,
-          state: 'RETIRED',
-        },
-      },
-    ])
-  );
-  await setDoc(
-    ref,
-    {
-      competitionId: sanitizeFirestoreId(params.competitionId, 'evt'),
-      siNumber: Number(params.siNumber),
-      cardSeries: params.cardSeries,
-      competitorId,
-      competitorDocumentId: competitorId,
-      state: 'RETIRED',
-      assignmentVersion: 1,
-      source: 'MANUAL',
-      ownerUid: params.ownerUid ?? sanitizeFirestoreId(current.uid, 'usr'),
-      schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
-      createdAt: now,
-      updatedAt: now,
-      retiredAt: now,
-      retirementReason: params.retirementReason ?? 'retired',
-    }
-  );
+  return { before, after, createdCount, skipped, duplicates };
 }
 
 export async function ensureCompetitionSICardAssignmentSchema(
@@ -2029,6 +1946,24 @@ async function writeImportedCompetitorWithAssignment(params: {
         : null;
 
       if (intent === 'CREATE_COMPETITOR') {
+        const newIdentity = getCompetitorSIAssignmentIdentity(
+          competitionId,
+          competitorId,
+          {
+            ...params.mutable,
+            competitionId,
+            competitorId,
+            siNumber: params.siNumber,
+            cardSeries: params.cardSeries,
+            ownerUid: params.ownerUid,
+          }
+        );
+        if (
+          newIdentity.siNumber !== params.siNumber ||
+          newIdentity.cardSeries !== params.cardSeries
+        ) {
+          throw new Error(`Deltagarens SI-identitet är oförenlig med importen: ${competitorId}.`);
+        }
         if (competitorData) {
           throw new Error(
             `Deltagare ${competitorId} tillkom under importen. Läs in tävlingen igen och försök på nytt.`
@@ -2037,12 +1972,8 @@ async function writeImportedCompetitorWithAssignment(params: {
         if (
           assignmentSnapshot?.exists() &&
           (!assignment ||
-            assignment.state !== 'ACTIVE' ||
-            assignment.siNumber !== params.siNumber ||
-            assignment.competitorId !== competitorId ||
-            assignment.competitorDocumentId !== competitorId ||
-            assignment.ownerUid !== params.ownerUid ||
-            assignment.cardSeries !== params.cardSeries)
+            !assignmentMatchesCompetitorIdentity(assignment, newIdentity) ||
+            assignment.state !== 'ACTIVE')
         ) {
           throw new Error(
             `SI-bricka ${params.siNumber} har en befintlig, oförenlig ägartilldelning.`
@@ -2082,11 +2013,14 @@ async function writeImportedCompetitorWithAssignment(params: {
       if (!competitorData) {
         throw new Error(`Deltagaren ${competitorId} hittades inte vid importen.`);
       }
+      const currentIdentity = getCompetitorSIAssignmentIdentity(
+        competitionId,
+        competitorId,
+        competitorData
+      );
       const competitorOwnerUid =
         typeof competitorData.ownerUid === 'string' ? competitorData.ownerUid : '';
       if (
-        competitorData.competitorId !== competitorId ||
-        competitorData.competitionId !== competitionId ||
         !competitorOwnerUid ||
         (!params.isSuperAdmin && competitorOwnerUid !== params.ownerUid)
       ) {
@@ -2102,12 +2036,10 @@ async function writeImportedCompetitorWithAssignment(params: {
       }
       if (
         !assignment ||
+        !assignmentMatchesCompetitorIdentity(assignment, currentIdentity) ||
         assignment.state !== 'ACTIVE' ||
-        assignment.siNumber !== params.siNumber ||
-        assignment.competitorId !== competitorId ||
-        assignment.competitorDocumentId !== competitorId ||
-        assignment.ownerUid !== competitorOwnerUid ||
-        assignment.cardSeries !== params.cardSeries
+        currentIdentity.siNumber !== params.siNumber ||
+        currentIdentity.cardSeries !== params.cardSeries
       ) {
         throw new Error(
           `Deltagarens aktiva SI-tilldelning kunde inte verifieras för ${competitorId}.`
@@ -3603,7 +3535,7 @@ export function getAtomicSIAssignmentPreviewMetrics(): SIAssignmentPreviewMetric
   return { ...atomicSIAssignmentPreviewMetrics };
 }
 
-export async function runAtomicSIAssignmentMutation(
+async function runAtomicSIAssignmentMutation(
   params: AtomicSIAssignmentMutationRequest,
   write: (
     context: AtomicSIAssignmentMutationContext
@@ -3643,7 +3575,7 @@ export async function runAtomicSIAssignmentMutation(
           requestedSiNumber: requestedAssignmentSiNumber,
           diagnostic: 'DUPLICATE_CANDIDATE_QUERY_FAILED',
           error: duplicateCandidateQueryError,
-          enforcementActive: false,
+          enforcementActive: true,
         })}`
       );
     }
@@ -3676,6 +3608,31 @@ export async function runAtomicSIAssignmentMutation(
         siNumber,
         await transaction.get(getCompetitionSICardAssignmentRef(competitionId, siNumber))
       );
+    }
+
+    if (competitorData) {
+      const currentIdentity = getCompetitorSIAssignmentIdentity(
+        competitionId,
+        competitorId,
+        competitorData
+      );
+      const currentAssignmentSnapshot = assignmentSnapshots.get(currentIdentity.siNumber);
+      if (currentAssignmentSnapshot?.exists()) {
+        const currentAssignment = parseSICardAssignmentDocument(
+          currentAssignmentSnapshot.id,
+          competitionId,
+          currentAssignmentSnapshot.data()
+        );
+        assertSIAssignmentMatchesCompetitor(currentAssignment, currentIdentity);
+        if (
+          currentAssignment.state !== 'ACTIVE' &&
+          currentAssignment.state !== 'RETIRED'
+        ) {
+          throw new Error(
+            `SI-tilldelningen för ${competitorId} är inte i ett muterbart livscykeltillstånd.`
+          );
+        }
+      }
     }
 
     let assignmentMismatch = false;
@@ -3889,6 +3846,32 @@ export async function runAtomicSIAssignmentMutation(
             result,
           })
       );
+      const expectedAssignmentOutcome =
+        effectiveIntent === 'CREATE_COMPETITOR'
+          ? assignmentWriteOutcome !== undefined
+          : effectiveIntent === 'CHANGE_SI_NUMBER'
+            ? assignmentWriteOutcome === 'REASSIGNED'
+            : effectiveIntent === 'RETIRE_COMPETITOR' ||
+                effectiveIntent === 'DELETE_COMPETITOR'
+              ? assignmentWriteOutcome === 'RETIRED' ||
+                assignmentWriteOutcome === 'ALREADY_RETIRED'
+              : true;
+      if (!expectedAssignmentOutcome) {
+        throw new Error(
+          `SI-tilldelningsändringen saknar ett bekräftat resultat för ${effectiveIntent}; transaktionen avbröts.`
+        );
+      }
+      if (
+        assignmentWriteOutcome === 'SKIPPED_CONFLICT' ||
+        assignmentWriteOutcome === 'SKIPPED_INVALID_DATA' ||
+        assignmentWriteOutcome === 'SKIPPED_VERSION_LIMIT' ||
+        assignmentWriteOutcome === 'REASSIGNMENT_CONFLICT' ||
+        assignmentWriteOutcome === 'REASSIGNMENT_PARTIAL'
+      ) {
+        throw new Error(
+          `SI-tilldelningsändringen avbröts (${assignmentWriteOutcome}); deltagarändringen sparades inte.`
+        );
+      }
       if (assignmentWriteOutcome) {
         result.assignmentWriteOutcome = assignmentWriteOutcome;
       }
@@ -3897,33 +3880,10 @@ export async function runAtomicSIAssignmentMutation(
         competitionId,
         competitorId,
         assignmentWriteOutcome: result.assignmentWriteOutcome,
-        enforcementActive: false,
-        writesContinue: true,
+        enforcementActive: true,
+        failClosed: true,
       };
-      if (
-        result.assignmentWriteOutcome === 'SKIPPED_CONFLICT' ||
-        result.assignmentWriteOutcome === 'SKIPPED_INVALID_DATA' ||
-        result.assignmentWriteOutcome === 'SKIPPED_VERSION_LIMIT' ||
-        result.assignmentWriteOutcome === 'REASSIGNMENT_CONFLICT' ||
-        result.assignmentWriteOutcome === 'REASSIGNMENT_PARTIAL'
-      ) {
-        const diagnostic =
-          effectiveIntent === 'CREATE_COMPETITOR'
-            ? 'COMPETITOR_CREATED_WITHOUT_ASSIGNMENT'
-            : effectiveIntent === 'CHANGE_SI_NUMBER'
-              ? 'SI_REASSIGNMENT_ASSIGNMENT_UPDATE_INCOMPLETE'
-            : effectiveIntent === 'DELETE_COMPETITOR'
-              ? 'COMPETITOR_DELETED_WITHOUT_ASSIGNMENT_RETIREMENT'
-              : 'COMPETITOR_RETIREMENT_WITHOUT_ASSIGNMENT_UPDATE';
-        console.warn(
-          `[si-assignment-write] ${JSON.stringify({
-            ...assignmentWriteDiagnostic,
-            diagnostic,
-          })}`
-        );
-      } else {
-        console.info(`[si-assignment-write] ${JSON.stringify(assignmentWriteDiagnostic)}`);
-      }
+      console.info(`[si-assignment-write] ${JSON.stringify(assignmentWriteDiagnostic)}`);
     }
     return result;
   });
@@ -3938,7 +3898,7 @@ export async function runAtomicSIAssignmentMutation(
   };
   const previewDiagnostic = {
     ...result,
-    enforcementActive: false,
+    enforcementActive: true,
     assignmentWritesEnabled:
       result.intent === 'CREATE_COMPETITOR' ||
       result.intent === 'CHANGE_SI_NUMBER' ||
@@ -3948,7 +3908,7 @@ export async function runAtomicSIAssignmentMutation(
       result.assignmentWriteOutcome === 'CREATED' ||
       result.assignmentWriteOutcome === 'RETIRED' ||
       result.assignmentWriteOutcome === 'REASSIGNED',
-    writesContinue: true,
+    failClosed: true,
   };
   const log = result.previewPlan.wouldBeBlocked ? console.warn : console.info;
   log(`[atomic-si-preview] ${JSON.stringify(previewDiagnostic)}`);
@@ -4636,20 +4596,28 @@ export async function updateCompetitorInFirestore(
       if (competition.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
         throw new Error('Ditt konto saknar behörighet att uppdatera deltagaren.');
       }
+      const currentIdentity = getCompetitorSIAssignmentIdentity(
+        context.competitionId,
+        id,
+        existing
+      );
+      if (
+        typeof mutable.cardSeries === 'string' &&
+        (mutable.cardSeries.length < 1 || mutable.cardSeries.length > 24)
+      ) {
+        throw new Error('Deltagarens kortserie är ogiltig.');
+      }
       const nextSiNumber =
         typeof mutable.siNumber === 'number' ? mutable.siNumber : Number(existing.siNumber);
       let assignmentWriteOutcome: AtomicSIAssignmentWriteOutcome | undefined;
-      const currentSiNumber =
-        Number.isInteger(existing.siNumber) && Number(existing.siNumber) > 0
-          ? Number(existing.siNumber)
-          : null;
+      const currentSiNumber = currentIdentity.siNumber;
       if (
         typeof mutable.siNumber === 'number' &&
         (!Number.isInteger(nextSiNumber) ||
           nextSiNumber < 1 ||
           nextSiNumber > 99999999)
       ) {
-        assignmentWriteOutcome = 'SKIPPED_INVALID_DATA';
+        throw new Error('Deltagarens SI-nummer är ogiltigt.');
       }
       if (
         typeof mutable.siNumber === 'number' &&
@@ -4658,8 +4626,7 @@ export async function updateCompetitorInFirestore(
         nextSiNumber >= 1 &&
         nextSiNumber <= 99999999
       ) {
-        const currentAssignmentSnapshot =
-          currentSiNumber === null ? undefined : assignmentSnapshots.get(currentSiNumber);
+        const currentAssignmentSnapshot = assignmentSnapshots.get(currentSiNumber);
         const targetAssignmentSnapshot = assignmentSnapshots.get(nextSiNumber);
         const currentAssignment = currentAssignmentSnapshot?.exists()
           ? parseSICardAssignmentDocument(
@@ -4695,6 +4662,26 @@ export async function updateCompetitorInFirestore(
                 : 'SI-brickans befintliga ägarskap är oförenligt med omfördelningen.'
           );
         }
+        if (currentAssignment) {
+          assertSIAssignmentMatchesCompetitor(
+                currentAssignment,
+                currentIdentity
+          );
+        }
+        const nextIdentity = {
+          ...currentIdentity,
+          siNumber: nextSiNumber,
+          cardSeries:
+                typeof mutable.cardSeries === 'string'
+                  ? mutable.cardSeries
+                  : currentIdentity.cardSeries,
+        };
+        if (
+          targetAssignment?.state === 'ACTIVE' &&
+          targetAssignment.competitorId === id
+        ) {
+          assertSIAssignmentMatchesCompetitor(targetAssignment, nextIdentity, 'ACTIVE');
+        }
         const oldAction = plan.oldAssignment;
         const targetAction = plan.targetAssignment;
         const now = Timestamp.now();
@@ -4712,6 +4699,7 @@ export async function updateCompetitorInFirestore(
                 previousCompetitorId: id,
               }
             );
+            assignmentWriteOutcome = 'REASSIGNED';
           }
         } else if (oldAction === 'MISSING' && currentSiNumber !== null) {
           const retirementOutcome = retireSIAssignmentInTransaction({
@@ -4720,7 +4708,6 @@ export async function updateCompetitorInFirestore(
             competitorId: id,
             competitorData: existing,
             assignmentSnapshot: currentAssignmentSnapshot,
-            ownerUid: context.ownerUid,
             retirementReason: 'si_reassigned',
           });
           if (retirementOutcome !== 'RETIRED') {
@@ -4729,14 +4716,7 @@ export async function updateCompetitorInFirestore(
         }
 
         if (targetAction === 'CREATE') {
-          const cardSeries =
-            typeof mutable.cardSeries === 'string' &&
-            mutable.cardSeries.length > 0 &&
-            mutable.cardSeries.length <= 24
-              ? mutable.cardSeries
-              : typeof existing.cardSeries === 'string'
-                ? existing.cardSeries
-                : '';
+          const cardSeries = nextIdentity.cardSeries;
           if (cardSeries.length === 0 || cardSeries.length > 24) {
             throw new Error('Deltagarens kortserie är ogiltig.');
           }
@@ -4751,25 +4731,20 @@ export async function updateCompetitorInFirestore(
               state: 'ACTIVE',
               assignmentVersion: 1,
               source: 'MANUAL',
-              ownerUid: context.ownerUid,
+              ownerUid: nextIdentity.ownerUid,
               schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
               createdAt: now,
               updatedAt: now,
             }
           );
         } else if (targetAction === 'ACTIVATE' && targetAssignment) {
-          const cardSeries =
-            typeof mutable.cardSeries === 'string' &&
-            mutable.cardSeries.length > 0 &&
-            mutable.cardSeries.length <= 24
-              ? mutable.cardSeries
-              : targetAssignment.cardSeries;
           transaction.update(
             getCompetitionSICardAssignmentRef(context.competitionId, nextSiNumber),
             {
-              cardSeries,
+              cardSeries: nextIdentity.cardSeries,
               competitorId: id,
               competitorDocumentId: id,
+              ownerUid: nextIdentity.ownerUid,
               state: 'ACTIVE',
               assignmentVersion: targetAssignment.assignmentVersion + 1,
               updatedAt: now,
@@ -4795,6 +4770,36 @@ export async function updateCompetitorInFirestore(
             coveredPathEnforcement: true,
             writesContinue: true,
           })}`
+        );
+      }
+      if (
+        typeof mutable.cardSeries === 'string' &&
+        typeof mutable.siNumber !== 'number' &&
+        mutable.cardSeries !== currentIdentity.cardSeries
+      ) {
+        const currentAssignmentSnapshot = assignmentSnapshots.get(currentSiNumber);
+        const currentAssignment = currentAssignmentSnapshot?.exists()
+          ? parseSICardAssignmentDocument(
+              currentAssignmentSnapshot.id,
+              context.competitionId,
+              currentAssignmentSnapshot.data()
+            )
+          : null;
+        assertSIAssignmentMatchesCompetitor(
+          currentAssignment,
+          currentIdentity,
+          'ACTIVE'
+        );
+        if (currentAssignment.assignmentVersion >= 65535) {
+          throw new Error('SI-tilldelningen har nått versionsgränsen och kan inte ändras.');
+        }
+        transaction.update(
+          getCompetitionSICardAssignmentRef(context.competitionId, currentSiNumber),
+          {
+            cardSeries: mutable.cardSeries,
+            assignmentVersion: currentAssignment.assignmentVersion + 1,
+            updatedAt: serverTimestamp(),
+          }
         );
       }
       console.info(
@@ -4930,16 +4935,17 @@ export async function deleteCompetitorFromFirestore(
         throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
       }
       const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
-      const currentSiNumber =
-        typeof competitor.siNumber === 'number' ? competitor.siNumber : null;
+      const identity = getCompetitorSIAssignmentIdentity(
+        context.competitionId,
+        safeCompetitorId,
+        competitor
+      );
       const assignmentWriteOutcome = retireSIAssignmentInTransaction({
         transaction,
         competitionId: context.competitionId,
         competitorId: safeCompetitorId,
         competitorData: competitor,
-        assignmentSnapshot:
-          currentSiNumber === null ? undefined : assignmentSnapshots.get(currentSiNumber),
-        ownerUid: context.ownerUid,
+        assignmentSnapshot: assignmentSnapshots.get(identity.siNumber),
         retirementReason: 'competitor_deleted',
       });
       console.info(
@@ -4947,9 +4953,9 @@ export async function deleteCompetitorFromFirestore(
           intent: 'DELETE_COMPETITOR',
           competitionId: context.competitionId,
           competitorId: safeCompetitorId,
-          currentSiNumber: Number(competitor.siNumber),
+          currentSiNumber: identity.siNumber,
           action: 'retire_assignment_and_delete_competitor_atomically',
-          enforcementActive: false,
+          enforcementActive: true,
         })}`
       );
       transaction.delete(competitorRef);
@@ -5001,16 +5007,17 @@ export async function retireCompetitorInFirestore(
         throw new Error('Deltagare kan inte avanmäls från en avslutad tävling.');
       }
 
-      const siNumber =
-        typeof competitorData.siNumber === 'number' ? competitorData.siNumber : null;
+      const identity = getCompetitorSIAssignmentIdentity(
+        context.competitionId,
+        safeCompetitorId,
+        competitorData
+      );
       const assignmentWriteOutcome = retireSIAssignmentInTransaction({
         transaction,
         competitionId: context.competitionId,
         competitorId: safeCompetitorId,
         competitorData,
-        assignmentSnapshot:
-          siNumber === null ? undefined : assignmentSnapshots.get(siNumber),
-        ownerUid: context.ownerUid,
+        assignmentSnapshot: assignmentSnapshots.get(identity.siNumber),
         retirementReason,
       });
       const currentStatus = String(competitorData.status);
@@ -5058,26 +5065,14 @@ function retireSIAssignmentInTransaction(params: {
   competitorId: string;
   competitorData: Record<string, unknown>;
   assignmentSnapshot?: DocumentSnapshot;
-  ownerUid: string;
   retirementReason: string;
-}): AtomicSIAssignmentWriteOutcome {
-  const siNumber =
-    typeof params.competitorData.siNumber === 'number'
-      ? params.competitorData.siNumber
-      : Number.NaN;
-  const cardSeries = params.competitorData.cardSeries;
-  if (
-    !Number.isInteger(siNumber) ||
-    siNumber < 1 ||
-    siNumber > 99999999 ||
-    typeof cardSeries !== 'string' ||
-    cardSeries.length < 1 ||
-    cardSeries.length > 24 ||
-    !params.ownerUid
-  ) {
-    return 'SKIPPED_INVALID_DATA';
-  }
-
+}): 'RETIRED' | 'ALREADY_RETIRED' {
+  const identity = getCompetitorSIAssignmentIdentity(
+    params.competitionId,
+    params.competitorId,
+    params.competitorData
+  );
+  const siNumber = identity.siNumber;
   const existingAssignment =
     params.assignmentSnapshot?.exists()
       ? parseSICardAssignmentDocument(
@@ -5087,7 +5082,10 @@ function retireSIAssignmentInTransaction(params: {
         )
       : null;
   if (params.assignmentSnapshot?.exists() && !existingAssignment) {
-    return 'SKIPPED_CONFLICT';
+    throw new Error(`SI-tilldelningen för ${siNumber} har ett ogiltigt format.`);
+  }
+  if (existingAssignment) {
+    assertSIAssignmentMatchesCompetitor(existingAssignment, identity);
   }
   const action = planRetireSIAssignmentWrite(existingAssignment, params.competitorId);
   const assignmentRef = getCompetitionSICardAssignmentRef(
@@ -5098,13 +5096,13 @@ function retireSIAssignmentInTransaction(params: {
     params.transaction.set(assignmentRef, {
       competitionId: params.competitionId,
       siNumber,
-      cardSeries,
+      cardSeries: identity.cardSeries,
       competitorId: params.competitorId,
       competitorDocumentId: params.competitorId,
       state: 'RETIRED',
       assignmentVersion: 1,
       source: 'SYSTEM',
-      ownerUid: params.ownerUid,
+      ownerUid: identity.ownerUid,
       schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -5124,8 +5122,10 @@ function retireSIAssignmentInTransaction(params: {
     return 'RETIRED';
   }
   if (action === 'ALREADY_RETIRED') return 'ALREADY_RETIRED';
-  if (action === 'SKIP_VERSION_LIMIT') return 'SKIPPED_VERSION_LIMIT';
-  return 'SKIPPED_CONFLICT';
+  if (action === 'SKIP_VERSION_LIMIT') {
+    throw new Error(`SI-tilldelningen för ${siNumber} har nått versionsgränsen.`);
+  }
+  throw new Error(`SI-tilldelningen för ${siNumber} ägs inte av ${params.competitorId}.`);
 }
 
 export async function deleteRunnerDbEntryFromFirestore(siNumber: number): Promise<void> {
@@ -6048,6 +6048,17 @@ export async function submitReadoutToFirestore(
             throw new Error('Tävlingens startnummer har nått den tillåtna maxgränsen.');
           }
           createdCompetitor = { ...updatedCompetitor, bib };
+          const newIdentity = getCompetitorSIAssignmentIdentity(
+            competitionId,
+            competitorId,
+            {
+              competitionId,
+              competitorId,
+              siNumber,
+              cardSeries: createdCompetitor.cardSeries,
+              ownerUid,
+            }
+          );
           transaction.set(competitorRef, {
             competitorId,
             competitionId,
@@ -6056,7 +6067,7 @@ export async function submitReadoutToFirestore(
             club: createdCompetitor.club.slice(0, 100) || 'Klubblös',
             classId: createdCompetitor.classId,
             siNumber,
-            cardSeries: createdCompetitor.cardSeries,
+            cardSeries: newIdentity.cardSeries,
             isRentalCard: false,
             rentalReturned: false,
             feePaid: false,
@@ -6070,7 +6081,7 @@ export async function submitReadoutToFirestore(
             readoutAtIso: createdCompetitor.readoutAt || '',
             punchCodes: punches.map((punch) => punch.code),
             punchTimes: punches.map((punch) => punch.timeSec),
-            ownerUid,
+            ownerUid: newIdentity.ownerUid,
             readoutReceiptId: clientReadoutId,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -6078,13 +6089,13 @@ export async function submitReadoutToFirestore(
           transaction.set(getCompetitionSICardAssignmentRef(competitionId, siNumber), {
             competitionId,
             siNumber,
-            cardSeries: createdCompetitor.cardSeries,
+            cardSeries: newIdentity.cardSeries,
             competitorId,
             competitorDocumentId: competitorId,
             state: 'ACTIVE',
             assignmentVersion: 1,
             source: 'READOUT',
-            ownerUid,
+            ownerUid: newIdentity.ownerUid,
             schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -6442,9 +6453,13 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       async ({
         transaction,
         competitionData: currentCompetition,
+        competitorData,
         assignmentSnapshots,
         result,
       }) => {
+        if (competitorData) {
+          throw new Error(`Deltagar-ID:t ${competitorId} är redan upptaget.`);
+        }
         if (result.duplicateCandidateDetected || result.duplicateCandidateQueryError) {
           throw new Error(
             result.duplicateCandidateDetected
@@ -6506,6 +6521,16 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
                 assignmentSnapshot.data()
               )
             : null;
+        const newIdentity = getCompetitorSIAssignmentIdentity(
+          competitionId,
+          competitorId,
+          {
+            ...mutableCompetitor,
+            competitionId,
+            competitorId,
+            ownerUid,
+          }
+        );
         const assignmentAction =
           !Number.isInteger(siNumber) ||
           siNumber < 1 ||
@@ -6532,13 +6557,13 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
           transaction.set(getCompetitionSICardAssignmentRef(competitionId, siNumber), {
             competitionId,
             siNumber,
-            cardSeries: competitor.cardSeries,
+            cardSeries: newIdentity.cardSeries,
             competitorId,
             competitorDocumentId: competitorId,
             state: 'ACTIVE',
             assignmentVersion: 1,
             source: 'DIRECT_ENTRY',
-            ownerUid,
+            ownerUid: newIdentity.ownerUid,
             schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),

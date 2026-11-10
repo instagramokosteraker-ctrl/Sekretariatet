@@ -41,7 +41,7 @@ Last updated: 2026-11-10
 
 ## Future architecture migration phases
 
-**Current-status note (2026-11-10):** The numbered phase narratives below preserve implementation history and are not the current cutover verdict. In particular, P0 Step 6 describes pre-Step-7 rules; P0 Step 7 describes the initial rule fence but does not account for its DNS/DNF exception, assignment-only helper paths, skipped-retirement outcomes, or card-series parity gap. The canonical current verdict and evidence are in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md) and [FINAL_READINESS_BLOCKERS.md](./FINAL_READINESS_BLOCKERS.md).
+**Current-status note (2026-11-10):** The numbered phase narratives below preserve implementation history and are not the current cutover verdict. P0 Step 6 describes pre-Step-7 rules; P0 Step 7 describes the initial rule fence. The assignment boundary was subsequently hardened: standalone assignment helpers were removed, bootstrap rereads and validates competitors in the transaction, lifecycle writes fail closed, and current rules require matching competitor changes and identity/card-series/owner parity. See [ASSIGNMENT_BOUNDARY_HARDENING.md](./ASSIGNMENT_BOUNDARY_HARDENING.md). The canonical current verdict and evidence are in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md) and [FINAL_READINESS_BLOCKERS.md](./FINAL_READINESS_BLOCKERS.md).
 
 ### Phase 4 — Atomic SI matching foundation
 

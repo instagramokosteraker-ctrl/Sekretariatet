@@ -47,6 +47,29 @@ const OPTIONAL_FIELDS = [
 ];
 const ALLOWED_FIELDS = new Set([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
+export interface CompetitorSIAssignmentIdentity {
+  competitionId: string;
+  competitorId: string;
+  siNumber: number;
+  cardSeries: string;
+  ownerUid: string;
+}
+
+export function assignmentMatchesCompetitorIdentity(
+  assignment: SICardAssignment | null,
+  identity: CompetitorSIAssignmentIdentity
+): boolean {
+  return Boolean(
+    assignment &&
+      assignment.competitionId === identity.competitionId &&
+      assignment.siNumber === identity.siNumber &&
+      assignment.competitorId === identity.competitorId &&
+      assignment.competitorDocumentId === identity.competitorId &&
+      assignment.cardSeries === identity.cardSeries &&
+      assignment.ownerUid === identity.ownerUid
+  );
+}
+
 function isOptionalString(value: unknown): value is string | null | undefined {
   return value === undefined || value === null || typeof value === 'string';
 }

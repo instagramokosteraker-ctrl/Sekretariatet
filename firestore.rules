@@ -663,6 +663,7 @@ service cloud.firestore {
         getAfter(competitorPath).data.competitorId == competitorId &&
         getAfter(competitorPath).data.competitionId == competitionId &&
         getAfter(competitorPath).data.siNumber == siNumber &&
+        getAfter(competitorPath).data.cardSeries == getAfter(assignmentPath).data.cardSeries &&
         getAfter(competitorPath).data.ownerUid == ownerUid;
     }
 
@@ -679,72 +680,50 @@ service cloud.firestore {
     }
 
     function hasCompetitorSIOrLifecycleMutationAfter(competitionId, competitorId) {
+      let competitorPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
       return isValidId(competitorId) &&
         (
-          !exists(
-            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
-          ) ||
-          !existsAfter(
-            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
-          ) ||
-          getAfter(
-            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
-          ).data.status == 'DNS' ||
-          getAfter(
-            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
-          ).data.status == 'DNF' ||
-          getAfter(
-            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
-          ).data.diff(
-            get(
-              /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
-            ).data
+          (!exists(competitorPath) && existsAfter(competitorPath)) ||
+          (exists(competitorPath) && !existsAfter(competitorPath)) ||
+          (
+            exists(competitorPath) &&
+            existsAfter(competitorPath) &&
+            getAfter(competitorPath).data.diff(get(competitorPath).data)
+              .affectedKeys().hasAny(['siNumber', 'cardSeries', 'status', 'updatedAt'])
           )
-            .affectedKeys().hasAny(['siNumber', 'status'])
         );
     }
 
     function assignmentMatchesCompetitorAfter(competitionId, assignment) {
+      let competitorPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId);
       return isValidId(assignment.competitorId) &&
         (
           assignment.state == 'ACTIVE'
-            ? existsAfter(
-                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-              ) &&
-              getAfter(
-                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-              ).data.siNumber == assignment.siNumber &&
-              getAfter(
-                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-              ).data.competitorId == assignment.competitorId &&
-              getAfter(
-                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-              ).data.competitionId == competitionId &&
-              getAfter(
-                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-              ).data.ownerUid == assignment.ownerUid
+            ? existsAfter(competitorPath) &&
+              getAfter(competitorPath).data.siNumber == assignment.siNumber &&
+              getAfter(competitorPath).data.competitorId == assignment.competitorId &&
+              getAfter(competitorPath).data.competitionId == competitionId &&
+              getAfter(competitorPath).data.cardSeries == assignment.cardSeries &&
+              getAfter(competitorPath).data.ownerUid == assignment.ownerUid
             : assignment.state == 'RETIRED' &&
+              exists(competitorPath) &&
+              get(competitorPath).data.competitorId == assignment.competitorId &&
+              get(competitorPath).data.competitionId == competitionId &&
+              get(competitorPath).data.siNumber == assignment.siNumber &&
+              get(competitorPath).data.cardSeries == assignment.cardSeries &&
+              get(competitorPath).data.ownerUid == assignment.ownerUid &&
               (
-                !existsAfter(
-                  /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-                ) ||
+                !existsAfter(competitorPath) ||
                 (
-                  getAfter(
-                    /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-                  ).data.competitorId == assignment.competitorId &&
-                  getAfter(
-                    /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-                  ).data.ownerUid == assignment.ownerUid &&
+                  getAfter(competitorPath).data.competitorId == assignment.competitorId &&
+                  getAfter(competitorPath).data.competitionId == competitionId &&
+                  getAfter(competitorPath).data.ownerUid == assignment.ownerUid &&
                   (
-                    getAfter(
-                      /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-                    ).data.siNumber != assignment.siNumber ||
-                    getAfter(
-                      /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-                    ).data.status == 'DNS' ||
-                    getAfter(
-                      /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-                    ).data.status == 'DNF'
+                    getAfter(competitorPath).data.siNumber != assignment.siNumber ||
+                    getAfter(competitorPath).data.status == 'DNS' ||
+                    getAfter(competitorPath).data.status == 'DNF'
                   )
                 )
               )
@@ -1335,8 +1314,8 @@ service cloud.firestore {
       // -----------------------------------------------------------------------
       // 4a. /competitions/{competitionId}/siCardAssignments/{siNumber}
       // -----------------------------------------------------------------------
-      // P0 Step 7: assignment mutations must share a commit with the matching
-      // competitor identity/lifecycle mutation. This is not a uniqueness check.
+      // Assignment mutations must share a commit with a matching competitor
+      // create, deletion, or relevant update. This is not a uniqueness query.
       match /siCardAssignments/{siNumber} {
         allow get: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1355,14 +1334,19 @@ service cloud.firestore {
           isValidSICardAssignment(incoming()) &&
           incoming().competitionId == competitionId &&
           incoming().siNumber == int(siNumber) &&
-          incoming().ownerUid == request.auth.uid &&
           parentCompetitionExists(competitionId) &&
           hasCompetitorSIOrLifecycleMutationAfter(
             competitionId,
             incoming().competitorId
           ) &&
           assignmentMatchesCompetitorAfter(competitionId, incoming()) &&
-          (isAdmin() || readoutAssignmentMatchesRunnerDb(competitionId, incoming()));
+          (
+            isAdmin() ||
+            (
+              incoming().ownerUid == request.auth.uid &&
+              readoutAssignmentMatchesRunnerDb(competitionId, incoming())
+            )
+          );
 
         allow update: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1372,7 +1356,10 @@ service cloud.firestore {
           incoming().competitionId == existing().competitionId &&
           incoming().siNumber == existing().siNumber &&
           incoming().createdAt == existing().createdAt &&
-          incoming().ownerUid == existing().ownerUid &&
+          (
+            incoming().ownerUid == existing().ownerUid ||
+            (existing().state == 'RETIRED' && incoming().state == 'ACTIVE')
+          ) &&
           incoming().schemaVersion == existing().schemaVersion &&
           parentCompetitionExists(competitionId) &&
           hasCompetitorSIOrLifecycleMutationAfter(
@@ -1662,8 +1649,20 @@ service cloud.firestore {
           incoming().updatedAt == request.time &&
           parentCompetitionExists(competitionId) &&
           (
-            incoming().siNumber == existing().siNumber ||
             (
+              incoming().siNumber == existing().siNumber &&
+              (
+                incoming().cardSeries == existing().cardSeries ||
+                hasActiveSIAssignmentAfter(
+                  competitionId,
+                  incoming().siNumber,
+                  incoming().competitorId,
+                  incoming().ownerUid
+                )
+              )
+            ) ||
+            (
+              incoming().siNumber != existing().siNumber &&
               hasRetiredSIAssignmentAfter(
                 competitionId,
                 existing().siNumber,
