@@ -5,6 +5,7 @@ import {
 } from '../firebase';
 import {
   formatSIAssignmentInventoryMarkdown,
+  SIAssignmentInventoryQueryError,
   type SIAssignmentInventoryReport,
 } from '../utils/siAssignmentInventory';
 
@@ -12,19 +13,25 @@ export function SIAssignmentInventoryView() {
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<SIAssignmentInventoryReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [queryFailure, setQueryFailure] = useState<SIAssignmentInventoryQueryError['diagnostic'] | null>(null);
 
   const runInventory = async () => {
     setBusy(true);
     setError(null);
+    setQueryFailure(null);
     try {
       setReport(await scanSIAssignmentInventoryFromFirestore());
     } catch (scanError) {
       setReport(null);
-      setError(
-        scanError instanceof Error
-          ? scanError.message
-          : 'SI-inventeringen kunde inte genomföras.'
-      );
+      if (scanError instanceof SIAssignmentInventoryQueryError) {
+        setQueryFailure(scanError.diagnostic);
+      } else {
+        setError(
+          scanError instanceof Error
+            ? scanError.message
+            : 'SI-inventeringen kunde inte genomföras.'
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -79,6 +86,23 @@ export function SIAssignmentInventoryView() {
         <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
           Skanningen misslyckades: {error}
         </p>
+      )}
+
+      {queryFailure && (
+        <div
+          role="alert"
+          className="space-y-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+        >
+          <p className="font-bold">ERROR</p>
+          <p><span className="font-semibold">Path:</span> {queryFailure.path}</p>
+          <p><span className="font-semibold">Competition ID:</span> {queryFailure.competitionId ?? '—'}</p>
+          <p><span className="font-semibold">Operation:</span> {queryFailure.operation}</p>
+          <p><span className="font-semibold">Error code:</span> {queryFailure.errorCode}</p>
+          <p><span className="font-semibold">Required role:</span> {queryFailure.requiredRole}</p>
+          <p><span className="font-semibold">Actual role:</span> {queryFailure.userRole}</p>
+          <p><span className="font-semibold">Admin tier:</span> {queryFailure.adminTier}</p>
+          <p><span className="font-semibold">Details:</span> {queryFailure.message}</p>
+        </div>
       )}
 
       {report && (

@@ -2,6 +2,27 @@ import { parseSICardAssignmentDocument } from './siCardAssignments';
 
 export type SIAssignmentInventorySeverity = 'INFO' | 'WARNING' | 'ERROR';
 
+export interface SIAssignmentInventoryQueryFailure {
+  path: string;
+  competitionId: string | null;
+  operation: 'list';
+  errorCode: string;
+  userRole: string;
+  adminTier: string;
+  requiredRole: string;
+  message: string;
+}
+
+export class SIAssignmentInventoryQueryError extends Error {
+  readonly diagnostic: SIAssignmentInventoryQueryFailure;
+
+  constructor(diagnostic: SIAssignmentInventoryQueryFailure) {
+    super(diagnostic.message);
+    this.name = 'SIAssignmentInventoryQueryError';
+    this.diagnostic = diagnostic;
+  }
+}
+
 export interface SIAssignmentInventoryIssue {
   severity: SIAssignmentInventorySeverity;
   conflictType: string;

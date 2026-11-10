@@ -71,6 +71,7 @@ import {
 } from './utils/siCardAssignments';
 import {
   buildSIAssignmentInventory,
+  SIAssignmentInventoryQueryError,
   type SIAssignmentInventoryReport,
 } from './utils/siAssignmentInventory';
 import { declareCompetitorMutation } from './utils/siAssignmentDiagnostics';
@@ -712,15 +713,72 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
     throw new Error('Endast SUPER_ADMIN och RACE_ADMIN får skapa SI-inventeringen.');
   }
 
-  const competitionSnapshot = await getDocs(collection(db, 'competitions'));
+  const actualRole = authorization.adminTier
+    ? 'ADMIN'
+    : authorization.officialRole ?? 'UNKNOWN';
+  const adminTier = authorization.adminTier ?? 'NONE';
+  const readInventoryCollection = async <T>(
+    path: string,
+    competitionId: string | null,
+    requiredRole: string,
+    read: () => Promise<T>
+  ): Promise<T> => {
+    try {
+      return await read();
+    } catch (error) {
+      const errorCode =
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        typeof error.code === 'string'
+          ? error.code
+          : 'unknown';
+      const message =
+        error instanceof Error ? error.message : 'Okänt Firestore-fel.';
+      throw new SIAssignmentInventoryQueryError({
+        path,
+        competitionId,
+        operation: 'list',
+        errorCode,
+        userRole: actualRole,
+        adminTier,
+        requiredRole,
+        message,
+      });
+    }
+  };
+
+  const competitionPath = 'competitions';
+  const competitionSnapshot = await readInventoryCollection(
+    competitionPath,
+    null,
+    'Verifierad användare enligt Firestore-regeln; inventeringsfunktionen kräver SUPER_ADMIN eller RACE_ADMIN',
+    () => getDocs(collection(db, 'competitions'))
+  );
   const competitions: SIAssignmentInventoryReport['competitions'] = [];
   let competitorCount = 0;
   let assignmentCount = 0;
 
   for (const competitionDoc of competitionSnapshot.docs) {
     const [competitorSnapshot, assignmentSnapshot] = await Promise.all([
-      getDocs(collection(db, 'competitions', competitionDoc.id, 'competitors')),
-      getDocs(getCompetitionSICardAssignmentsCollection(competitionDoc.id)),
+      readInventoryCollection(
+        `competitions/${competitionDoc.id}/competitors`,
+        competitionDoc.id,
+        'Inget rollkrav i regeln; giltigt competitionId och befintlig tävling krävs',
+        () =>
+          getDocs(
+            collection(db, 'competitions', competitionDoc.id, 'competitors')
+          )
+      ),
+      readInventoryCollection(
+        `competitions/${competitionDoc.id}/siCardAssignments`,
+        competitionDoc.id,
+        'SUPER_ADMIN, RACE_ADMIN eller officiell roll READOUT',
+        () =>
+          getDocs(
+            getCompetitionSICardAssignmentsCollection(competitionDoc.id)
+          )
+      ),
     ]);
     const competitionData = competitionDoc.data();
     const inventory = buildSIAssignmentInventory({
