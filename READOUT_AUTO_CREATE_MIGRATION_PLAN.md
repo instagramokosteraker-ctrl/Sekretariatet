@@ -1,312 +1,37 @@
-# Readout Auto-Create Migration Plan
+# Readout Auto-Create Migration Record
 
-Status: Design baseline; implemented in [READOUT_AUTOCREATE_IMPLEMENTATION.md](./READOUT_AUTOCREATE_IMPLEMENTATION.md).
+Status: **MIGRATED** — 2026-11-10.
 
-The current-flow sections below describe the pre-migration implementation.
+This document preserves the reason readout auto-create was a blocker and records the implemented replacement. The current status and any remaining system-level blockers are maintained in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md). Readout auto-create is not on that active blocker list.
 
-## Executive summary
+## Current implementation
 
-`POST /api/readout` currently contains a legacy auto-create path that can create a new competitor identity from `runnerDb` when a readout arrives for an SI number that is not already present in the active event. That path is not routed through the Firestore-authoritative competitor/assignment flow and does not create or validate a canonical SI assignment record. In its current state, it can bypass Atomic SI Matching, competitor ownership rules, assignment uniqueness guarantees, and the Firestore transaction boundary.
+When runner-database auto-create is enabled for an unmatched SI number, the Firestore readout helper creates the competitor, active `siCardAssignments/{siNumber}` document, immutable readout receipt, and competition count projections in one Firestore transaction. A stable `clientReadoutId` makes retries idempotent; reuse of the ID with different input is rejected.
 
-This is a P0 blocker and should be treated as a hard migration requirement before any GO decision for competitor ownership cutover.
+If assignment ownership already exists, duplicate competitor candidates are found, the duplicate scan fails, runnerDb identity changed, or the proposed competitor ID is occupied, the operation records an `UNKNOWN` receipt without creating competitor identity or an assignment. The SI assignment document serializes competing claims for the same unassigned SI.
 
-## Current execution chain for `POST /api/readout`
+The Express `/api/readout` and online-punch processing paths no longer create competitor identities in `seasonDb`. The durable offline-readout queue submits to the Firestore helper. The implementation and validation notes are in [READOUT_AUTOCREATE_IMPLEMENTATION.md](./READOUT_AUTOCREATE_IMPLEMENTATION.md).
 
-### 1. Readout enters the online punch pipeline
+## Historical blocker: pre-migration behavior
 
-The readout route is handled in `server.ts` via the shared online punch processor.
+Before the migration, the Express readout/online-punch flow looked up an unmatched SI number in `seasonDb.runnerDb`. With auto-create enabled, it synthesized a competitor with a locally generated ID, inserted it into the active event's competitor list, persisted the season snapshot, and broadcast state.
 
-Relevant current behavior from `processOnlinePunchForEvent(...)`:
+That write had no canonical SI assignment, no atomic ownership check, and no Firestore transaction. Two concurrent or divergent clients could create event-local competitors for the same card; identity could then drift from Firestore, and rollback had no paired assignment lifecycle operation. Diagnostics only observed the write and did not prevent it. For these reasons readout auto-create was correctly treated as a critical identity ownership blocker before migration.
 
-- It finds a runner by matching the incoming SI number against `ev.competitors`.
-- If no active runner is found, it looks for a match in `seasonDb.runnerDb`.
-- If a runnerDb match exists and `seasonDb.eventor.autoCreateFromRunnerDbOnReadout` is enabled, it synthesizes a `Competitor` object in memory.
+The historical description above is not a description of current runtime behavior. The old local insertion, ID generation, and season snapshot identity write were removed.
 
-### 2. Unknown competitor creation trigger
+## Scope and remaining limitations
 
-The creation branch is:
+- The migration closes the specific readout auto-create identity bypass; it does not resolve other legacy competitor writers. Refer to the canonical list in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).
+- The Firestore Web SDK remains the transaction client. Rules constrain the narrow readout create path, but a trusted server/Functions boundary remains the target for privileged writes and complete all-writer enforcement.
+- Duplicate competitor lookup occurs before the transaction because Web SDK transactions cannot query. Query failure is fail-closed, and the assignment document is the concurrency lock for simultaneous new claims.
+- Express `/api/readout` remains a compatibility processor for existing competitors/local live-event data; it does not replace canonical Firestore readout receipts and result processing.
+- Firestore emulator tests require a running emulator. The implementation record states that build and TypeScript lint/type-check were the required validation; it does not claim emulator validation.
 
-- `const dbMatch = seasonDb.runnerDb.find((r) => r.siNumber === params.siNumber) ?? null`
-- `if (!runner && dbMatch && seasonDb.eventor.autoCreateFromRunnerDbOnReadout)`
-- Then it creates a record like:
-  - `id: cmp-<timestamp>-<random>`
-  - `bib: maxBib + 1`
-  - `fullName: dbMatch.fullName`
-  - `club: dbMatch.club`
-  - `classId: preferredCls?.id ?? 'cls-open'`
-  - `siNumber: params.siNumber`
-  - `cardSeries: dbMatch.cardSeries`
-  - `status: 'REGISTERED'`
+## Historical migration approach
 
-This new competitor is then inserted into the active event with:
+The original plan was to remove the Express fallback, preserve unmatched cards as unknown, and then create identity only through an atomic competitor-plus-assignment transaction. The implementation followed that safe direction, with the readout receipt and count projections included in the same transaction. The old phase checklist is superseded by the implementation record and this current status; do not treat it as pending work.
 
-- `ev.competitors.unshift(autoCreatedRunner)`
+## Rollback
 
-### 3. Mutation boundary used by the legacy path
-
-The legacy auto-create is wrapped in a mutation diagnostic helper:
-
-- `runCompetitorMutation({
-    source: 'cloud readout auto-create from runner database',
-    operation: 'CREATE',
-    competitionId: ev.competition.id,
-    competitorId: autoCreatedRunner.id,
-    siNumber: autoCreatedRunner.siNumber,
-    assignmentHandling: {
-      mode: 'LEGACY',
-      reason: 'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.'
-    },
-    identityAffecting: true,
-  }, () => ev.competitors.unshift(autoCreatedRunner))`
-
-This is the key signal: the path is intentionally treated as a legacy flow and is not writing the assignment contract. It only emits diagnostics and then performs the write.
-
-### 4. SI ownership assignment behavior
-
-The current flow does not do any of the following:
-
-- create a Firestore document under `competitions/{competitionId}/siCardAssignments/{siNumber}`
-- check whether the requested SI number is already assigned to another competitor
-- activate or retire an assignment record
-- validate that the card is active and belongs to the competing entity
-- enforce uniqueness or conflict resolution
-
-The SI is only used as a matching key in the local event and runnerDb. It is not bound to a canonical assignment record during readout creation.
-
-### 5. Competitor identity generation behavior
-
-The competitor identity is generated locally in-process:
-
-- `id: cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-
-This creates a new competitor identity without a synchronized ownership transaction or assignment record. There is no unique canonical source of truth ensuring that the generated record is consistent with Firestore or assignment state.
-
-### 6. runnerDb / seasonDb mutation behavior
-
-The route does not directly mutate `seasonDb.runnerDb` in the auto-create branch itself, but it does mutate the in-memory active event state and then persists the season database:
-
-- existing event competitor list is mutated in memory
-- the result is persisted via the server persistence lifecycle (`saveSeasonDatabase(...)` / `persistUserMutation`)
-- websockets broadcast the updated state to clients
-
-This means the auto-created competitor becomes part of the season snapshot and is treated as a persisted local data object, even though the assignment contract was never created.
-
-## Current flow diagram
-
-```text
-POST /api/readout
-  -> processOnlinePunchForEvent(...)
-      -> find by ev.competitors.siNumber
-      -> if not found: lookup seasonDb.runnerDb by siNumber
-      -> if autoCreateFromRunnerDbOnReadout is enabled
-          -> synthesize new Competitor object
-          -> runCompetitorMutation(... mode: LEGACY ...)
-          -> ev.competitors.unshift(autoCreatedRunner)
-          -> persistUserMutation/saveSeasonDatabase()
-          -> broadcastFullState()
-      -> continue readout event creation / status updates
-```
-
-## Data ownership map
-
-| Component | Current role | Authority model | Notes |
-|---|---|---|---|
-| `seasonDb.runnerDb` | Legacy runner directory | LEGACY / compatibility lookup | Used as an identity source for auto-create fallback |
-| `ev.competitors` | Active event competitor list | LEGACY / local event source | Mutable in-memory list for current competition |
-| Firestore `competitors/*` | Intended canonical competitor records | AUTHORITATIVE target | Must be the canonical identity owner after migration |
-| Firestore `competitions/{competitionId}/siCardAssignments/{siNumber}` | Intended canonical SI assignment ownership | AUTHORITATIVE target | Missing in the current readout path |
-| `ev.events` | Readout/event stream | LOCAL / runtime | Real-time event lineage, not identity authority |
-| WebSocket state | Broadcast of local state | DISTRIBUTION only | Not a write authority |
-
-## Write targets
-
-The current readout auto-create branch writes to:
-
-- `ev.competitors` (in-memory competitor list for active event)
-- server-side persisted season DB (`seasonDb` via `saveSeasonDatabase`) 
-- event/state broadcasts (not canonical data, but state propagation)
-
-It does not write to:
-
-- Firestore `competitors/*`
-- Firestore `siCardAssignments/*`
-- authoritative readout receipt collection
-
-## Authority analysis
-
-### Current authority
-
-The route is effectively a legacy, event-local write path.
-
-It is not authoritative because:
-
-- it does not create the assignment record required by the Atomic SI Matching contract
-- it does not validate ownership against the canonical SI assignment model
-- it does not use a Firestore transaction boundary
-- it does not reject duplicate SI assignments or re-use conflicts
-- it only logs diagnostics without blocking the write
-
-### Intended authority after migration
-
-The authoritative model should be:
-
-- competitor identity is created only via a canonical server-side transaction
-- competitor creation requires an ACTIVE assignment ownership
-- SI assignment ownership is created or reactivated in the same transaction
-- readout acceptance is processed against the canonical competitor/assignment state
-
-## Uniqueness risks
-
-The current flow exposes several risks:
-
-1. Duplicate SI creation risk
-   - Two concurrent readouts for the same unknown SI can each create a new competitor if the first has not yet persisted or been assigned.
-
-2. Duplicate competitor identity risk
-   - `Date.now()` + random ID generation is not tied to canonical identity assignment and does not ensure uniqueness against Firestore state.
-
-3. Assignment ownership drift
-   - A new competitor may be inserted with an SI number that is already represented by a different competitor in the assignment space, without any check.
-
-4. Event-local mismatch risk
-   - The active event's local competitor list may diverge from the Firestore assignment source of truth because the write path never updates the assignment model.
-
-## Race conditions
-
-The current pattern is vulnerable to race conditions for the following reasons:
-
-- the existence check and assignment-free creation are split across separate in-memory operations
-- the path checks local event state but not the authoritative assignment collection
-- it uses a non-transactional, in-process insertion into the event list
-- readout processing can be concurrent across multiple connected clients or import sources
-
-This is a classic create-then-assign pattern, but with no assignment step at all.
-
-## Rollback implications
-
-A legacy auto-create has poor rollback semantics:
-
-- If a later step fails, the in-memory competitor may remain persisted to season state
-- There is no compensating delete or assignment retirement transaction
-- There is no durable audit that clearly identifies the competitor as auto-created from runnerDb
-- It is difficult to reverse if a readout was accepted by mistake or if a later import resolves the same SI differently
-
-The safe migration pattern is to create the competitor and assignment as a single atomic unit and then persist the readout receipt only after the identity + assignment step succeeds.
-
-## Bypass analysis against migration guarantees
-
-### Atomic SI Matching
-
-Current result: YES, it bypasses Atomic SI Matching.
-
-Reason:
-
-- no `siCardAssignments` create or validation
-- no assignment lifecycle check
-- no transaction boundary to pair the identity and assignment writes
-
-### Competitor ownership
-
-Current result: YES, it bypasses competitor ownership guarantees.
-
-Reason:
-
-- competitor identity is created from runnerDb without verifying ownership in the canonical model
-- the route uses legacy local state instead of authoritative competitor/assignment ownership
-
-### Assignment uniqueness
-
-Current result: YES, it bypasses assignment uniqueness guarantees.
-
-Reason:
-
-- no assignment record is created
-- no duplicate detection or active-ownership check is performed
-
-### Firestore transaction boundary
-
-Current result: YES, it bypasses the transaction boundary.
-
-Reason:
-
-- the mutation exists in the legacy Express/local season state
-- no Firestore transaction is used
-- diagnostics are informational only and do not enforce the rule
-
-## Target architecture
-
-The intended architecture is:
-
-```text
-Unknown readout
-  -> classify as unknown or unbound competitor
-  -> Atomic competitor creation
-      -> canonical competitor identity record created
-      -> ownership metadata attached to same transaction
-  -> Atomic SI assignment
-      -> validate ACTIVE assignment or create/activate one atomically
-      -> reject duplicate/malformed/retired ownership conflicts
-  -> Readout persistence
-      -> persist readout receipt after identity + assignment validation
-      -> only then mark runner as active in the event state
-```
-
-### Target logic
-
-1. `POST /api/readout` receives a readout for SI `N`.
-2. Lookup active event competitors and authoritative assignment state.
-3. If no valid competitor exists:
-   - create a competitor record only through the canonical backend helper
-   - require or create a valid `siCardAssignments/{N}` assignment in the same transaction
-4. If the assignment is already taken, reject or route to a conflict path instead of synthesizing a local competitor.
-5. Append the readout receipt only after the transaction succeeds.
-
-## Recommended implementation phases
-
-### Phase 0 — Disable the legacy auto-create fallback
-
-- feature-flag the `autoCreateFromRunnerDbOnReadout` behavior
-- default it off in production
-- emit a warning when a readout would have auto-created a competitor
-- keep legacy path only for controlled, shadow-mode diagnostics
-
-### Phase 1 — Replace with explicit unknown-card handling
-
-- when the SI is unknown and no valid competitor exists, emit an `UNKNOWN_CARD`/`UNRESOLVED_IDENTITY` result
-- do not create a competitor in this stage
-- allow later reconciliation by admin flow or import pipeline
-
-### Phase 2 — Canonical atomic competitor creation
-
-- add an explicit backend helper for: create competitor + assignment in one transaction
-- validate competition context and assignment state before creating
-- include idempotency and conflict handling
-
-### Phase 3 — Atomic SI assignment
-
-- create or activate the assignment record in the same transaction
-- retire or reject conflicting ownership if required by policy
-- guarantee uniqueness and ownership invariants before competitor persistence
-
-### Phase 4 — Readout persistence and cleanup
-
-- persist readout receipts after canonical identity/assignment creation succeeds
-- remove any direct legacy creation path from the readout pipeline
-- remove runnerDb fallback auto-create from active runtime
-
-## Recommended migration decision
-
-The current readout auto-create path should be treated as a hard blocker until it is replaced with a canonical atomic write path.
-
-Recommendation: NO-GO for competitor ownership cutover while this path remains enabled.
-
-## Final assessment
-
-The code shows that readout auto-create can currently bypass:
-
-- Atomic SI Matching
-- competitor ownership
-- assignment uniqueness guarantees
-- Firestore transaction boundary
-
-Therefore, the route is not acceptable as a production-authoritative write path. The correct migration target is to disable the legacy auto-create branch and replace it with an explicit unknown-card flow followed by atomic competitor + SI assignment creation in a single trusted backend transaction.
+Disable `autoCreateFromRunnerDbOnReadout` to stop new automatic creation while retaining unknown readout receipts. Do not restore the Express auto-create branch. Reversing an auto-created competitor must use the canonical retirement/deletion flow; preserve its immutable readout receipt.
