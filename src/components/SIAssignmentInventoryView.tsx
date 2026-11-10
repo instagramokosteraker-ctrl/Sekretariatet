@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Download, RefreshCw } from 'lucide-react';
+import { Download, RefreshCw, UserPlus } from 'lucide-react';
 import {
+  generateMissingSIAssignmentsFromFirestore,
   scanSIAssignmentInventoryFromFirestore,
 } from '../firebase';
 import {
@@ -12,6 +13,10 @@ import {
 export function SIAssignmentInventoryView() {
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<SIAssignmentInventoryReport | null>(null);
+  const [reportBefore, setReportBefore] = useState<SIAssignmentInventoryReport | null>(null);
+  const [bootstrapSummary, setBootstrapSummary] = useState<Awaited<
+    ReturnType<typeof generateMissingSIAssignmentsFromFirestore>
+  > | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [queryFailure, setQueryFailure] = useState<SIAssignmentInventoryQueryError['diagnostic'] | null>(null);
 
@@ -19,6 +24,8 @@ export function SIAssignmentInventoryView() {
     setBusy(true);
     setError(null);
     setQueryFailure(null);
+    setReportBefore(null);
+    setBootstrapSummary(null);
     try {
       setReport(await scanSIAssignmentInventoryFromFirestore());
     } catch (scanError) {
@@ -37,9 +44,61 @@ export function SIAssignmentInventoryView() {
     }
   };
 
+  const generateMissingAssignments = async () => {
+    if (
+      !window.confirm(
+        'Skapa SI-kopplingar för löpare med giltigt och unikt SI-nummer som saknar koppling? Befintliga uppgifter ändras inte.'
+      )
+    ) {
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    setQueryFailure(null);
+    setReport(null);
+    setReportBefore(null);
+    setBootstrapSummary(null);
+    try {
+      const result = await generateMissingSIAssignmentsFromFirestore();
+      setReportBefore(result.before);
+      setReport(result.after);
+      setBootstrapSummary(result);
+    } catch (scanError) {
+      if (scanError instanceof SIAssignmentInventoryQueryError) {
+        setQueryFailure(scanError.diagnostic);
+      } else {
+        setError(
+          scanError instanceof Error
+            ? scanError.message
+            : 'SI-kopplingarna kunde inte skapas.'
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const downloadReport = () => {
     if (!report) return;
-    const markdown = formatSIAssignmentInventoryMarkdown(report);
+    const markdown = bootstrapSummary && reportBefore
+      ? [
+          '# Resultat av skapandet av SI-kopplingar',
+          '',
+          `- Skapade SI-kopplingar: ${bootstrapSummary.createdCount}`,
+          `- Överhoppade löpare: ${bootstrapSummary.skipped.length}`,
+          `- SI-dubbletter att reda ut: ${bootstrapSummary.duplicates.length}`,
+          `- Misslyckade skapanden: ${bootstrapSummary.failures.length}`,
+          '',
+          '## Inventering före skapandet',
+          '',
+          formatSIAssignmentInventoryMarkdown(reportBefore),
+          '',
+          '## Inventering efter skapandet',
+          '',
+          formatSIAssignmentInventoryMarkdown(report),
+        ].join('\n')
+      : formatSIAssignmentInventoryMarkdown(report);
     const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
@@ -52,7 +111,7 @@ export function SIAssignmentInventoryView() {
     <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
       <div>
         <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-          SI Assignment Inventory
+        Inventering av SI-kopplingar
         </h2>
         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
           Skrivskyddad kontroll av tävlingarnas löpare och SI-kopplingar.
@@ -69,6 +128,15 @@ export function SIAssignmentInventoryView() {
         >
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
           {busy ? 'Skannar Firestore...' : 'Skanna Firestore'}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void generateMissingAssignments()}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800 disabled:opacity-50 dark:border-slate-700 dark:text-slate-100"
+        >
+          <UserPlus className="h-3.5 w-3.5" />
+          {busy ? 'Arbetar...' : 'Skapa saknade SI-kopplingar'}
         </button>
         {report && (
           <button
@@ -107,15 +175,74 @@ export function SIAssignmentInventoryView() {
 
       {report && (
         <div className="space-y-2">
+          {bootstrapSummary && reportBefore && (
+            <section className="space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-950">
+              <p className="font-semibold text-slate-900 dark:text-slate-100">
+                Resultat av bootstrap
+              </p>
+              <p>Skapade SI-kopplingar: {bootstrapSummary.createdCount}</p>
+              <p>Överhoppade löpare: {bootstrapSummary.skipped.length}</p>
+              <p>Dubblettgrupper som kräver manuell hantering: {bootstrapSummary.duplicates.length}</p>
+              <p>Misslyckade skapanden: {bootstrapSummary.failures.length}</p>
+              {bootstrapSummary.skipped.length > 0 && (
+                <ul className="list-inside list-disc text-slate-600 dark:text-slate-300">
+                  {Object.entries(
+                    bootstrapSummary.skipped.reduce<Record<string, number>>((counts, item) => {
+                      counts[item.reason] = (counts[item.reason] ?? 0) + 1;
+                      return counts;
+                    }, {})
+                  ).map(([reason, count]) => (
+                    <li key={reason}>{getSkippedReasonLabel(reason)}: {count}</li>
+                  ))}
+                </ul>
+              )}
+              {bootstrapSummary.duplicates.map((duplicate) => (
+                <p key={`${duplicate.competitionId}-${duplicate.siNumber}`} className="text-amber-700 dark:text-amber-300">
+                  Dubblett i {duplicate.competitionId}: SI {duplicate.siNumber} — {duplicate.competitorIds.join(', ')} (överhoppad)
+                </p>
+              ))}
+              {bootstrapSummary.failures.map((failure) => (
+                <p key={`${failure.competitionId}-${failure.siNumber}`} role="alert" className="text-red-700 dark:text-red-300">
+                  Misslyckades: {failure.competitionId}, SI {failure.siNumber}, löpare {failure.competitorId}: {failure.message}
+                </p>
+              ))}
+            </section>
+          )}
+          {reportBefore && (
+            <details className="rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-800">
+              <summary className="cursor-pointer font-semibold">
+                Inventering före skapandet ({reportBefore.competitionCount} tävlingar, {reportBefore.competitorCount} löpare, {reportBefore.assignmentCount} SI-kopplingar)
+              </summary>
+              <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-slate-50 p-3 text-[11px] dark:bg-slate-950">
+                {formatSIAssignmentInventoryMarkdown(reportBefore)}
+              </pre>
+            </details>
+          )}
           <p role="status" className="text-xs text-slate-600 dark:text-slate-300">
-            Kontrollerade {report.competitionCount} tävlingar, {report.competitorCount} löpare
-            och {report.assignmentCount} SI-kopplingar.
+            {reportBefore ? 'Inventering efter skapandet:' : 'Kontrollerade'}
+            {' '}{report.competitionCount} tävlingar, {report.competitorCount} löpare och {report.assignmentCount} SI-kopplingar.
           </p>
           <pre className="max-h-[32rem] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">
+            {reportBefore ? 'Inventering efter skapandet\n\n' : ''}
             {formatSIAssignmentInventoryMarkdown(report)}
           </pre>
         </div>
       )}
     </section>
   );
+}
+
+function getSkippedReasonLabel(reason: string): string {
+  switch (reason) {
+    case 'INVALID_SI_NUMBER':
+      return 'Ogiltigt SI-nummer';
+    case 'DUPLICATE_SI_NUMBER':
+      return 'SI-numret förekommer på flera löpare';
+    case 'ALREADY_EXISTS':
+      return 'SI-koppling fanns redan';
+    case 'INVALID_CARD_SERIES':
+      return 'Ogiltig bricktyp';
+    default:
+      return 'Övrig anledning';
+  }
 }

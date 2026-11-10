@@ -71,7 +71,10 @@ import {
 } from './utils/siCardAssignments';
 import {
   buildSIAssignmentInventory,
+  planMissingSIAssignments,
   SIAssignmentInventoryQueryError,
+  type MissingSIAssignmentDuplicate,
+  type MissingSIAssignmentSkip,
   type SIAssignmentInventoryReport,
 } from './utils/siAssignmentInventory';
 import { declareCompetitorMutation } from './utils/siAssignmentDiagnostics';
@@ -857,6 +860,152 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
     assignmentCount,
     competitions,
   };
+}
+
+export async function generateMissingSIAssignmentsFromFirestore(): Promise<{
+  before: SIAssignmentInventoryReport;
+  after: SIAssignmentInventoryReport;
+  createdCount: number;
+  skipped: Array<MissingSIAssignmentSkip & { competitionId: string }>;
+  duplicates: Array<MissingSIAssignmentDuplicate & { competitionId: string }>;
+  failures: Array<{
+    competitionId: string;
+    competitorId: string;
+    siNumber: number;
+    message: string;
+  }>;
+}> {
+  const before = await scanSIAssignmentInventoryFromFirestore();
+  const authorization = await getCurrentFirebaseRoles();
+  if (!authorization.adminTier) {
+    throw new Error('Endast SUPER_ADMIN och RACE_ADMIN får skapa SI-kopplingar.');
+  }
+
+  const competitionsSnapshot = await getDocs(collection(db, 'competitions'));
+  const skipped: Array<MissingSIAssignmentSkip & { competitionId: string }> = [];
+  const duplicates: Array<MissingSIAssignmentDuplicate & { competitionId: string }> = [];
+  const failures: Array<{
+    competitionId: string;
+    competitorId: string;
+    siNumber: number;
+    message: string;
+  }> = [];
+  let createdCount = 0;
+
+  for (const competitionDoc of competitionsSnapshot.docs) {
+    const [competitorsSnapshot, assignmentsSnapshot] = await Promise.all([
+      getDocs(collection(db, 'competitions', competitionDoc.id, 'competitors')),
+      getDocs(getCompetitionSICardAssignmentsCollection(competitionDoc.id)),
+    ]);
+    const competitorRecords = competitorsSnapshot.docs.map((competitorDoc) => ({
+      documentId: competitorDoc.id,
+      data: competitorDoc.data() as Record<string, unknown>,
+    }));
+    const plan = planMissingSIAssignments({
+      competitors: competitorRecords,
+      existingAssignmentDocumentIds: new Set(
+        assignmentsSnapshot.docs.map((assignmentDoc) => assignmentDoc.id)
+      ),
+    });
+
+    skipped.push(
+      ...plan.skipped.map((item) => ({
+        ...item,
+        competitionId: competitionDoc.id,
+      }))
+    );
+    for (const duplicate of plan.duplicates) {
+      duplicates.push({ ...duplicate, competitionId: competitionDoc.id });
+      console.warn('[si-assignment-bootstrap] duplicate detected', {
+        competitionId: competitionDoc.id,
+        siNumber: duplicate.siNumber,
+        competitorIds: duplicate.competitorIds,
+      });
+    }
+
+    for (const skippedItem of plan.skipped) {
+      console.info('[si-assignment-bootstrap] assignment skipped', {
+        competitionId: competitionDoc.id,
+        ...skippedItem,
+      });
+    }
+
+    for (const candidate of plan.candidates) {
+      const assignmentRef = getCompetitionSICardAssignmentRef(
+        competitionDoc.id,
+        candidate.siNumber
+      );
+      try {
+        const wasCreated = await runTransaction(db, async (transaction) => {
+          const existingAssignment = await transaction.get(assignmentRef);
+          if (existingAssignment.exists()) return false;
+
+          const now = Timestamp.now();
+          transaction.set(assignmentRef, {
+            competitionId: competitionDoc.id,
+            siNumber: candidate.siNumber,
+            cardSeries: candidate.cardSeries,
+            competitorId: candidate.competitorId,
+            competitorDocumentId: candidate.competitorId,
+            state: 'ACTIVE',
+            assignmentVersion: 1,
+            source: 'SYSTEM',
+            ownerUid: authorization.user.uid,
+            schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+            createdAt: now,
+            updatedAt: now,
+          });
+          return true;
+        });
+
+        if (wasCreated) {
+          createdCount += 1;
+          console.info('[si-assignment-bootstrap] assignment created', {
+            competitionId: competitionDoc.id,
+            siNumber: candidate.siNumber,
+            competitorId: candidate.competitorId,
+          });
+        } else {
+          skipped.push({
+            competitorId: candidate.competitorId,
+            siNumber: String(candidate.siNumber),
+            reason: 'ALREADY_EXISTS',
+            competitionId: competitionDoc.id,
+          });
+          console.info('[si-assignment-bootstrap] assignment skipped', {
+            competitionId: competitionDoc.id,
+            competitorId: candidate.competitorId,
+            siNumber: candidate.siNumber,
+            reason: 'ALREADY_EXISTS',
+          });
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Okänt fel vid skapande av SI-koppling.';
+        failures.push({
+          competitionId: competitionDoc.id,
+          competitorId: candidate.competitorId,
+          siNumber: candidate.siNumber,
+          message,
+        });
+        console.error('[si-assignment-bootstrap] assignment creation failed', {
+          competitionId: competitionDoc.id,
+          competitorId: candidate.competitorId,
+          siNumber: candidate.siNumber,
+          error,
+        });
+      }
+    }
+  }
+
+  const after = await scanSIAssignmentInventoryFromFirestore();
+  console.info('[si-assignment-bootstrap] completed', {
+    createdCount,
+    skippedCount: skipped.length,
+    duplicateGroupCount: duplicates.length,
+    failureCount: failures.length,
+  });
+  return { before, after, createdCount, skipped, duplicates, failures };
 }
 
 export async function createCompetitionSICardAssignment(params: {

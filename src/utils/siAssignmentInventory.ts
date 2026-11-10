@@ -52,6 +52,29 @@ export interface SIAssignmentInventoryRecord {
   data: Record<string, unknown>;
 }
 
+export interface MissingSIAssignmentCandidate {
+  competitorId: string;
+  siNumber: number;
+  cardSeries: string;
+}
+
+export interface MissingSIAssignmentSkip {
+  competitorId: string;
+  siNumber: string;
+  reason: 'INVALID_SI_NUMBER' | 'DUPLICATE_SI_NUMBER' | 'ALREADY_EXISTS' | 'INVALID_CARD_SERIES';
+}
+
+export interface MissingSIAssignmentDuplicate {
+  siNumber: number;
+  competitorIds: string[];
+}
+
+export interface MissingSIAssignmentPlan {
+  candidates: MissingSIAssignmentCandidate[];
+  skipped: MissingSIAssignmentSkip[];
+  duplicates: MissingSIAssignmentDuplicate[];
+}
+
 interface AssignmentRecord extends SIAssignmentInventoryRecord {
   siNumber: number | null;
   competitorId: string | null;
@@ -102,6 +125,80 @@ function displaySiNumber(value: unknown): string {
 
 function distinct(values: Array<string | null>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+}
+
+export function planMissingSIAssignments(params: {
+  competitors: SIAssignmentInventoryRecord[];
+  existingAssignmentDocumentIds: Set<string>;
+}): MissingSIAssignmentPlan {
+  const { competitors, existingAssignmentDocumentIds } = params;
+  const groupsBySi = new Map<number, SIAssignmentInventoryRecord[]>();
+  const skipped: MissingSIAssignmentSkip[] = [];
+  const candidates: MissingSIAssignmentCandidate[] = [];
+
+  for (const competitor of competitors) {
+    const siNumber = competitor.data.siNumber;
+    if (!VALID_SI_NUMBER(siNumber)) {
+      skipped.push({
+        competitorId: competitor.documentId,
+        siNumber: displaySiNumber(siNumber),
+        reason: 'INVALID_SI_NUMBER',
+      });
+      continue;
+    }
+
+    const group = groupsBySi.get(siNumber) ?? [];
+    group.push(competitor);
+    groupsBySi.set(siNumber, group);
+  }
+
+  const duplicates: MissingSIAssignmentDuplicate[] = [];
+  for (const [siNumber, group] of groupsBySi) {
+    if (group.length > 1) {
+      const competitorIds = group.map((competitor) => competitor.documentId);
+      duplicates.push({ siNumber, competitorIds });
+      for (const competitorId of competitorIds) {
+        skipped.push({
+          competitorId,
+          siNumber: String(siNumber),
+          reason: 'DUPLICATE_SI_NUMBER',
+        });
+      }
+      continue;
+    }
+
+    const competitor = group[0];
+    if (existingAssignmentDocumentIds.has(String(siNumber))) {
+      skipped.push({
+        competitorId: competitor.documentId,
+        siNumber: String(siNumber),
+        reason: 'ALREADY_EXISTS',
+      });
+      continue;
+    }
+
+    const cardSeries = competitor.data.cardSeries;
+    if (
+      typeof cardSeries !== 'string' ||
+      cardSeries.trim().length === 0 ||
+      cardSeries.length > 24
+    ) {
+      skipped.push({
+        competitorId: competitor.documentId,
+        siNumber: String(siNumber),
+        reason: 'INVALID_CARD_SERIES',
+      });
+      continue;
+    }
+
+    candidates.push({
+      competitorId: competitor.documentId,
+      siNumber,
+      cardSeries,
+    });
+  }
+
+  return { candidates, skipped, duplicates };
 }
 
 export function buildSIAssignmentInventory(params: {

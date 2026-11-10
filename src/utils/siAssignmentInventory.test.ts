@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSIAssignmentInventory,
   formatSIAssignmentInventoryMarkdown,
+  planMissingSIAssignments,
   type SIAssignmentInventoryReport,
 } from './siAssignmentInventory';
 
@@ -19,6 +20,52 @@ const assignment = (
 });
 
 describe('SI assignment inventory', () => {
+  it('plans only unique valid SI numbers with no existing assignment', () => {
+    const plan = planMissingSIAssignments({
+      competitors: [
+        {
+          documentId: 'cmp_unique',
+          data: { siNumber: 11, cardSeries: 'SI-Card 10' },
+        },
+        {
+          documentId: 'cmp_duplicate_a',
+          data: { siNumber: 12, cardSeries: 'SI-Card 10' },
+        },
+        {
+          documentId: 'cmp_duplicate_b',
+          data: { siNumber: 12, cardSeries: 'SI-Card 10' },
+        },
+        {
+          documentId: 'cmp_existing',
+          data: { siNumber: 13, cardSeries: 'SI-Card 8' },
+        },
+        {
+          documentId: 'cmp_invalid_series',
+          data: { siNumber: 14, cardSeries: '' },
+        },
+        {
+          documentId: 'cmp_invalid_si',
+          data: { siNumber: 0, cardSeries: 'SI-Card 9' },
+        },
+      ],
+      existingAssignmentDocumentIds: new Set(['13']),
+    });
+
+    expect(plan.candidates).toEqual([
+      { competitorId: 'cmp_unique', siNumber: 11, cardSeries: 'SI-Card 10' },
+    ]);
+    expect(plan.duplicates).toEqual([
+      { siNumber: 12, competitorIds: ['cmp_duplicate_a', 'cmp_duplicate_b'] },
+    ]);
+    expect(plan.skipped.map((item) => item.reason).sort()).toEqual([
+      'DUPLICATE_SI_NUMBER',
+      'DUPLICATE_SI_NUMBER',
+      'ALREADY_EXISTS',
+      'INVALID_CARD_SERIES',
+      'INVALID_SI_NUMBER',
+    ].sort());
+  });
+
   it('reports competitor and assignment conflicts without modifying source records', () => {
     const report = buildSIAssignmentInventory({
       competitionId: 'evt_test',
