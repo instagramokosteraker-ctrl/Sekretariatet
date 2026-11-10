@@ -1,6 +1,8 @@
 # Readout Auto-Create Migration Plan
 
-Status: Analysis/design only. No code changes.
+Status: Design baseline; implemented in [READOUT_AUTOCREATE_IMPLEMENTATION.md](./READOUT_AUTOCREATE_IMPLEMENTATION.md).
+
+The current-flow sections below describe the pre-migration implementation.
 
 ## Executive summary
 

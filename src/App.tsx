@@ -979,12 +979,15 @@ export default function App() {
   const submitFullReadoutToServer = useCallback(
     async (readout: FullCardReadoutPayload) => {
       const res = await offlineReadoutQueue.submitReadoutGuaranteed(
-        readout,
+        {
+          ...readout,
+          autoCreateFromRunnerDb: eventor.autoCreateFromRunnerDbOnReadout,
+        },
         activeEventIdRef.current
       );
       handleReadoutResultFeedback(res);
     },
-    [handleReadoutResultFeedback]
+    [eventor.autoCreateFromRunnerDbOnReadout, handleReadoutResultFeedback]
   );
 
   const submitOnlinePunchToServer = useCallback(

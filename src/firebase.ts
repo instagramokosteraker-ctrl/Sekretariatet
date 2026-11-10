@@ -5527,6 +5527,17 @@ export async function submitOnlinePunchToFirestore(
   });
 }
 
+function buildReadoutAutoCreateCompetitorId(clientReadoutId: string): string {
+  let firstHash = 2166136261;
+  let secondHash = 5381;
+  for (let index = 0; index < clientReadoutId.length; index += 1) {
+    const code = clientReadoutId.charCodeAt(index);
+    firstHash = Math.imul(firstHash ^ code, 16777619) >>> 0;
+    secondHash = (Math.imul(secondHash, 33) ^ code) >>> 0;
+  }
+  return `cmp_ro_${firstHash.toString(36)}_${secondHash.toString(36)}`;
+}
+
 export async function submitReadoutToFirestore(
   eventId: string | undefined,
   readout: FullCardReadoutPayload
@@ -5593,7 +5604,10 @@ export async function submitReadoutToFirestore(
   });
 
   const season = await loadFullSeasonFromFirestore({ competitionId: eventId });
-  const event = season?.events.find(
+  if (!season) {
+    throw new Error('Tävlingen kunde inte läsas från Firestore för den köade avläsningen.');
+  }
+  const event = season.events.find(
     (candidate) =>
       candidate.competition.id === eventId ||
       candidate.competition.shortCode.toLowerCase() === eventId.toLowerCase()
@@ -5606,7 +5620,7 @@ export async function submitReadoutToFirestore(
   const eligibleRunners = event.competitors.filter(
     (runner) => runner.siNumber === siNumber && runner.status !== 'DNS'
   );
-  const runner =
+  let runner =
     eligibleRunners.find(
       (candidate) =>
         candidate.status === 'IN_FOREST' ||
@@ -5635,6 +5649,61 @@ export async function submitReadoutToFirestore(
       .split(':')
       .reduce((acc, part) => acc * 60 + Number(part), 0)
   );
+  const runnerDbMatch = runner
+    ? null
+    : (season.runnerDb ?? []).find((candidate) => candidate.siNumber === siNumber) ?? null;
+  let autoCreatedFromRunnerDb = false;
+  if (!runner && runnerDbMatch && readout.autoCreateFromRunnerDb === true) {
+    const defaultClassName = runnerDbMatch.defaultClassName?.trim();
+    const namedClass = defaultClassName
+      ? event.classes.find(
+          (candidate) =>
+            candidate.name.toLowerCase() === defaultClassName.toLowerCase()
+        )
+      : null;
+    const openAutoClass = event.classes.find((candidate) => candidate.autoMatchCourse) ?? null;
+    let selectedClass = namedClass ?? openAutoClass ?? event.classes[0] ?? null;
+    if (namedClass && openAutoClass && punches.length > 0) {
+      const classCheck = validateCompetitorReadout(
+        namedClass,
+        event.courses,
+        cardStartTimeSec ?? event.competition.zeroTimeSec,
+        cardFinishTimeSec ?? nowSec,
+        punches,
+        event.emergency ?? { brokenControls: event.brokenControls, controlTimeOffsets: {} }
+      );
+      if (!classCheck.ok) selectedClass = openAutoClass;
+    }
+    runner = {
+      id: buildReadoutAutoCreateCompetitorId(clientReadoutId),
+      bib:
+        Math.max(400, ...event.competitors.map((candidate) => Number(candidate.bib) || 0)) +
+        1,
+      fullName: runnerDbMatch.fullName.slice(0, 120),
+      club: runnerDbMatch.club.slice(0, 100) || 'Klubblös',
+      classId: selectedClass?.id ?? 'cls_open',
+      siNumber,
+      cardSeries: runnerDbMatch.cardSeries,
+      isRentalCard: false,
+      rentalReturned: false,
+      feePaid: false,
+      status: 'REGISTERED',
+      allocatedStartSec: null,
+      checkTimeSec: null,
+      startTimeSec: null,
+      finishTimeSec: null,
+      manualFinishTimeSec: null,
+      runningTimeSec: null,
+      lastSeenControl: null,
+      lastSeenTimeSec: null,
+      readoutAt: null,
+      radioSplits: [],
+      cardPunches: [],
+      rawReadout: null,
+      validation: null,
+    };
+    autoCreatedFromRunnerDb = true;
+  }
   const cardStartIsStale =
     cardStartTimeSec !== null &&
     punches.length > 0 &&
@@ -5675,7 +5744,10 @@ export async function submitReadoutToFirestore(
           lastSeenControl: 1,
           lastSeenTimeSec: effectiveFinish,
           readoutAt: nowIso,
-          cardPunches: applyEmergencyTimeOffsets(punches, {}),
+          cardPunches: applyEmergencyTimeOffsets(
+            punches,
+            event.emergency?.controlTimeOffsets ?? {}
+          ),
           rawReadout: {
             checkTimeSec,
             startTimeSec: usableCardStart ?? null,
@@ -5699,6 +5771,243 @@ export async function submitReadoutToFirestore(
     clientReadoutId
   );
   const ownerUid = current.uid;
+  const commonReceipt = {
+    receiptId: clientReadoutId,
+    competitionId,
+    ownerUid,
+    clientReadoutId,
+    siNumber,
+    cardSeries: readout.cardSeries,
+    stationCode:
+      Number.isInteger(readout.stationCode) &&
+      readout.stationCode >= 1 &&
+      readout.stationCode <= 999
+        ? readout.stationCode
+        : 1,
+    checkTimeSec: encodeNullableSec(checkTimeSec),
+    startTimeSec: encodeNullableSec(cardStartTimeSec),
+    finishTimeSec: encodeNullableSec(cardFinishTimeSec),
+    punchCodes: punches.map((punch) => punch.code),
+    punchTimes: punches.map((punch) => punch.timeSec),
+    rawHex: (readout.rawHex || '').slice(0, 2000),
+    createdAt: serverTimestamp(),
+  };
+  const receiptMatchesPayload = (receipt: Record<string, unknown>): boolean =>
+    receipt.siNumber === siNumber &&
+    receipt.cardSeries === readout.cardSeries &&
+    receipt.stationCode === commonReceipt.stationCode &&
+    receipt.checkTimeSec === commonReceipt.checkTimeSec &&
+    receipt.startTimeSec === commonReceipt.startTimeSec &&
+    receipt.finishTimeSec === commonReceipt.finishTimeSec &&
+    JSON.stringify(receipt.punchCodes) === JSON.stringify(commonReceipt.punchCodes) &&
+    JSON.stringify(receipt.punchTimes) === JSON.stringify(commonReceipt.punchTimes) &&
+    receipt.rawHex === commonReceipt.rawHex;
+
+  if (autoCreatedFromRunnerDb && runner && updatedCompetitor && validation) {
+    const competitorId = sanitizeFirestoreId(runner.id, 'cmp');
+    const competitorRef = doc(
+      db,
+      'competitions',
+      competitionId,
+      'competitors',
+      competitorId
+    );
+    let assignmentResult = 'PENDING';
+    let createdCompetitor = updatedCompetitor;
+    let receiptStatus: 'UNKNOWN' | 'PROCESSED' | null = null;
+    try {
+      const mutationResult = await runAtomicSIAssignmentMutation(
+        {
+          intent: 'CREATE_COMPETITOR',
+          competitor: { competitionId, competitorId },
+          assignment: { requestedSiNumber: siNumber },
+        },
+        async ({
+          transaction,
+          competitionData,
+          assignmentSnapshots,
+          result: transactionContext,
+        }) => {
+          const existingReceipt = await transaction.get(receiptRef);
+          if (existingReceipt.exists()) {
+            const existing = existingReceipt.data();
+            if (!receiptMatchesPayload(existing)) {
+              throw new Error('Readout-ID:t används för en annan avläsning.');
+            }
+            assignmentResult = 'IDEMPOTENT_REPLAY';
+            receiptStatus = existing.status === 'UNKNOWN' ? 'UNKNOWN' : 'PROCESSED';
+            return 'NOT_APPLICABLE';
+          }
+
+          if (competitionData.status === 'COMPLETED') {
+            throw new Error('Tävlingen är avslutad och tar inte emot fler avläsningar.');
+          }
+
+          const assignmentSnapshot = assignmentSnapshots.get(siNumber);
+          const runnerRef = doc(db, 'runnerDb', String(siNumber));
+          const runnerSnapshot = await transaction.get(runnerRef);
+          const runnerData = runnerSnapshot.exists() ? runnerSnapshot.data() : null;
+          const assignmentConflict = Boolean(assignmentSnapshot?.exists());
+          const duplicateCompetitor = transactionContext.duplicateCandidateDetected;
+          const duplicateCheckFailed =
+            transactionContext.duplicateCandidateQueryError !== null;
+          const identitySourceMatches =
+            runnerData !== null &&
+            Number(runnerData.siNumber) === siNumber &&
+            runnerData.fullName === runnerDbMatch?.fullName &&
+            runnerData.club === runnerDbMatch?.club &&
+            runnerData.cardSeries === runnerDbMatch?.cardSeries;
+
+          if (
+            !runnerSnapshot.exists() ||
+            !identitySourceMatches ||
+            assignmentConflict ||
+            duplicateCompetitor ||
+            duplicateCheckFailed ||
+            transactionContext.competitorExists
+          ) {
+            assignmentResult = assignmentConflict
+              ? 'CONFLICT_EXISTING_ASSIGNMENT'
+              : duplicateCompetitor
+                ? 'CONFLICT_DUPLICATE_COMPETITOR'
+                : duplicateCheckFailed
+                  ? 'CONFLICT_DUPLICATE_CHECK_FAILED'
+                  : !identitySourceMatches
+                  ? 'CONFLICT_RUNNER_DB_CHANGED'
+                  : 'CONFLICT_COMPETITOR_ID_EXISTS';
+            transaction.set(receiptRef, {
+              ...commonReceipt,
+              status: 'UNKNOWN',
+              competitorId: '',
+            });
+            receiptStatus = 'UNKNOWN';
+            return 'NOT_APPLICABLE';
+          }
+
+          const observedMaxBib = Math.max(
+            400,
+            ...event.competitors.map((candidate) => Number(candidate.bib) || 0)
+          );
+          const competitorCount = Math.max(
+            0,
+            Number(competitionData.competitorCount) || 0
+          );
+          const bib =
+            Math.max(observedMaxBib, 400) +
+            Math.max(0, competitorCount - event.competitors.length) +
+            1;
+          if (bib > 99999) {
+            throw new Error('Tävlingens startnummer har nått den tillåtna maxgränsen.');
+          }
+          createdCompetitor = { ...updatedCompetitor, bib };
+          transaction.set(competitorRef, {
+            competitorId,
+            competitionId,
+            bib,
+            fullName: createdCompetitor.fullName.slice(0, 120),
+            club: createdCompetitor.club.slice(0, 100) || 'Klubblös',
+            classId: createdCompetitor.classId,
+            siNumber,
+            cardSeries: createdCompetitor.cardSeries,
+            isRentalCard: false,
+            rentalReturned: false,
+            feePaid: false,
+            status: createdCompetitor.status,
+            allocatedStartSec: encodeNullableSec(createdCompetitor.allocatedStartSec),
+            checkTimeSec: encodeNullableSec(createdCompetitor.checkTimeSec),
+            startTimeSec: encodeNullableSec(createdCompetitor.startTimeSec),
+            finishTimeSec: encodeNullableSec(createdCompetitor.finishTimeSec),
+            manualFinishTimeSec: encodeNullableSec(createdCompetitor.manualFinishTimeSec),
+            runningTimeSec: encodeNullableSec(createdCompetitor.runningTimeSec),
+            readoutAtIso: createdCompetitor.readoutAt || '',
+            punchCodes: punches.map((punch) => punch.code),
+            punchTimes: punches.map((punch) => punch.timeSec),
+            ownerUid,
+            readoutReceiptId: clientReadoutId,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          transaction.set(getCompetitionSICardAssignmentRef(competitionId, siNumber), {
+            competitionId,
+            siNumber,
+            cardSeries: createdCompetitor.cardSeries,
+            competitorId,
+            competitorDocumentId: competitorId,
+            state: 'ACTIVE',
+            assignmentVersion: 1,
+            source: 'READOUT',
+            ownerUid,
+            schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          const nextCompetitorCount = competitorCount + 1;
+          transaction.update(competitionRef, {
+            competitorCount: nextCompetitorCount,
+            finishedCount: Math.min(
+              nextCompetitorCount,
+              (Number(competitionData.finishedCount) || 0) + 1
+            ),
+            updatedAt: serverTimestamp(),
+          });
+          transaction.set(receiptRef, {
+            ...commonReceipt,
+            status: 'PROCESSED',
+            competitorId,
+          });
+          assignmentResult = 'CREATED';
+          receiptStatus = 'PROCESSED';
+          return 'CREATED';
+        }
+      );
+      if (mutationResult.status !== 'COMMITTED') {
+        throw new Error('Tävlingen hittades inte i Firestore för automatisk anmälan.');
+      }
+      if (receiptStatus === null) {
+        const committedReceipt = await getDoc(receiptRef);
+        if (!committedReceipt.exists()) {
+          throw new Error('Avläsningen saknar en bekräftad Firestore-kvittens.');
+        }
+        receiptStatus =
+          committedReceipt.data().status === 'UNKNOWN' ? 'UNKNOWN' : 'PROCESSED';
+      }
+      const log =
+        assignmentResult.startsWith('CONFLICT') ? console.warn : console.info;
+      log(
+        `[READOUT_AUTOCREATE_MIGRATION] ${JSON.stringify({
+          competitorId,
+          siNumber,
+          assignmentResult,
+          transactionResult: mutationResult.status,
+          receiptResult: receiptStatus,
+        })}`
+      );
+      if (receiptStatus === 'UNKNOWN') {
+        return {
+          unknownCardReadout: {
+            siNumber,
+            checkTimeSec: readout.checkTimeSec,
+            startTimeSec: readout.startTimeSec,
+            finishTimeSec: readout.finishTimeSec,
+            punches,
+          },
+        };
+      }
+      return { competitor: createdCompetitor };
+    } catch (error) {
+      console.error(
+        `[READOUT_AUTOCREATE_MIGRATION] ${JSON.stringify({
+          competitorId,
+          siNumber,
+          assignmentResult,
+          transactionResult: 'ABORTED',
+          error: error instanceof Error ? error.message : String(error),
+        })}`
+      );
+      throw error;
+    }
+  }
+
   const result = await runTransaction(db, async (transaction) => {
     const [competitionSnap, receiptSnap] = await Promise.all([
       transaction.get(competitionRef),
@@ -5710,6 +6019,9 @@ export async function submitReadoutToFirestore(
     const competitionData = competitionSnap.data();
     if (receiptSnap.exists()) {
       const receipt = receiptSnap.data();
+      if (!receiptMatchesPayload(receipt)) {
+        throw new Error('Readout-ID:t används för en annan avläsning.');
+      }
       return {
         status: receipt.status === 'UNKNOWN' ? ('UNKNOWN' as const) : ('PROCESSED' as const),
         competitorId:
@@ -5719,28 +6031,6 @@ export async function submitReadoutToFirestore(
     if (competitionData.status === 'COMPLETED') {
       throw new Error('Tävlingen är avslutad och tar inte emot fler avläsningar.');
     }
-
-    const commonReceipt = {
-      receiptId: clientReadoutId,
-      competitionId,
-      ownerUid,
-      clientReadoutId,
-      siNumber,
-      cardSeries: readout.cardSeries,
-      stationCode:
-        Number.isInteger(readout.stationCode) &&
-        readout.stationCode >= 1 &&
-        readout.stationCode <= 999
-          ? readout.stationCode
-          : 1,
-      checkTimeSec: encodeNullableSec(checkTimeSec),
-      startTimeSec: encodeNullableSec(cardStartTimeSec),
-      finishTimeSec: encodeNullableSec(cardFinishTimeSec),
-      punchCodes: punches.map((punch) => punch.code),
-      punchTimes: punches.map((punch) => punch.timeSec),
-      rawHex: (readout.rawHex || '').slice(0, 2000),
-      createdAt: serverTimestamp(),
-    };
 
     if (!runner || !updatedCompetitor || !validation) {
       transaction.set(receiptRef, {

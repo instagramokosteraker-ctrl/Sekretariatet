@@ -52,6 +52,13 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         uid: 'readout_uid',
         role: 'READOUT',
       });
+      await adminDb.doc('runnerDb/8500118').set({
+        runnerId: '8500118',
+        siNumber: 8500118,
+        cardSeries: 'SI-Card 10',
+        fullName: 'Readout Runner',
+        club: 'OK Linné',
+      });
       await adminDb.doc('adminInvites/inv_other').set({
         inviteId: 'inv_other',
         email: 'secret@klubb.se',
@@ -451,6 +458,120 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     );
     // Competitor creation is now accepted only with its matching assignment.
     await assertSucceeds(initialCompetitorBatch.commit());
+
+    const readoutCreatedCompetitor = {
+      ...initialCompetitor,
+      competitorId: 'cmp_readout_test',
+      bib: 411,
+      fullName: 'Readout Runner',
+      siNumber: 8500118,
+      ownerUid: 'readout_uid',
+      readoutReceiptId: 'ro_readout_test',
+      status: 'OK',
+    };
+    const readoutCreatedAssignment = {
+      ...siCardAssignment,
+      siNumber: 8500118,
+      competitorId: 'cmp_readout_test',
+      competitorDocumentId: 'cmp_readout_test',
+      source: 'READOUT',
+      ownerUid: 'readout_uid',
+    };
+    const readoutAutocreateBatch = writeBatch(readoutCtx.firestore());
+    readoutAutocreateBatch.set(
+      doc(
+        readoutCtx.firestore(),
+        'competitions/evt_live/competitors/cmp_readout_test'
+      ),
+      {
+        ...readoutCreatedCompetitor,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    readoutAutocreateBatch.set(
+      doc(
+        readoutCtx.firestore(),
+        'competitions/evt_live/siCardAssignments/8500118'
+      ),
+      {
+        ...readoutCreatedAssignment,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    readoutAutocreateBatch.set(
+      doc(
+        readoutCtx.firestore(),
+        'competitions/evt_live/readoutReceipts/ro_readout_test'
+      ),
+      {
+        receiptId: 'ro_readout_test',
+        competitionId: 'evt_live',
+        ownerUid: 'readout_uid',
+        clientReadoutId: 'ro_readout_test',
+        siNumber: 8500118,
+        cardSeries: 'SI-Card 10',
+        stationCode: 1,
+        checkTimeSec: -1,
+        startTimeSec: -1,
+        finishTimeSec: -1,
+        punchCodes: [],
+        punchTimes: [],
+        rawHex: '',
+        status: 'PROCESSED',
+        competitorId: 'cmp_readout_test',
+        createdAt: serverTimestamp(),
+      }
+    );
+    readoutAutocreateBatch.update(
+      doc(readoutCtx.firestore(), 'competitions/evt_live'),
+      {
+        competitorCount: 11,
+        finishedCount: 6,
+        updatedAt: serverTimestamp(),
+      }
+    );
+    await assertSucceeds(readoutAutocreateBatch.commit());
+
+    const spoofedReadoutAutocreate = writeBatch(readoutCtx.firestore());
+    spoofedReadoutAutocreate.set(
+      doc(
+        readoutCtx.firestore(),
+        'competitions/evt_live/competitors/cmp_readout_spoof'
+      ),
+      {
+        ...readoutCreatedCompetitor,
+        competitorId: 'cmp_readout_spoof',
+        fullName: 'Spoofed Name',
+        siNumber: 8500119,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    spoofedReadoutAutocreate.set(
+      doc(
+        readoutCtx.firestore(),
+        'competitions/evt_live/siCardAssignments/8500119'
+      ),
+      {
+        ...readoutCreatedAssignment,
+        siNumber: 8500119,
+        competitorId: 'cmp_readout_spoof',
+        competitorDocumentId: 'cmp_readout_spoof',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    spoofedReadoutAutocreate.update(
+      doc(readoutCtx.firestore(), 'competitions/evt_live'),
+      {
+        competitorCount: 12,
+        finishedCount: 7,
+        updatedAt: serverTimestamp(),
+      }
+    );
+    await assertFails(spoofedReadoutAutocreate.commit());
 
     // READOUT officials may update rental return only, not payment status.
     await assertSucceeds(

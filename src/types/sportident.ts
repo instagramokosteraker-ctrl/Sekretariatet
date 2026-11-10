@@ -296,6 +296,7 @@ export type FrameHardwareSource = 'USB_WEBSERIAL' | 'USB_WEBUSB' | 'PROTOCOL_TES
 
 export interface FullCardReadoutPayload {
   clientReadoutId?: string;
+  autoCreateFromRunnerDb?: boolean;
   siNumber: number;
   cardSeries: SICardSeries;
   stationCode: number;

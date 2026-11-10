@@ -2624,7 +2624,7 @@ async function startServer() {
       station.lastSeenAt = nowIso;
     }
 
-    let runner =
+    const runner =
       ev.competitors.find(
         (c) =>
           c.siNumber === params.siNumber &&
@@ -2638,56 +2638,15 @@ async function startServer() {
     const dbMatch = !runner
       ? seasonDb.runnerDb.find((r) => r.siNumber === params.siNumber) ?? null
       : null;
-
     if (!runner && dbMatch && seasonDb.eventor.autoCreateFromRunnerDbOnReadout) {
-      const maxBib = ev.competitors.reduce((m, c) => Math.max(m, c.bib), 400);
-      const preferredCls =
-        (dbMatch.defaultClassName
-          ? ev.classes.find(
-              (c) => c.name.toLowerCase() === dbMatch.defaultClassName!.toLowerCase()
-            )
-          : null) ??
-        ev.classes.find((c) => c.autoMatchCourse) ??
-        ev.classes[0];
-
-      runner = {
-        id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        bib: maxBib + 1,
-        fullName: dbMatch.fullName,
-        club: dbMatch.club,
-        classId: preferredCls?.id ?? 'cls-open',
-        siNumber: params.siNumber,
-        cardSeries: dbMatch.cardSeries,
-        isRentalCard: false,
-        rentalReturned: false,
-        status: 'REGISTERED',
-        allocatedStartSec: null,
-        checkTimeSec: null,
-        startTimeSec: null,
-        finishTimeSec: null,
-        runningTimeSec: null,
-        lastSeenControl: null,
-        lastSeenTimeSec: null,
-        readoutAt: null,
-        radioSplits: [],
-        cardPunches: [],
-        validation: null,
-      };
-      const autoCreatedRunner = runner;
-      runCompetitorMutation(
-        {
-          source: 'cloud readout auto-create from runner database',
-          operation: 'CREATE',
-          competitionId: ev.competition.id,
-          competitorId: autoCreatedRunner.id,
-          siNumber: autoCreatedRunner.siNumber,
-          assignmentHandling: {
-            mode: 'LEGACY',
-            reason: 'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.',
-          },
-          identityAffecting: true,
-        },
-        () => ev.competitors.unshift(autoCreatedRunner)
+      console.warn(
+        `[READOUT_AUTOCREATE_MIGRATION] ${JSON.stringify({
+          competitorId: null,
+          siNumber: params.siNumber,
+          assignmentResult: 'NOT_ATTEMPTED_ONLINE_PUNCH',
+          transactionResult: 'NOT_APPLICABLE',
+          source: params.sourcePrefix || 'ONLINE_PUNCH',
+        })}`
       );
     }
 
@@ -4366,7 +4325,7 @@ async function startServer() {
     if (station) station.lastSeenAt = nowIso;
 
     // Prefer active/un-read-out competitor first (supports borrowed sticks when original owner is DNS or already finished)
-    let runner =
+    const runner =
       db.competitors.find(
         (c) =>
           c.siNumber === parsedSi &&
@@ -4377,77 +4336,19 @@ async function startServer() {
       ) ??
       db.competitors.find((c) => c.siNumber === parsedSi && c.status !== 'DNS') ??
       null;
-    let autoCreatedFromDb = false;
     const dbMatch = !runner
       ? seasonDb.runnerDb.find((r) => r.siNumber === parsedSi) ?? null
       : null;
-
     if (!runner && dbMatch && seasonDb.eventor.autoCreateFromRunnerDbOnReadout) {
-      const maxBib = db.competitors.reduce((m, c) => Math.max(m, c.bib), 400);
-      const openAutoCls = db.classes.find((c) => c.autoMatchCourse);
-      const namedCls = dbMatch.defaultClassName
-        ? db.classes.find(
-            (c) => c.name.toLowerCase() === dbMatch.defaultClassName!.toLowerCase()
-          )
-        : undefined;
-
-      let chosenCls = namedCls ?? openAutoCls ?? db.classes[0];
-      if (namedCls && openAutoCls && punches.length > 0) {
-        const testStart = startTimeSec ?? db.competition.zeroTimeSec;
-        const testFin = finishTimeSec ?? nowSec;
-        const testVal = validateCompetitorReadout(
-          namedCls,
-          db.courses,
-          testStart,
-          testFin,
-          punches,
-          db.emergency
-        );
-        if (!testVal.ok) {
-          chosenCls = openAutoCls;
-        }
-      }
-
-      runner = {
-        id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        bib: maxBib + 1,
-        fullName: dbMatch.fullName,
-        club: dbMatch.club,
-        classId: chosenCls?.id ?? 'cls-open',
-        siNumber: parsedSi,
-        cardSeries: dbMatch.cardSeries,
-        isRentalCard: false,
-        rentalReturned: false,
-        status: 'REGISTERED',
-        allocatedStartSec: null,
-        checkTimeSec: null,
-        startTimeSec: null,
-        finishTimeSec: null,
-        runningTimeSec: null,
-        lastSeenControl: null,
-        lastSeenTimeSec: null,
-        readoutAt: null,
-        radioSplits: [],
-        cardPunches: [],
-        validation: null,
-      };
-      const autoCreatedRunner = runner;
-      runCompetitorMutation(
-        {
-          source: 'readout auto-create from runner database',
-          operation: 'CREATE',
-          competitionId: db.competition.id,
-          competitorId: autoCreatedRunner.id,
-          siNumber: autoCreatedRunner.siNumber,
-          assignmentHandling: {
-            mode: 'LEGACY',
-            reason: 'Legacy readout flow creates a competitor from runnerDb without creating an SI assignment.',
-          },
-          identityAffecting: true,
-        },
-        () => db.competitors.unshift(autoCreatedRunner)
+      console.warn(
+        `[READOUT_AUTOCREATE_MIGRATION] ${JSON.stringify({
+          competitorId: null,
+          siNumber: parsedSi,
+          assignmentResult: 'NOT_ATTEMPTED_LEGACY_ENDPOINT',
+          transactionResult: 'NOT_APPLICABLE',
+          endpoint: '/api/readout',
+        })}`
       );
-      autoCreatedFromDb = true;
     }
 
     if (clientReadoutId) {
@@ -4548,8 +4449,6 @@ async function startServer() {
 
     recomputeAllSplitRanks(db);
 
-    const autoTag = autoCreatedFromDb ? ' · Auto-hämtad från Eventor/Löpardatabas' : '';
-
     const ev: LiveEventItem = {
       id: `ev-${Date.now()}`,
       timestamp: nowIso,
@@ -4567,13 +4466,13 @@ async function startServer() {
         ? cls?.classFormat === 'ROGAINING'
           ? `Utläst & Godkänd i ${cls.name}: ${validation.rogainingPoints ?? 0} poäng på ${
               runner.runningTimeSec !== null ? durToMmSs(runner.runningTimeSec) : '—'
-            }${autoTag}${runner.isRentalCard && !runner.rentalReturned ? ' · OBS: HYRBRICKA!' : ''}`
+            }${runner.isRentalCard && !runner.rentalReturned ? ' · OBS: HYRBRICKA!' : ''}`
           : `Utläst & Godkänd (OK) i ${cls?.name ?? '-'} (${runner.cardSeries}) på ${
               runner.runningTimeSec !== null ? durToMmSs(runner.runningTimeSec) : '—'
-            }${autoTag}${runner.isRentalCard && !runner.rentalReturned ? ' · OBS: HYRBRICKA!' : ''}`
+            }${runner.isRentalCard && !runner.rentalReturned ? ' · OBS: HYRBRICKA!' : ''}`
         : `Felstämplat (MP) i ${cls?.name ?? '-'} — saknar kontroll: ${validation.missingControls
             .map((k) => `(${k})`)
-            .join(', ')}${autoTag}`,
+            .join(', ')}`,
       rawHex,
     };
 
@@ -4582,7 +4481,7 @@ async function startServer() {
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
 
-    res.status(201).json({ competitor: runner, event: ev, autoCreatedFromDb });
+    res.status(201).json({ competitor: runner, event: ev });
   });
 
   // 3. Emergency Forest Tools & Raw Readout Recalculation
