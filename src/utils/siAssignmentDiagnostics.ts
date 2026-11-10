@@ -78,7 +78,7 @@ export function runCompetitorMutation<T>(
   declaration: CompetitorMutationDeclaration,
   mutation: () => T
 ): T {
-  return runAssignmentAwareCompetitorMutation(
+  return runCompetitorIdentityMutation(
     legacyServiceRequest(declaration),
     mutation
   );
@@ -88,25 +88,39 @@ export function runCompetitorMutations<T>(
   declarations: readonly CompetitorMutationDeclaration[],
   mutation: () => T
 ): T {
-  return runAssignmentAwareCompetitorMutations(
+  return runCompetitorIdentityMutations(
     declarations.map(legacyServiceRequest),
     mutation
   );
+}
+
+export function runCompetitorIdentityMutation<T>(
+  request: CompetitorMutationServiceRequest,
+  mutation: () => T
+): T {
+  return runCompetitorIdentityMutations([request], mutation);
+}
+
+export function runCompetitorIdentityMutations<T>(
+  requests: readonly CompetitorMutationServiceRequest[],
+  mutation: () => T
+): T {
+  requests.forEach(recordMutationServiceUse);
+  return mutation();
 }
 
 export function runAssignmentAwareCompetitorMutation<T>(
   request: CompetitorMutationServiceRequest,
   mutation: () => T
 ): T {
-  return runAssignmentAwareCompetitorMutations([request], mutation);
+  return runCompetitorIdentityMutation(request, mutation);
 }
 
 export function runAssignmentAwareCompetitorMutations<T>(
   requests: readonly CompetitorMutationServiceRequest[],
   mutation: () => T
 ): T {
-  requests.forEach(recordMutationServiceUse);
-  return mutation();
+  return runCompetitorIdentityMutations(requests, mutation);
 }
 
 function legacyServiceRequest(
@@ -184,10 +198,12 @@ function recordMutationServiceUse(request: CompetitorMutationServiceRequest): vo
       intent: request.intent,
       competitionId: request.competitor.competitionId,
       competitorId: request.competitor.competitorId,
+      mutationServiceUsed: true,
       assignmentAwarePathUsed: request.assignment.mode === 'ASSIGNMENT_AWARE',
       assignmentValidated: request.assignment.validationState === 'VALIDATED',
-      legacyPathBypassed: request.assignment.mode === 'ASSIGNMENT_AWARE',
-      legacyAssignmentPath: request.assignment.mode === 'LEGACY',
+      legacyPathBypassed: request.assignment.mode === 'LEGACY',
+      legacyAssignmentWritePending:
+        request.declaration.assignmentHandling.mode === 'LEGACY',
       assignment: request.assignment,
       competitor: request.competitor,
       validationHooks: hookResults,

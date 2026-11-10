@@ -136,9 +136,8 @@ describe('competitor mutation declaration boundary', () => {
             siNumber: 54321,
             previousSiNumber: 12345,
             assignmentHandling: {
-              mode: 'VALIDATED',
-              validatedSiNumber: 54321,
-              assignmentVersion: 1,
+              mode: 'LEGACY',
+              reason: 'Assignment state is observed but not written in this phase.',
             },
             identityAffecting: true,
           },
@@ -169,7 +168,10 @@ describe('competitor mutation declaration boundary', () => {
     expect(info).toHaveBeenCalledWith(
       expect.stringContaining('"assignmentAwarePathUsed":true')
     );
-    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyPathBypassed":true'));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyPathBypassed":false'));
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('"legacyAssignmentWritePending":true')
+    );
     expect(write).toHaveBeenCalledOnce();
   });
 
@@ -192,7 +194,9 @@ describe('competitor mutation declaration boundary', () => {
     expect(info).toHaveBeenCalledWith(
       expect.stringContaining('"assignmentAwarePathUsed":false')
     );
-    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyPathBypassed":false'));
-    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyAssignmentPath":true'));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyPathBypassed":true'));
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('"legacyAssignmentWritePending":true')
+    );
   });
 });

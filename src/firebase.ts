@@ -80,9 +80,11 @@ import {
 } from './utils/siAssignmentInventory';
 import {
   declareCompetitorMutation,
+  runAssignmentAwareCompetitorMutation,
   runCompetitorMutation,
   runCompetitorMutations,
   type CompetitorMutationDeclaration,
+  type CompetitorMutationOperation,
 } from './utils/siAssignmentDiagnostics';
 
 const app = initializeApp(firebaseConfig);
@@ -3616,13 +3618,79 @@ export async function runAtomicSIAssignmentMutation(
     }
 
     if (result.status === 'COMMITTED') {
-      await write({
-        transaction,
-        competitionData: competitionSnap.data() ?? {},
-        competitorData,
-        competitorExists: competitorSnap.exists(),
-        result,
-      });
+      const mutationOperation: CompetitorMutationOperation =
+        effectiveIntent === 'CREATE_COMPETITOR'
+          ? 'CREATE'
+          : effectiveIntent === 'DELETE_COMPETITOR' ||
+              effectiveIntent === 'RETIRE_COMPETITOR'
+            ? 'DELETE'
+            : 'UPDATE';
+      const mutationSiNumber = requestedSiNumber ?? currentSiNumber;
+      const assignmentSnapshot =
+        requestedSiNumber === null
+          ? undefined
+          : assignmentSnapshots.get(requestedSiNumber);
+      await runAssignmentAwareCompetitorMutation(
+        {
+          declaration: {
+            source: 'runAtomicSIAssignmentMutation',
+            operation: mutationOperation,
+            competitionId,
+            competitorId,
+            ...(mutationSiNumber !== null && mutationSiNumber !== undefined
+              ? { siNumber: mutationSiNumber }
+              : {}),
+            ...(currentSiNumber !== null ? { previousSiNumber: currentSiNumber } : {}),
+            assignmentHandling: {
+              mode: 'LEGACY',
+              reason:
+                'This preparation transaction observes assignment state but deliberately does not write assignment documents.',
+            },
+            identityAffecting: true,
+          },
+          intent: effectiveIntent,
+          assignment: {
+            mode: 'ASSIGNMENT_AWARE',
+            ...(currentSiNumber !== null ? { currentSiNumber } : {}),
+            ...(requestedSiNumber !== null ? { requestedSiNumber } : {}),
+            ...(assignmentSnapshot?.exists()
+              ? {
+                  assignmentId: assignmentSnapshot.id,
+                  assignmentState:
+                    typeof assignmentSnapshot.data().state === 'string'
+                      ? assignmentSnapshot.data().state
+                      : undefined,
+                }
+              : {}),
+            validationState: 'READ_ONLY',
+          },
+          competitor: {
+            competitionId,
+            competitorId,
+            ...(currentSiNumber !== null ? { currentSiNumber } : {}),
+            ...(requestedSiNumber !== null ? { proposedSiNumber: requestedSiNumber } : {}),
+          },
+          validationHooks: [
+            {
+              name: 'assignment-consistency-observation',
+              validate: () => ({
+                passed: !result.assignmentMismatch,
+                detail: result.assignmentMismatch
+                  ? 'Observed assignment documents do not match the competitor identity.'
+                  : 'Assignment documents were observed; no mismatch was detected.',
+              }),
+            },
+          ],
+        },
+        () =>
+          write({
+            transaction,
+            competitionData: competitionSnap.data() ?? {},
+            competitorData,
+            competitorExists: competitorSnap.exists(),
+            result,
+          })
+      );
     }
     return result;
   });
