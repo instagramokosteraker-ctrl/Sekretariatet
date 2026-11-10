@@ -5,6 +5,8 @@ import {
   scanSIAssignmentInventoryFromFirestore,
 } from '../firebase';
 import {
+  formatConflictRemediationPlanV2Markdown,
+  formatLiveIntegrityInventoryV2Markdown,
   formatSIAssignmentInventoryMarkdown,
   SIAssignmentInventoryQueryError,
   type SIAssignmentInventoryReport,
@@ -106,6 +108,18 @@ export function SIAssignmentInventoryView() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadV2Report = (
+    filename: string,
+    markdown: string
+  ) => {
+    const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
       <div>
@@ -146,6 +160,36 @@ export function SIAssignmentInventoryView() {
             <Download className="h-3.5 w-3.5" />
             Ladda ner SI_ASSIGNMENT_INVENTORY.md
           </button>
+        )}
+        {report && (
+          <>
+            <button
+              type="button"
+              onClick={() =>
+                downloadV2Report(
+                  'LIVE_INTEGRITY_INVENTORY_V2.md',
+                  formatLiveIntegrityInventoryV2Markdown(report)
+                )
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Ladda ner LIVE_INTEGRITY_INVENTORY_V2.md
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                downloadV2Report(
+                  'CONFLICT_REMEDIATION_PLAN_V2.md',
+                  formatConflictRemediationPlanV2Markdown(report)
+                )
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Ladda ner CONFLICT_REMEDIATION_PLAN_V2.md
+            </button>
+          </>
         )}
       </div>
 

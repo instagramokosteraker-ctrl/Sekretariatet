@@ -886,6 +886,12 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
   const competitions: SIAssignmentInventoryReport['competitions'] = [];
   let competitorCount = 0;
   let assignmentCount = 0;
+  let activeAssignmentCount = 0;
+  let retiredAssignmentCount = 0;
+  let historicalReassignmentCount = 0;
+  let orphanAssignmentCount = 0;
+  let orphanCompetitorCount = 0;
+  let parityMismatchCount = 0;
 
   for (const competitionDoc of competitionSnapshot.docs) {
     const [competitorSnapshot, assignmentSnapshot] = await Promise.all([
@@ -929,6 +935,12 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
     competitions.push(inventory);
     competitorCount += inventory.competitorCount;
     assignmentCount += inventory.assignmentCount;
+    activeAssignmentCount += inventory.activeAssignmentCount;
+    retiredAssignmentCount += inventory.retiredAssignmentCount;
+    historicalReassignmentCount += inventory.historicalReassignmentCount;
+    orphanAssignmentCount += inventory.orphanAssignmentCount;
+    orphanCompetitorCount += inventory.orphanCompetitorCount;
+    parityMismatchCount += inventory.parityMismatchCount;
   }
 
   return {
@@ -936,6 +948,12 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
     competitionCount: competitions.length,
     competitorCount,
     assignmentCount,
+    activeAssignmentCount,
+    retiredAssignmentCount,
+    historicalReassignmentCount,
+    orphanAssignmentCount,
+    orphanCompetitorCount,
+    parityMismatchCount,
     competitions,
   };
 }

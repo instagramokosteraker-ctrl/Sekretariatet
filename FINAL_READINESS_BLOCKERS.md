@@ -8,7 +8,9 @@ Status: reassessed 2026-11-10. This report is the evidence record for the curren
 
 Repository-local assignment writers now use transaction-boundary validation; standalone assignment create/retire APIs were removed, bootstrap rereads the competitor and fails on write errors, and lifecycle/SI/card-series mutations abort when assignment work is skipped or inconsistent. Firestore rules now require a changed matching competitor and validate assignment identity, card-series, and owner parity. The rules regression suite and deployed rule version remain unverified. Production-wide ownership consistency, external/Admin SDK writer authority, concurrency behavior, and rollback behavior are also not established.
 
-**Single highest-priority remaining blocker:** produce a complete live competitor/assignment ownership inventory, reconcile every mismatch, and retain verifiable evidence across all competitions.
+The authenticated local V2 inventory ran at `2026-11-10T21:10:54.882Z` and read all three competitions returned by Firestore (12 competitors, 16 assignments). It confirmed four historical reassignment records with same-competitor ACTIVE successors and no orphan or duplicate-SI findings. It also found six active assignment/competitor `ownerUid` parity mismatches (four in Reflexcup#2, two in Lång-TM). The earlier basic inventory's two Lång-TM lifecycle findings are superseded by the V2 successor-aware classification.
+
+**Single highest-priority remaining blocker:** determine and document authoritative ownership for the six active ownerUid mismatches; rerun the V2 audit after any separately approved correction.
 
 ## Writer and authority inventory
 
@@ -95,7 +97,7 @@ The bootstrap-created four assignments are historical writes, but the saved repo
 
 ## Remaining exit evidence
 
-1. Run and retain a comprehensive live inventory for every competition with owner, card-series, document-ID, SI, active/retired, and orphan consistency checks. Reconcile all reported conflicts; rerun and retain a clean report.
+1. Reconcile the six V2 ownerUid mismatches with trusted provenance and the competition owner. Confirm the three returned competition documents are the complete intended set; rerun the read-only V2 audit after resolution. Preserve historical reassignment records.
 2. Execute the Firestore rules regression suite, verify the deployed rules version, and enumerate all Admin SDK/deployed writer identities. Prove none can bypass the trusted transaction boundary.
 3. Run emulator and production-like concurrency, retry, timeout, rollback, bootstrap-race, and partial-import recovery tests. Record results and thresholds.
 4. Retain the successful build, type-check, unit-test, and rules-test evidence for this hardening change.

@@ -54,6 +54,6 @@ The standalone `createCompetitionSICardAssignment` and `retireCompetitionSICardA
 
 ## Next blocker
 
-Produce and retain a comprehensive live inventory across every competition, checking competitor and assignment path IDs, SI, card series, owner UID, lifecycle state, duplicates, and orphans. Reconcile all mismatches before cutover.
+The V2 read-only inventory has been run locally against the configured Firestore project: 3 returned competitions, 12 competitors, 16 assignments, 4 expected historical reassignments, and 0 orphan/duplicate-SI findings. It detected 6 active ownerUid parity mismatches. Reconcile those against trusted provenance, confirm complete competition coverage, and rerun after disposition before cutover.
 
 See the canonical blocker order in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md) and the evidence assessment in [FINAL_READINESS_BLOCKERS.md](./FINAL_READINESS_BLOCKERS.md).
