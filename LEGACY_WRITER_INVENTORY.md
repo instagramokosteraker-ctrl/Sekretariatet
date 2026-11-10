@@ -6,7 +6,7 @@ The canonical active blocker list and overall verdict are maintained in [COMPETI
 
 ## Summary
 
-Competitor identity ownership is not yet fully cut over. Legacy Express competitor CRUD routes are disabled and their first-party UI callers use Firestore transaction helpers. Import, reset/restore, competition lifecycle, and snapshot/import paths remain to be redirected, disabled, or safely constrained. The Firestore assignment transaction and rules work protects the paths covered by the implementation, but diagnostics and client rules do not provide a trusted all-writer boundary or global uniqueness by themselves.
+Competitor identity ownership is not yet fully cut over. Legacy Express competitor CRUD routes are disabled and their first-party UI callers use Firestore transaction helpers. Firestore import and snapshot creation are now assignment-aware; legacy Eventor/IOF mirror imports, reset/restore, and competition lifecycle paths remain to be redirected, disabled, or safely constrained. The Firestore assignment transaction and rules work protects the paths covered by the implementation, but diagnostics and client rules do not provide a trusted all-writer boundary or global uniqueness by themselves.
 
 The former readout auto-create bypass has been removed. See [READOUT_AUTO_CREATE_MIGRATION_PLAN.md](./READOUT_AUTO_CREATE_MIGRATION_PLAN.md) for the historical rationale and migrated behavior.
 
@@ -17,12 +17,12 @@ The former readout auto-create bypass has been removed. See [READOUT_AUTO_CREATE
 | 1 | `server.ts` `POST /api/competitors` | None; terminal HTTP 410 response | Disabled legacy route | Migrated; direct-entry UI writes through the Firestore transaction helper |
 | 2 | `server.ts` `PUT /api/competitors/:id` | None; terminal HTTP 410 response | Disabled legacy route | Migrated; UI updates use Firestore transaction helpers |
 | 3 | `server.ts` `DELETE /api/competitors/:id` | None; terminal HTTP 410 response | Disabled legacy route | Migrated; UI deletion retires the SI assignment and deletes the competitor atomically |
-| 4 | Direct-entry and update/delete UI flows in `src/App.tsx` | Firestore competitor and assignment documents | Firestore transaction paths | Migrated for these CRUD flows; imports and lifecycle paths remain open |
+| 4 | Direct-entry and update/delete UI flows in `src/App.tsx` | Firestore competitor and assignment documents | Firestore transaction paths | Migrated for these CRUD flows; lifecycle paths remain open |
 | 5 | Eventor import and IOF/import-batch paths | Imported competitors and related season data | Legacy/import writer | Active blocker; route all identity changes through the canonical transaction |
 | 6 | `server.ts` `DELETE /api/competitions/:id` | Competition and competitor tree | Legacy lifecycle writer | Active blocker; define assignment retirement/retention behavior |
 | 7 | `server.ts` `/api/system/reset-seed`, restore, and clear-demo paths | Season and competition state | Legacy seed/restore/removal writer | Active blocker until identity and assignment mutations are blocked or canonical |
-| 8 | `src/firebase.ts` `syncFullSeasonToFirestore` | Firestore competitors | Snapshot writer | Existing competitor updates/deletes are blocked; missing-record seeding remains controlled/review-required |
-| 9 | `src/firebase.ts` `saveCompetitionImportToFirestore` and related bulk imports | Firestore competitors | Import writer | Requires complete assignment-aware policy; active blocker |
+| 8 | `src/firebase.ts` `syncFullSeasonToFirestore` | Firestore competitors and SI assignments | Snapshot seed writer | Missing-record seeds create matching competitor/assignment pairs per transaction; existing competitor overwrites/deletes remain blocked; migrated |
+| 9 | `src/firebase.ts` `saveCompetitionImportToFirestore` | Firestore competitors and SI assignments | Import writer | Creates and validates assignments in per-competitor transactions; rejects import-driven SI/card-series changes; migrated |
 | 10 | `server.ts` cloud-hydrate | Local/Express competitor mirror | Guarded compatibility hydration | Identity changes, additions/removals, duplicates, and omitted competitions are fenced; non-identity mirror hydration remains |
 | 11 | `server.ts` restore | Local/Express season state | Guarded restore | Competitor identity/lifecycle changes are rejected; non-identity data may still be restored |
 | 12 | `server.ts` `/api/readout` and online-punch compatibility processing | Legacy event/readout/result state | Compatibility/result path | Competitor identity auto-create removed; readout/result ownership is not fully migrated |
@@ -45,4 +45,4 @@ This migration does not make the legacy Express endpoint the canonical receipt/r
 - These protections do not cover legacy server/Admin SDK writes, every import/restore path, or all possible writers.
 - Duplicate candidate scans outside a Firestore transaction are diagnostic, not a global concurrency guarantee. Do not equate transaction scaffolding or rule fencing with system-wide uniqueness enforcement.
 
-For the authoritative list of work that blocks cutover, see [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).
+The Eventor/IOF Express mirror routes in row 5 remain separate from the migrated Firestore import path in row 9. For the authoritative list of work that blocks cutover, see [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).

@@ -4055,7 +4055,7 @@ export default function App() {
                         competitionId: activeEventId,
                         courses: nextCourses,
                         classes: nextClasses,
-                        competitors,
+                        competitors: [],
                         runnerDbEntries: [],
                         competitorCount: competitors.length,
                         replaceCoursesAndClasses: payload.replaceExisting,

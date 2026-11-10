@@ -2086,6 +2086,172 @@ function warnOnLegacyCompetitorFieldWrite(
   );
 }
 
+async function writeImportedCompetitorWithAssignment(params: {
+  competitionId: string;
+  competitorId: string;
+  ownerUid: string;
+  isSuperAdmin: boolean;
+  siNumber: number;
+  cardSeries: string;
+  assignmentSource: 'IMPORT' | 'SYSTEM';
+  mutable: Record<string, unknown>;
+  createOnly?: boolean;
+}): Promise<boolean> {
+  const competitionId = sanitizeFirestoreId(params.competitionId, 'evt');
+  const competitorId = sanitizeFirestoreId(params.competitorId, 'cmp');
+  if (
+    !Number.isInteger(params.siNumber) ||
+    params.siNumber < 1 ||
+    params.siNumber > 99999999
+  ) {
+    throw new Error(`Deltagare ${competitorId} har ett ogiltigt SI-nummer.`);
+  }
+  if (!params.cardSeries || params.cardSeries.length > 24) {
+    throw new Error(`Deltagare ${competitorId} har en ogiltig kortserie.`);
+  }
+
+  const competitorRef = doc(
+    db,
+    'competitions',
+    competitionId,
+    'competitors',
+    competitorId
+  );
+  const existingCompetitor = await getDoc(competitorRef);
+  if (params.createOnly && existingCompetitor.exists()) return false;
+  const intent: AtomicSIAssignmentMutationIntent = existingCompetitor.exists()
+    ? 'UPDATE_COMPETITOR_IDENTITY'
+    : 'CREATE_COMPETITOR';
+
+  const mutation = await runAtomicSIAssignmentMutation(
+    {
+      intent,
+      competitor: { competitionId, competitorId },
+      assignment: { requestedSiNumber: params.siNumber },
+    },
+    ({
+      transaction,
+      competitorData,
+      assignmentSnapshots,
+      result,
+    }) => {
+      if (result.duplicateCandidateDetected || result.duplicateCandidateQueryError) {
+        throw new Error(
+          result.duplicateCandidateDetected
+            ? `SI-bricka ${params.siNumber} används redan av en annan deltagare.`
+            : 'SI-brickans unika ägare kunde inte verifieras. Försök igen.'
+        );
+      }
+
+      const assignmentSnapshot = assignmentSnapshots.get(params.siNumber);
+      const assignment = assignmentSnapshot?.exists()
+        ? parseSICardAssignmentDocument(
+            assignmentSnapshot.id,
+            competitionId,
+            assignmentSnapshot.data()
+          )
+        : null;
+
+      if (intent === 'CREATE_COMPETITOR') {
+        if (competitorData) {
+          throw new Error(
+            `Deltagare ${competitorId} tillkom under importen. Läs in tävlingen igen och försök på nytt.`
+          );
+        }
+        if (
+          assignmentSnapshot?.exists() &&
+          (!assignment ||
+            assignment.state !== 'ACTIVE' ||
+            assignment.siNumber !== params.siNumber ||
+            assignment.competitorId !== competitorId ||
+            assignment.competitorDocumentId !== competitorId ||
+            assignment.ownerUid !== params.ownerUid ||
+            assignment.cardSeries !== params.cardSeries)
+        ) {
+          throw new Error(
+            `SI-bricka ${params.siNumber} har en befintlig, oförenlig ägartilldelning.`
+          );
+        }
+
+        if (!assignmentSnapshot?.exists()) {
+          transaction.set(
+            getCompetitionSICardAssignmentRef(competitionId, params.siNumber),
+            {
+              competitionId,
+              siNumber: params.siNumber,
+              cardSeries: params.cardSeries,
+              competitorId,
+              competitorDocumentId: competitorId,
+              state: 'ACTIVE',
+              assignmentVersion: 1,
+              source: params.assignmentSource,
+              ownerUid: params.ownerUid,
+              schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            }
+          );
+        }
+        transaction.set(competitorRef, {
+          ...params.mutable,
+          competitorId,
+          competitionId,
+          ownerUid: params.ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        return assignment ? 'ALREADY_MATCHED' : 'CREATED';
+      }
+
+      if (!competitorData) {
+        throw new Error(`Deltagaren ${competitorId} hittades inte vid importen.`);
+      }
+      const competitorOwnerUid =
+        typeof competitorData.ownerUid === 'string' ? competitorData.ownerUid : '';
+      if (
+        competitorData.competitorId !== competitorId ||
+        competitorData.competitionId !== competitionId ||
+        !competitorOwnerUid ||
+        (!params.isSuperAdmin && competitorOwnerUid !== params.ownerUid)
+      ) {
+        throw new Error(`Deltagaren ${competitorId} tillhör inte den här importen.`);
+      }
+      if (
+        Number(competitorData.siNumber) !== params.siNumber ||
+        competitorData.cardSeries !== params.cardSeries
+      ) {
+        throw new Error(
+          `SI-nummer eller kortserie för ${competitorId} kan inte ändras via import. Använd SI-tilldelningsflödet.`
+        );
+      }
+      if (
+        !assignment ||
+        assignment.state !== 'ACTIVE' ||
+        assignment.siNumber !== params.siNumber ||
+        assignment.competitorId !== competitorId ||
+        assignment.competitorDocumentId !== competitorId ||
+        assignment.ownerUid !== competitorOwnerUid ||
+        assignment.cardSeries !== params.cardSeries
+      ) {
+        throw new Error(
+          `Deltagarens aktiva SI-tilldelning kunde inte verifieras för ${competitorId}.`
+        );
+      }
+
+      transaction.update(competitorRef, {
+        ...params.mutable,
+        updatedAt: serverTimestamp(),
+      });
+      return 'NOT_APPLICABLE';
+    }
+  );
+
+  if (mutation.status !== 'COMMITTED') {
+    throw new Error(`Tävlingen för deltagare ${competitorId} hittades inte i Firestore.`);
+  }
+  return true;
+}
+
 /**
  * Syncs legacy season data (clubSettings, competitions, competitors, SI punches,
  * and empty/demoCleared states) to Firestore under Zero-Trust rules.
@@ -2298,7 +2464,12 @@ export async function syncFullSeasonToFirestore(
     }
 
     const childOps: QueuedBatchOp[] = [];
-    const competitorMutations: CompetitorMutationDeclaration[] = [];
+    const competitorSeeds: Array<{
+      competitorId: string;
+      siNumber: number;
+      cardSeries: string;
+      mutable: Record<string, unknown>;
+    }> = [];
 
     // Courses and classes are Firestore-owned and excluded from legacy snapshots.
 
@@ -2321,8 +2492,6 @@ export async function syncFullSeasonToFirestore(
     for (const cmp of ev.competitors) {
       const competitorId = sanitizeFirestoreId(cmp.id, 'cmp');
       nextCompIds.add(competitorId);
-      const cmpRef = doc(db, 'competitions', competitionId, 'competitors', competitorId);
-      const cmpPath = `competitions/${competitionId}/competitors/${competitorId}`;
       const rawPunches = (cmp.rawReadout?.punches ?? cmp.cardPunches ?? []).slice(0, 192);
       const punchCodes = rawPunches.map((p) => clampInt(p.code, 1, 999, 31));
       const punchTimes = rawPunches.map((p) => clampInt(p.timeSec, 0, 86400, 0));
@@ -2354,7 +2523,7 @@ export async function syncFullSeasonToFirestore(
         fullName: (cmp.fullName || 'Deltagare').trim().slice(0, 120) || 'Deltagare',
         club: (cmp.club || 'Klubblös').trim().slice(0, 100) || 'Klubblös',
         classId: sanitizeFirestoreId(cmp.classId || 'cls_open', 'cls'),
-        siNumber: clampInt(cmp.siNumber, 1, 99999999, 1000),
+        siNumber: Number(cmp.siNumber),
         cardSeries: (cmp.cardSeries || 'SI-Card 10').trim().slice(0, 24) || 'SI-Card 10',
         isRentalCard: Boolean(cmp.isRentalCard),
         status,
@@ -2385,30 +2554,11 @@ export async function syncFullSeasonToFirestore(
         continue;
       }
 
-      competitorMutations.push({
-        source: 'syncFullSeasonToFirestore',
-        operation: 'SNAPSHOT_SEED',
-        competitionId,
+      competitorSeeds.push({
         competitorId,
-        siNumber: Number(cmp.siNumber),
-        assignmentHandling: {
-          mode: 'LEGACY',
-          reason: 'Legacy snapshot may seed a missing competitor without creating an SI assignment.',
-        },
-        identityAffecting: true,
-      });
-      childOps.push({
-        kind: 'set',
-        ref: cmpRef,
-        path: cmpPath,
-        data: {
-          competitorId,
-          competitionId,
-          ...cmpMutable,
-          ownerUid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        },
+        siNumber: cmpMutable.siNumber,
+        cardSeries: cmpMutable.cardSeries,
+        mutable: cmpMutable,
       });
     }
     for (const oldId of existingCompIds) {
@@ -2485,12 +2635,24 @@ export async function syncFullSeasonToFirestore(
     }
 
     if (childOps.length > 0) {
-      if (competitorMutations.length > 0) {
-        await runCompetitorMutations(competitorMutations, () =>
-          commitQueuedBatchOps(childOps)
+      await commitQueuedBatchOps(childOps);
+    }
+    for (const seed of competitorSeeds) {
+      const created = await writeImportedCompetitorWithAssignment({
+        competitionId,
+        competitorId: seed.competitorId,
+        ownerUid,
+        isSuperAdmin,
+        siNumber: seed.siNumber,
+        cardSeries: seed.cardSeries,
+        assignmentSource: 'SYSTEM',
+        mutable: seed.mutable,
+        createOnly: true,
+      });
+      if (!created) {
+        console.warn(
+          `[single-writer] Skipped snapshot seed because Firestore competitor ${seed.competitorId} appeared during synchronization.`
         );
-      } else {
-        await commitQueuedBatchOps(childOps);
       }
     }
 
@@ -3209,11 +3371,16 @@ export async function saveCompetitionImportToFirestore(params: {
     mutable: Record<string, unknown>;
     createData: Record<string, unknown>;
   }> = [];
-  const competitorMutations: CompetitorMutationDeclaration[] = [];
+  const competitorWrites: Array<{
+    competitorId: string;
+    siNumber: number;
+    cardSeries: string;
+    mutable: Record<string, unknown>;
+  }> = [];
   const nowFields = { createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
 
   const addOperation = async (
-    collectionName: 'courses' | 'classes' | 'competitors',
+    collectionName: 'courses' | 'classes',
     id: string,
     mutable: Record<string, unknown>,
     createData: Record<string, unknown>
@@ -3297,12 +3464,16 @@ export async function saveCompetitionImportToFirestore(params: {
       );
     }
     const punches = (competitor.rawReadout?.punches ?? competitor.cardPunches ?? []).slice(0, 192);
+    const siNumber = Number(competitor.siNumber);
+    if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999) {
+      throw new Error(`Deltagare ${id} har ett ogiltigt SI-nummer.`);
+    }
     const mutable = {
       bib: clampInt(competitor.bib, 1, 99999, 1),
       fullName: (competitor.fullName || 'Deltagare').trim().slice(0, 120) || 'Deltagare',
       club: (competitor.club || 'Klubblös').trim().slice(0, 100) || 'Klubblös',
       classId: sanitizeFirestoreId(competitor.classId || 'cls_open', 'cls'),
-      siNumber: clampInt(competitor.siNumber, 1, 99999999, 1000),
+      siNumber,
       cardSeries: competitor.cardSeries || 'SI-Card 10',
       isRentalCard: Boolean(competitor.isRentalCard),
       status: competitor.status || 'REGISTERED',
@@ -3316,29 +3487,11 @@ export async function saveCompetitionImportToFirestore(params: {
       punchCodes: punches.map((punch) => clampInt(punch.code, 1, 999, 31)),
       punchTimes: punches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
     };
-    const competitorOperation = await addOperation('competitors', id, mutable, {
+    competitorWrites.push({
       competitorId: id,
-      competitionId,
-      ...mutable,
-      ownerUid,
-      ...nowFields,
-    });
-    const currentSiNumber = Number(competitor.siNumber);
-    const previousSiNumber = Number(competitorOperation.existingData?.siNumber);
-    competitorMutations.push({
-      source: 'saveCompetitionImportToFirestore',
-      operation: 'IMPORT',
-      competitionId,
-      competitorId: id,
-      siNumber: currentSiNumber,
-      ...(Number.isFinite(previousSiNumber) ? { previousSiNumber } : {}),
-      assignmentHandling: {
-        mode: 'LEGACY',
-        reason: competitorOperation.existing
-          ? 'Import updates competitor data without validating or updating SI assignment ownership.'
-          : 'Import creates competitor data without creating an SI assignment.',
-      },
-      identityAffecting: true,
+      siNumber,
+      cardSeries: mutable.cardSeries,
+      mutable,
     });
   }
 
@@ -3393,22 +3546,32 @@ export async function saveCompetitionImportToFirestore(params: {
     }
   }
 
-  await runCompetitorMutations(competitorMutations, async () => {
-    for (let offset = 0; offset < operations.length; offset += 400) {
-      const batch = writeBatch(db);
-      for (const operation of operations.slice(offset, offset + 400)) {
-        if (operation.existing) {
-          batch.update(operation.ref, {
-            ...operation.mutable,
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          batch.set(operation.ref, operation.createData);
-        }
+  for (let offset = 0; offset < operations.length; offset += 400) {
+    const batch = writeBatch(db);
+    for (const operation of operations.slice(offset, offset + 400)) {
+      if (operation.existing) {
+        batch.update(operation.ref, {
+          ...operation.mutable,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch.set(operation.ref, operation.createData);
       }
-      await batch.commit();
     }
-  });
+    await batch.commit();
+  }
+  for (const competitor of competitorWrites) {
+    await writeImportedCompetitorWithAssignment({
+      competitionId,
+      competitorId: competitor.competitorId,
+      ownerUid,
+      isSuperAdmin,
+      siNumber: competitor.siNumber,
+      cardSeries: competitor.cardSeries,
+      assignmentSource: 'IMPORT',
+      mutable: competitor.mutable,
+    });
+  }
 
   if (params.replaceCoursesAndClasses) {
     const retainedIds = {

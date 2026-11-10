@@ -2,6 +2,8 @@
 
 Status: implementation planning document for the required P0 architecture work before Competitor Phase 2 begins.
 
+Historical planning record: individual status notes below preserve the state at each planning milestone and are not the current blocker inventory. Current readiness is maintained in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md); the completed Firestore import/snapshot migration is documented in [IMPORT_SNAPSHOT_MIGRATION.md](./IMPORT_SNAPSHOT_MIGRATION.md).
+
 Source material:
 
 - [MIGRATION-STATUS.md](./MIGRATION-STATUS.md)
