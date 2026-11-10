@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   declareCompetitorMutation,
+  runAssignmentAwareCompetitorMutation,
   runCompetitorMutation,
   runCompetitorMutations,
 } from './siAssignmentDiagnostics';
@@ -107,7 +108,91 @@ describe('competitor mutation declaration boundary', () => {
 
     runCompetitorMutations([declaration, declaration], write);
 
-    expect(info).toHaveBeenCalledTimes(2);
+    expect(
+      info.mock.calls.filter(([message]) =>
+        String(message).includes('[competitor-mutation-service]')
+      )
+    ).toHaveLength(2);
+    expect(
+      info.mock.calls.filter(([message]) => String(message).includes('[competitor-mutation]'))
+    ).toHaveLength(2);
     expect(write).toHaveBeenCalledOnce();
+  });
+
+  it('logs assignment-aware routing, runs validation hooks, and still allows the write', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const hook = vi.fn(() => ({ passed: false, detail: 'Duplicate checks are not enforced yet.' }));
+    const write = vi.fn(() => 'written');
+
+    expect(
+      runAssignmentAwareCompetitorMutation(
+        {
+          declaration: {
+            source: 'test SI reassignment',
+            operation: 'UPDATE',
+            competitionId: 'evt_test',
+            competitorId: 'cmp_test',
+            siNumber: 54321,
+            previousSiNumber: 12345,
+            assignmentHandling: {
+              mode: 'VALIDATED',
+              validatedSiNumber: 54321,
+              assignmentVersion: 1,
+            },
+            identityAffecting: true,
+          },
+          intent: 'CHANGE_SI_NUMBER',
+          assignment: {
+            mode: 'ASSIGNMENT_AWARE',
+            currentSiNumber: 12345,
+            requestedSiNumber: 54321,
+            assignmentId: '54321',
+            validationState: 'READ_ONLY',
+          },
+          competitor: {
+            competitionId: 'evt_test',
+            competitorId: 'cmp_test',
+            currentSiNumber: 12345,
+            proposedSiNumber: 54321,
+          },
+          validationHooks: [{ name: 'future-duplicate-check', validate: hook }],
+        },
+        write
+      )
+    ).toBe('written');
+
+    expect(hook).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('[competitor-mutation-validation]')
+    );
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('"assignmentAwarePathUsed":true')
+    );
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyPathBypassed":true'));
+    expect(write).toHaveBeenCalledOnce();
+  });
+
+  it('logs that legacy assignment handling remains when a routed writer has no assignment context', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    runCompetitorMutation(
+      {
+        source: 'test legacy writer',
+        operation: 'DELETE',
+        competitionId: 'evt_test',
+        competitorId: 'cmp_test',
+        siNumber: 12345,
+        assignmentHandling: { mode: 'LEGACY', reason: 'No assignment operations in this phase.' },
+        identityAffecting: true,
+      },
+      () => undefined
+    );
+
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('"assignmentAwarePathUsed":false')
+    );
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyPathBypassed":false'));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('"legacyAssignmentPath":true'));
   });
 });
