@@ -87,6 +87,10 @@ import {
   type SIAssignmentPreviewPlan,
 } from './utils/siAssignmentPreview';
 import {
+  planCreateSIAssignmentWrite,
+  planRetireSIAssignmentWrite,
+} from './utils/siAssignmentWrites';
+import {
   declareCompetitorMutation,
   runAssignmentAwareCompetitorMutation,
   runCompetitorMutation,
@@ -3451,6 +3455,7 @@ export interface AtomicSIAssignmentMutationResult extends AtomicSIAssignmentMuta
   duplicateCandidate: boolean;
   reassignmentRequired: boolean;
   retirementRequired: boolean;
+  assignmentWriteOutcome: AtomicSIAssignmentWriteOutcome;
   assignmentDocuments: Array<{
     siNumber: number;
     exists: boolean;
@@ -3460,6 +3465,17 @@ export interface AtomicSIAssignmentMutationResult extends AtomicSIAssignmentMuta
   previewPlan: SIAssignmentPreviewPlan;
   metrics: SIAssignmentPreviewMetrics;
 }
+
+export type AtomicSIAssignmentWriteOutcome =
+  | 'NOT_APPLICABLE'
+  | 'REASSIGNMENT_NOT_IMPLEMENTED'
+  | 'CREATED'
+  | 'ALREADY_MATCHED'
+  | 'RETIRED'
+  | 'ALREADY_RETIRED'
+  | 'SKIPPED_CONFLICT'
+  | 'SKIPPED_INVALID_DATA'
+  | 'SKIPPED_VERSION_LIMIT';
 
 type AtomicSIAssignmentMutationTransactionResult = Omit<
   AtomicSIAssignmentMutationResult,
@@ -3482,6 +3498,7 @@ export interface AtomicSIAssignmentMutationContext {
   competitionData: Record<string, unknown>;
   competitorData: Record<string, unknown> | null;
   competitorExists: boolean;
+  assignmentSnapshots: ReadonlyMap<number, DocumentSnapshot>;
   result: AtomicSIAssignmentMutationTransactionResult;
 }
 
@@ -3493,7 +3510,9 @@ export function getAtomicSIAssignmentPreviewMetrics(): SIAssignmentPreviewMetric
 
 export async function runAtomicSIAssignmentMutation(
   params: AtomicSIAssignmentMutationRequest,
-  write: (context: AtomicSIAssignmentMutationContext) => void | Promise<void>
+  write: (
+    context: AtomicSIAssignmentMutationContext
+  ) => void | AtomicSIAssignmentWriteOutcome | Promise<void | AtomicSIAssignmentWriteOutcome>
 ): Promise<AtomicSIAssignmentMutationResult> {
   const competitionId = sanitizeFirestoreId(params.competitor.competitionId, 'evt');
   const competitorId = sanitizeFirestoreId(params.competitor.competitorId, 'cmp');
@@ -3580,8 +3599,7 @@ export async function runAtomicSIAssignmentMutation(
         (siNumber === requestedSiNumber &&
           requestedSiNumber !== currentSiNumber &&
           effectiveIntent !== 'DELETE_COMPETITOR' &&
-          effectiveIntent !== 'RETIRE_COMPETITOR') ||
-        (effectiveIntent === 'CREATE_COMPETITOR' && !competitorSnap.exists())
+          effectiveIntent !== 'RETIRE_COMPETITOR')
       ) {
         assignmentMismatch = true;
       }
@@ -3646,6 +3664,10 @@ export async function runAtomicSIAssignmentMutation(
       duplicateCandidate: duplicateCandidateDetected,
       reassignmentRequired: previewPlan.reassignmentRequired,
       retirementRequired: previewPlan.retirementRequired,
+      assignmentWriteOutcome:
+        effectiveIntent === 'CHANGE_SI_NUMBER'
+          ? 'REASSIGNMENT_NOT_IMPLEMENTED'
+          : 'NOT_APPLICABLE',
       assignmentDocuments: Array.from(assignmentSnapshots.entries()).map(
         ([siNumber, snapshot]) => ({
           siNumber,
@@ -3670,7 +3692,7 @@ export async function runAtomicSIAssignmentMutation(
         requestedSiNumber === null
           ? undefined
           : assignmentSnapshots.get(requestedSiNumber);
-      await runAssignmentAwareCompetitorMutation(
+      const assignmentWriteOutcome = await runAssignmentAwareCompetitorMutation(
         {
           declaration: {
             source: 'runAtomicSIAssignmentMutation',
@@ -3728,9 +3750,41 @@ export async function runAtomicSIAssignmentMutation(
             competitionData: competitionSnap.data() ?? {},
             competitorData,
             competitorExists: competitorSnap.exists(),
+            assignmentSnapshots,
             result,
           })
       );
+      if (assignmentWriteOutcome) {
+        result.assignmentWriteOutcome = assignmentWriteOutcome;
+      }
+      const assignmentWriteDiagnostic = {
+        intent: effectiveIntent,
+        competitionId,
+        competitorId,
+        assignmentWriteOutcome: result.assignmentWriteOutcome,
+        enforcementActive: false,
+        writesContinue: true,
+      };
+      if (
+        result.assignmentWriteOutcome === 'SKIPPED_CONFLICT' ||
+        result.assignmentWriteOutcome === 'SKIPPED_INVALID_DATA' ||
+        result.assignmentWriteOutcome === 'SKIPPED_VERSION_LIMIT'
+      ) {
+        const diagnostic =
+          effectiveIntent === 'CREATE_COMPETITOR'
+            ? 'COMPETITOR_CREATED_WITHOUT_ASSIGNMENT'
+            : effectiveIntent === 'DELETE_COMPETITOR'
+              ? 'COMPETITOR_DELETED_WITHOUT_ASSIGNMENT_RETIREMENT'
+              : 'COMPETITOR_RETIREMENT_WITHOUT_ASSIGNMENT_UPDATE';
+        console.warn(
+          `[si-assignment-write] ${JSON.stringify({
+            ...assignmentWriteDiagnostic,
+            diagnostic,
+          })}`
+        );
+      } else {
+        console.info(`[si-assignment-write] ${JSON.stringify(assignmentWriteDiagnostic)}`);
+      }
     }
     return result;
   });
@@ -3746,7 +3800,13 @@ export async function runAtomicSIAssignmentMutation(
   const previewDiagnostic = {
     ...result,
     enforcementActive: false,
-    assignmentWritesEnabled: false,
+    assignmentWritesEnabled:
+      result.intent === 'CREATE_COMPETITOR' ||
+      result.intent === 'RETIRE_COMPETITOR' ||
+      result.intent === 'DELETE_COMPETITOR',
+    assignmentWritesApplied:
+      result.assignmentWriteOutcome === 'CREATED' ||
+      result.assignmentWriteOutcome === 'RETIRED',
     writesContinue: true,
   };
   const log = result.previewPlan.wouldBeBlocked ? console.warn : console.info;
@@ -4454,7 +4514,7 @@ export async function deleteCompetitorFromFirestore(
       },
       assignment: {},
     },
-    ({ transaction, competitionData, competitorData }) => {
+    ({ transaction, competitionData, competitorData, assignmentSnapshots }) => {
       if (!competitorData) return;
       const competition = competitionData;
       const competitor = competitorData;
@@ -4465,6 +4525,18 @@ export async function deleteCompetitorFromFirestore(
         throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
       }
       const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
+      const currentSiNumber =
+        typeof competitor.siNumber === 'number' ? competitor.siNumber : null;
+      const assignmentWriteOutcome = retireSIAssignmentInTransaction({
+        transaction,
+        competitionId: context.competitionId,
+        competitorId: safeCompetitorId,
+        competitorData: competitor,
+        assignmentSnapshot:
+          currentSiNumber === null ? undefined : assignmentSnapshots.get(currentSiNumber),
+        ownerUid: context.ownerUid,
+        retirementReason: 'competitor_deleted',
+      });
       console.info(
         `[atomic-si-mutation-would-enforce] ${JSON.stringify({
           intent: 'DELETE_COMPETITOR',
@@ -4483,11 +4555,172 @@ export async function deleteCompetitorFromFirestore(
           : {}),
         updatedAt: serverTimestamp(),
       });
+      return assignmentWriteOutcome;
     }
   );
   if (mutationResult.status !== 'COMMITTED') {
     throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
   }
+}
+
+export async function retireCompetitorInFirestore(
+  competitionId: string,
+  competitorId: string,
+  retirementReason = 'competitor_retired'
+): Promise<void> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
+  const competitionRef = doc(db, 'competitions', context.competitionId);
+  const competitorRef = doc(
+    db,
+    'competitions',
+    context.competitionId,
+    'competitors',
+    safeCompetitorId
+  );
+  const mutationResult = await runAtomicSIAssignmentMutation(
+    {
+      intent: 'RETIRE_COMPETITOR',
+      competitor: {
+        competitionId: context.competitionId,
+        competitorId: safeCompetitorId,
+      },
+      assignment: {},
+    },
+    ({ transaction, competitionData, competitorData, assignmentSnapshots }) => {
+      if (!competitorData) return;
+      if (competitionData.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+        throw new Error('Ditt konto saknar behörighet att avanmäla deltagaren.');
+      }
+      if (competitionData.status === 'COMPLETED' && !context.isSuperAdmin) {
+        throw new Error('Deltagare kan inte avanmäls från en avslutad tävling.');
+      }
+
+      const siNumber =
+        typeof competitorData.siNumber === 'number' ? competitorData.siNumber : null;
+      const assignmentWriteOutcome = retireSIAssignmentInTransaction({
+        transaction,
+        competitionId: context.competitionId,
+        competitorId: safeCompetitorId,
+        competitorData,
+        assignmentSnapshot:
+          siNumber === null ? undefined : assignmentSnapshots.get(siNumber),
+        ownerUid: context.ownerUid,
+        retirementReason,
+      });
+      const currentStatus = String(competitorData.status);
+      let nextStatus: RunnerStatus;
+      switch (currentStatus) {
+        case 'IN_FOREST':
+        case 'PRELIMINARY_FIN':
+          nextStatus = 'DNF';
+          break;
+        case 'OK':
+        case 'MP':
+        case 'DNF':
+          nextStatus = currentStatus;
+          break;
+        default:
+          nextStatus = 'DNS';
+      }
+      const wasCountedAsFinished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(currentStatus);
+      const willBeCountedAsFinished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(nextStatus);
+      transaction.update(competitorRef, {
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+      if (wasCountedAsFinished !== willBeCountedAsFinished) {
+        transaction.update(competitionRef, {
+          finishedCount: Math.max(
+            0,
+            Number(competitionData.finishedCount || 0) +
+              (willBeCountedAsFinished ? 1 : -1)
+          ),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      return assignmentWriteOutcome;
+    }
+  );
+  if (mutationResult.status !== 'COMMITTED') {
+    throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+  }
+}
+
+function retireSIAssignmentInTransaction(params: {
+  transaction: Transaction;
+  competitionId: string;
+  competitorId: string;
+  competitorData: Record<string, unknown>;
+  assignmentSnapshot?: DocumentSnapshot;
+  ownerUid: string;
+  retirementReason: string;
+}): AtomicSIAssignmentWriteOutcome {
+  const siNumber =
+    typeof params.competitorData.siNumber === 'number'
+      ? params.competitorData.siNumber
+      : Number.NaN;
+  const cardSeries = params.competitorData.cardSeries;
+  if (
+    !Number.isInteger(siNumber) ||
+    siNumber < 1 ||
+    siNumber > 99999999 ||
+    typeof cardSeries !== 'string' ||
+    cardSeries.length < 1 ||
+    cardSeries.length > 24 ||
+    !params.ownerUid
+  ) {
+    return 'SKIPPED_INVALID_DATA';
+  }
+
+  const existingAssignment =
+    params.assignmentSnapshot?.exists()
+      ? parseSICardAssignmentDocument(
+          params.assignmentSnapshot.id,
+          params.competitionId,
+          params.assignmentSnapshot.data()
+        )
+      : null;
+  if (params.assignmentSnapshot?.exists() && !existingAssignment) {
+    return 'SKIPPED_CONFLICT';
+  }
+  const action = planRetireSIAssignmentWrite(existingAssignment, params.competitorId);
+  const assignmentRef = getCompetitionSICardAssignmentRef(
+    params.competitionId,
+    siNumber
+  );
+  if (action === 'CREATE_RETIRED') {
+    params.transaction.set(assignmentRef, {
+      competitionId: params.competitionId,
+      siNumber,
+      cardSeries,
+      competitorId: params.competitorId,
+      competitorDocumentId: params.competitorId,
+      state: 'RETIRED',
+      assignmentVersion: 1,
+      source: 'SYSTEM',
+      ownerUid: params.ownerUid,
+      schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      retiredAt: serverTimestamp(),
+      retirementReason: params.retirementReason.slice(0, 200),
+    });
+    return 'RETIRED';
+  }
+  if (action === 'RETIRE' && existingAssignment) {
+    params.transaction.update(assignmentRef, {
+      state: 'RETIRED',
+      assignmentVersion: existingAssignment.assignmentVersion + 1,
+      updatedAt: serverTimestamp(),
+      retiredAt: serverTimestamp(),
+      retirementReason: params.retirementReason.slice(0, 200),
+    });
+    return 'RETIRED';
+  }
+  if (action === 'ALREADY_RETIRED') return 'ALREADY_RETIRED';
+  if (action === 'SKIP_VERSION_LIMIT') return 'SKIPPED_VERSION_LIMIT';
+  return 'SKIPPED_CONFLICT';
 }
 
 export async function deleteRunnerDbEntryFromFirestore(siNumber: number): Promise<void> {
@@ -5511,7 +5744,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         competitor: { competitionId, competitorId },
         assignment: { requestedSiNumber: siNumber },
       },
-      async ({ transaction, competitionData: currentCompetition }) => {
+      async ({ transaction, competitionData: currentCompetition, assignmentSnapshots }) => {
         const runnerId = String(siNumber);
         const runnerRef = doc(db, 'runnerDb', runnerId);
         const runnerSnap =
@@ -5565,6 +5798,43 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        const assignmentSnapshot = assignmentSnapshots.get(siNumber);
+        const existingAssignment =
+          assignmentSnapshot?.exists()
+            ? parseSICardAssignmentDocument(
+                assignmentSnapshot.id,
+                competitionId,
+                assignmentSnapshot.data()
+              )
+            : null;
+        const assignmentAction =
+          !Number.isInteger(siNumber) ||
+          siNumber < 1 ||
+          siNumber > 99999999 ||
+          typeof competitor.cardSeries !== 'string' ||
+          competitor.cardSeries.length < 1 ||
+          competitor.cardSeries.length > 24 ||
+          !ownerUid
+            ? 'SKIPPED_INVALID_DATA'
+            : assignmentSnapshot?.exists() && !existingAssignment
+              ? 'SKIPPED_CONFLICT'
+              : planCreateSIAssignmentWrite(existingAssignment, competitorId);
+        if (assignmentAction === 'CREATE') {
+          transaction.set(getCompetitionSICardAssignmentRef(competitionId, siNumber), {
+            competitionId,
+            siNumber,
+            cardSeries: competitor.cardSeries,
+            competitorId,
+            competitorDocumentId: competitorId,
+            state: 'ACTIVE',
+            assignmentVersion: 1,
+            source: 'DIRECT_ENTRY',
+            ownerUid,
+            schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
         transaction.update(competitionRef, {
           competitorCount: nextCompetitorCount,
           finishedCount: Math.min(
@@ -5600,6 +5870,13 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
             updatedAt: nowIso,
           };
         }
+        return assignmentAction === 'CREATE'
+          ? 'CREATED'
+          : assignmentAction === 'ALREADY_MATCHED'
+            ? 'ALREADY_MATCHED'
+            : assignmentAction === 'SKIP_CONFLICT'
+              ? 'SKIPPED_CONFLICT'
+              : assignmentAction;
       }
     );
     if (mutationResult.status !== 'COMMITTED') {

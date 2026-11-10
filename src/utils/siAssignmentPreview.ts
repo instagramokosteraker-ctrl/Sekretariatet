@@ -81,6 +81,8 @@ export function buildSIAssignmentPreviewPlan(
   if (
     input.currentAssignmentMissing &&
     input.intent !== 'CREATE_COMPETITOR' &&
+    input.intent !== 'RETIRE_COMPETITOR' &&
+    input.intent !== 'DELETE_COMPETITOR' &&
     isValidSiNumber(input.currentSiNumber)
   ) {
     blockers.push('ASSIGNMENT_MISSING');

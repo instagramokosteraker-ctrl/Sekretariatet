@@ -145,7 +145,7 @@ describe('SI assignment mutation preview', () => {
       duplicateCandidate: false,
       duplicateCandidateQueryFailed: false,
     });
-    const blockedPlan = buildSIAssignmentPreviewPlan({
+    const retirementPlan = buildSIAssignmentPreviewPlan({
       intent: 'DELETE_COMPETITOR',
       competitionExists: true,
       competitorExists: true,
@@ -161,13 +161,13 @@ describe('SI assignment mutation preview', () => {
 
     const metrics = accumulateSIAssignmentPreviewMetrics(
       accumulateSIAssignmentPreviewMetrics(createSIAssignmentPreviewMetrics(), succeedingPlan),
-      blockedPlan
+      retirementPlan
     );
 
     expect(metrics).toEqual({
       operations: 2,
-      wouldSucceed: 1,
-      wouldBeBlocked: 1,
+      wouldSucceed: 2,
+      wouldBeBlocked: 0,
       wouldRequireReassignment: 1,
       wouldRequireRetirement: 1,
     });
