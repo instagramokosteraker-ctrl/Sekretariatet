@@ -8,7 +8,7 @@ Status: post import/snapshot migration assessment, 2026-11-10.
 
 Readout auto-create has been migrated: the Firestore path atomically creates the competitor, active SI assignment, receipt, and count projections, while the Express readout and online-punch processors no longer create competitor identities. This closes that specific identity-writer bypass. It does not resolve the other legacy writers or prove all-writer uniqueness and operational enforcement.
 
-The existing Firestore transaction paths for direct entry, SI change, retirement, reassignment, readout, import, and snapshot seeding, plus the strengthened Firestore client-rule fence, are meaningful progress. Import and missing-record snapshot seeds now validate or create the matching SI assignment in the same transaction as each competitor write. Admin SDK writers, legacy Express import mirrors, competition deletion, and production-wide uniqueness still require migration or operational validation.
+The existing Firestore transaction paths for direct entry, SI change, retirement, reassignment, readout, import, and snapshot seeding, plus the strengthened Firestore client-rule fence, are meaningful progress. Import and missing-record snapshot seeds now validate or create the matching SI assignment in the same transaction as each competitor write. Eventor/IOF Express competitor imports are disabled or redirected to that canonical flow. Other Admin SDK writers, competition deletion, and production-wide uniqueness still require migration or operational validation.
 
 ## Completed migration work relevant to this assessment
 
@@ -21,29 +21,29 @@ The existing Firestore transaction paths for direct entry, SI change, retirement
 - Legacy snapshot updates to existing competitor documents and snapshot-driven deletions are blocked by `syncFullSeasonToFirestore`; missing-record snapshot seeds now atomically create and validate the matching SI assignment.
 - Firestore client rules now verify matching competitor ID, assignment ID, SI number, competition ID, and owner for creates and SI reassignment. The rules do not constrain Admin SDK writers; import/snapshot creation now writes the matching assignment in the same transaction.
 - Firestore import creates and same-identity updates now validate SI assignment ownership inside per-competitor transactions. Import-driven SI/card-series changes are rejected and must use the canonical reassignment flow.
+- Eventor competitor import is disabled with HTTP 410. IOF competitor entries are rejected by the Express import mirror; authenticated IOF import writes competitors through the Firestore transaction path and no longer mirrors entries to Express.
 
 ## Canonical active blocker list
 
 This is the single source of truth for active competitor-ownership cutover blockers. The [legacy writer inventory](./LEGACY_WRITER_INVENTORY.md) and [readout auto-create migration record](./READOUT_AUTO_CREATE_MIGRATION_PLAN.md) refer here rather than maintaining separate blocker lists.
 
-1. **Eventor/IOF Express import mirrors (highest priority):** `/api/eventor/import-event` and `/api/import/batch` still create competitor identities in the persisted Express mirror without assignment handling. Migrate these routes to the canonical Firestore import flow or disable them and prevent mirror data from becoming an identity source.
-2. **Competition deletion lifecycle:** `deleteCompetitionFromFirestore` deletes child documents in batches without retiring SI assignments, omits the assignment subcollection, and does not complete competitor deletion atomically with assignment retirement. Implement and validate assignment-aware deletion.
-3. **Trusted-writer enforcement and uniqueness validation:** Firestore client rules do not constrain Admin SDK writers. Establish and verify the production authority boundary, reconcile existing duplicate/conflicting SI data, and validate uniqueness, retries, rollback, and concurrent mutations. Emulator and deployed-rule evidence is still required.
-4. **Administrative lifecycle and restore mirrors:** clear-demo, reset-seed, and Express competition deletion still replace or remove identities in the legacy mirror; restore is restricted for SI/ID/card-series/status changes but still restores other competitor fields to that mirror. Constrain these paths so they cannot become alternate identity authorities.
+1. **Competition deletion lifecycle (highest priority):** `deleteCompetitionFromFirestore` deletes child documents in batches without retiring SI assignments, omits the assignment subcollection, and does not complete competitor deletion atomically with assignment retirement. Implement and validate assignment-aware deletion.
+2. **Trusted-writer enforcement and uniqueness validation:** Firestore client rules do not constrain Admin SDK writers. Establish and verify the production authority boundary, reconcile existing duplicate/conflicting SI data, and validate uniqueness, retries, rollback, and concurrent mutations. Emulator and deployed-rule evidence is still required.
+3. **Administrative lifecycle and restore mirrors:** clear-demo, reset-seed, and Express competition deletion still replace or remove identities in the legacy mirror; restore is restricted for SI/ID/card-series/status changes but still restores other competitor fields to that mirror. Constrain these paths so they cannot become alternate identity authorities.
 
-The three legacy competitor CRUD routes and their first-party UI callers are no longer active blockers. Firestore import and snapshot writes are now assignment-aware; legacy Express import mirrors, administrative mirror paths, and competition lifecycle writers remain open.
+The three legacy competitor CRUD routes and their first-party UI callers are no longer active blockers. Firestore import and snapshot writes are assignment-aware, and Eventor/IOF Express competitor import writes are disabled or redirected to the canonical Firestore path. Administrative mirror paths and competition lifecycle writers remain open.
 
-**What is the single highest-priority remaining blocker?** Migrate or disable the Eventor/IOF Express import mirrors so they cannot create competitor identity outside the canonical Firestore assignment-aware import flow.
+**What is the single highest-priority remaining blocker?** Make competition deletion retire or otherwise resolve every SI assignment atomically with competitor deletion.
 
 The Express `/api/readout` compatibility path remains a readout/result-mirror concern: it does not create competitor identity, but it does not replace the canonical Firestore receipt/result flow. It is not the former readout auto-create identity blocker; complete readout/result ownership remains a separate cutover concern.
 
 ## Readiness basis
 
 - **Design:** sufficiently documented.
-- **Implementation:** partial; Firestore import and snapshot writes are assignment-aware, but legacy Express import mirrors and competition lifecycle writers remain.
+- **Implementation:** partial; Firestore import and snapshot writes are assignment-aware and Eventor/IOF competitor import mirrors are disabled, but competition lifecycle writers remain.
 - **Operational/safety validation:** incomplete; repository notes do not establish deployed trusted-server enforcement, all-writer coverage, historical conflict reconciliation, or successful concurrency/rollback validation.
 
-The detailed Firestore import/snapshot path trace is in [IMPORT_SNAPSHOT_MIGRATION.md](./IMPORT_SNAPSHOT_MIGRATION.md). The earlier [POST_CRUD_READINESS_REVIEW.md](./POST_CRUD_READINESS_REVIEW.md) and [IMPORT_SNAPSHOT_OWNERSHIP_GAP_ANALYSIS.md](./IMPORT_SNAPSHOT_OWNERSHIP_GAP_ANALYSIS.md) are historical records; this file is the only current blocker list. The rules regression cases require Firestore emulator execution; no emulator or Firebase CLI was available during this assessment. Application build/lint do not validate deployed rules or trusted writers.
+The Firestore import/snapshot path trace is in [IMPORT_SNAPSHOT_MIGRATION.md](./IMPORT_SNAPSHOT_MIGRATION.md), and the Eventor/IOF flow trace is in [EVENTOR_IOF_IMPORT_MIGRATION.md](./EVENTOR_IOF_IMPORT_MIGRATION.md). The earlier [POST_CRUD_READINESS_REVIEW.md](./POST_CRUD_READINESS_REVIEW.md) and [IMPORT_SNAPSHOT_OWNERSHIP_GAP_ANALYSIS.md](./IMPORT_SNAPSHOT_OWNERSHIP_GAP_ANALYSIS.md) are historical records; this file is the only current blocker list. The rules regression cases require Firestore emulator execution; no emulator or Firebase CLI was available during this assessment. Application build/lint do not validate deployed rules or trusted writers.
 
 Therefore, do not enable global uniqueness enforcement or declare competitor ownership fully cut over until every item in the canonical list is closed and verified.
 
@@ -53,7 +53,7 @@ Therefore, do not enable global uniqueness enforcement or declare competitor own
 - `LEGACY_WRITER_INVENTORY.md` previously marked readout auto-create as a remaining blocker and repeated outdated readout claims in its final assessment. It now marks that writer migrated and points to this canonical blocker list.
 - Earlier readiness notes described the assignment schema/transactions as not implemented. Current implementation has assignment create/retire/reassign paths and a client-rule fence, but not global uniqueness or a trusted all-writer boundary. This document distinguishes those milestones from the remaining blockers.
 - The legacy readout endpoint's ongoing compatibility role must not be conflated with identity auto-create: its readout/result persistence limitations remain, but the identity-creation branch was removed.
-- The prior post-CRUD review and ownership-gap analysis listed Firestore import and snapshot seeding as active blockers. This migration closes those gaps with per-competitor transactions; the legacy Express import mirrors remain active blockers and are distinct from the migrated Firestore paths.
+- The prior post-CRUD review, ownership-gap analysis, and import/snapshot migration record identified Eventor/IOF Express import mirrors as active blockers. This migration disables competitor writes through those mirrors and keeps authenticated IOF competitor writes on the per-competitor Firestore transaction path; Eventor/IOF import is no longer an active blocker.
 
 ## References
 
@@ -65,3 +65,4 @@ Therefore, do not enable global uniqueness enforcement or declare competitor own
 - [POST_CRUD_READINESS_REVIEW.md](./POST_CRUD_READINESS_REVIEW.md)
 - [IMPORT_SNAPSHOT_OWNERSHIP_GAP_ANALYSIS.md](./IMPORT_SNAPSHOT_OWNERSHIP_GAP_ANALYSIS.md)
 - [IMPORT_SNAPSHOT_MIGRATION.md](./IMPORT_SNAPSHOT_MIGRATION.md)
+- [EVENTOR_IOF_IMPORT_MIGRATION.md](./EVENTOR_IOF_IMPORT_MIGRATION.md)

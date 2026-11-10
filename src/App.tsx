@@ -3267,8 +3267,8 @@ export default function App() {
                         body: JSON.stringify({
                           courses: nextCourses,
                           classes: nextClasses,
-                          entries: batch.entries,
-                          runnerDbEntries: batch.runnerDbEntries,
+                          entries: [],
+                          runnerDbEntries: importedRunnerDbEntries,
                         }),
                       });
                       if (!mirrorResponse.ok) {

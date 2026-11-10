@@ -5435,8 +5435,6 @@ async function startServer() {
 
   // 9. IOF XML (3.0 & 2.0.3) Batch Import
   app.post('/api/import/batch', (req, res) => {
-    const db = getActiveEvent();
-    const clubCfg = ensureClubSettings(seasonDb);
     const {
       courses = [],
       classes = [],
@@ -5479,6 +5477,47 @@ async function startServer() {
       replaceExisting?: boolean;
       defaultFreeStart?: boolean;
     };
+
+    if (!Array.isArray(entries)) {
+      res.status(400).json({ error: 'IOF-importens deltagarlista har ogiltigt format.' });
+      return;
+    }
+    if (entries.length > 0) {
+      res.status(410).json({
+        error:
+          'Import av deltagare till Express-spegeln är avstängd. Logga in med ett behörigt Google-konto och använd Firestore-importen.',
+      });
+      return;
+    }
+
+    const db = getActiveEvent();
+    const clubCfg = ensureClubSettings(seasonDb);
+    const validIncomingClasses = classes.filter(
+      (cl) => String(cl.name || '').trim().length > 0
+    );
+    if (replaceExisting && validIncomingClasses.length > 0) {
+      const retainedClassIds = new Set<string>();
+      for (const cls of validIncomingClasses) {
+        const existingClass =
+          (cls.id ? db.classes.find((candidate) => candidate.id === cls.id) : undefined) ??
+          db.classes.find(
+            (candidate) =>
+              candidate.name.toLowerCase() === String(cls.name).trim().toLowerCase()
+          );
+        const retainedId = cls.id || existingClass?.id;
+        if (retainedId) retainedClassIds.add(retainedId);
+      }
+      const affectedCompetitors = db.competitors.filter(
+        (competitor) => !retainedClassIds.has(competitor.classId)
+      );
+      if (affectedCompetitors.length > 0) {
+        res.status(409).json({
+          error:
+            'Klasserna kan inte ersättas via Express-spegeln eftersom befintliga deltagare använder klasser som skulle tas bort.',
+        });
+        return;
+      }
+    }
 
     let addedCourses = 0;
     let addedClasses = 0;
@@ -5609,10 +5648,6 @@ async function startServer() {
       };
     };
 
-    const validIncomingClasses = classes.filter(
-      (cl) => String(cl.name || '').trim().length > 0
-    );
-
     if (replaceExisting && validIncomingClasses.length > 0) {
       const oldClassesById = new Map(db.classes.map((oc) => [oc.id, oc] as const));
       const oldClassesByName = new Map(
@@ -5626,23 +5661,6 @@ async function startServer() {
         )
       );
       addedClasses = db.classes.length;
-
-      const validClassIds = new Set(db.classes.map((c) => c.id));
-      const fallbackClassId = db.classes[0]?.id;
-      if (fallbackClassId) {
-        for (const comp of db.competitors) {
-          if (!validClassIds.has(comp.classId)) {
-            logCompetitorAssignmentBypass(
-              '/api/import/batch class replacement',
-              'UPDATE',
-              db.competition.id,
-              comp,
-              'Import changes competitor class but does not validate SI assignment ownership.'
-            );
-            comp.classId = fallbackClassId;
-          }
-        }
-      }
     } else {
       if (replaceExisting && db.courses.length > 0) {
         const validCourseIds = new Set(db.courses.map((c) => c.id));
@@ -5676,80 +5694,6 @@ async function startServer() {
           addedClasses++;
         }
       }
-    }
-
-    let nextBib = db.competitors.reduce((m, c) => Math.max(m, c.bib), 500) + 1;
-    for (const ent of entries) {
-      let targetCls = db.classes.find(
-        (x) => x.name.toLowerCase() === ent.className.toLowerCase()
-      );
-      if (!targetCls) {
-        targetCls = {
-          id: `cls-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          name: ent.className,
-          courseId: db.courses[0]?.id ?? null,
-          allowDirectEntry: true,
-          freeStart: Boolean(defaultFreeStart),
-          autoMatchCourse: Boolean(defaultFreeStart),
-          feeSek: clubCfg.defaultDirectEntryFeeSek,
-        };
-        db.classes.push(targetCls);
-        addedClasses++;
-      }
-
-      if (ent.siNumber > 0) {
-        upsertRunnerInSeasonDb(seasonDb, {
-          siNumber: ent.siNumber,
-          fullName: ent.fullName,
-          club: ent.club,
-          defaultClassName: ent.className,
-          source: 'EVENTOR_XML',
-        });
-        syncedRunnerDb++;
-      }
-
-      const si = ent.siNumber > 0 ? ent.siNumber : 8900000 + nextBib;
-      if (db.competitors.some((c) => c.siNumber === si)) continue;
-
-      const importedCompetitor: Competitor = {
-        id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        bib: nextBib++,
-        fullName: ent.fullName,
-        club: ent.club,
-        classId: targetCls.id,
-        siNumber: si,
-        cardSeries: inferSeries(si),
-        isRentalCard: ent.siNumber === 0,
-        rentalReturned: false,
-        status: 'REGISTERED',
-        allocatedStartSec: db.competition.zeroTimeSec + nextBib * 30,
-        checkTimeSec: null,
-        startTimeSec: null,
-        finishTimeSec: null,
-        runningTimeSec: null,
-        lastSeenControl: null,
-        lastSeenTimeSec: null,
-        readoutAt: null,
-        radioSplits: [],
-        cardPunches: [],
-        validation: null,
-      };
-      runCompetitorMutation(
-        {
-          source: '/api/import/batch',
-          operation: 'IMPORT',
-          competitionId: db.competition.id,
-          competitorId: importedCompetitor.id,
-          siNumber: importedCompetitor.siNumber,
-          assignmentHandling: {
-            mode: 'LEGACY',
-            reason: 'IOF XML import creates the Express competitor without validating or creating its SI assignment.',
-          },
-          identityAffecting: true,
-        },
-        () => db.competitors.push(importedCompetitor)
-      );
-      addedEntries++;
     }
 
     for (const r of runnerDbEntries) {
@@ -6146,166 +6090,11 @@ async function startServer() {
     }
   });
 
-  app.post('/api/eventor/import-event', async (req, res) => {
-    const user = requireEventorAdminRequest(req, res);
-    if (!user) return;
-    let firestoreToken: string;
-    let eventorConfig: EventorConfig;
-    try {
-      firestoreToken = await getEventorFirestoreToken(req, user);
-      eventorConfig = await readEventorConfigFromFirestore(firestoreToken);
-    } catch (err: unknown) {
-      res.status(400).json({
-        error: err instanceof Error ? err.message : 'Kunde inte läsa Eventor-inställningarna.',
-      });
-      return;
-    }
-    if (!eventorConfig.apiKey || !eventorConfig.orgId) {
-      res.status(400).json({ error: 'Spara Eventor API-nyckel och organisations-ID först.' });
-      return;
-    }
-    const db = getActiveEvent();
-    const { eventId } = req.body as { eventId?: string };
-    const cleanId = String(eventId || '').replace(/\D/g, '');
-    if (!cleanId) {
-      res.status(400).json({ error: 'Ange ett giltigt numeriskt Eventor Tävlings-ID.' });
-      return;
-    }
-
-    try {
-      const eventXml = await fetchFromEventorApi(`/event/${cleanId}`, eventorConfig);
-      const eventBlock = extractFirstTag(eventXml, 'Event') ?? eventXml;
-      const evName = extractFirstTag(eventBlock, 'Name');
-      const startBlock = extractFirstTag(eventBlock, 'StartDate') ?? eventBlock;
-      const evDate = extractFirstTag(startBlock, 'Date');
-
-      if (evName) db.competition.name = evName;
-      if (evDate && /^\d{4}-\d{2}-\d{2}$/.test(evDate)) db.competition.date = evDate;
-
-      const classesXml = await fetchFromEventorApi(`/eventclasses?eventId=${cleanId}`, eventorConfig);
-      const classMap = parseEventorClassesXml(classesXml);
-
-      let addedClasses = 0;
-      for (const [, clsName] of classMap.entries()) {
-        if (!db.classes.some((c) => c.name.toLowerCase() === clsName.toLowerCase())) {
-          db.classes.push({
-            id: `cls-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            name: clsName,
-            courseId: db.courses[0]?.id ?? null,
-            allowDirectEntry: true,
-            freeStart: false,
-            autoMatchCourse: false,
-            feeSek: 150,
-          });
-          addedClasses++;
-        }
-      }
-
-      const entriesXml = await fetchFromEventorApi(
-        `/entries?eventIds=${cleanId}&includePersonElement=true&includeOrganisationElement=true`,
-        eventorConfig
-      );
-      const parsedEntries = parseEventorEntriesXml(entriesXml, classMap);
-
-      let addedEntries = 0;
-      let nextBib = db.competitors.reduce((m, c) => Math.max(m, c.bib), 500) + 1;
-      const runnerDbEntries: RunnerDbEntry[] = [];
-
-      for (const ent of parsedEntries) {
-        let targetCls = db.classes.find(
-          (x) => x.name.toLowerCase() === ent.className.toLowerCase()
-        );
-        if (!targetCls) {
-          targetCls = {
-            id: `cls-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-            name: ent.className,
-            courseId: db.courses[0]?.id ?? null,
-            allowDirectEntry: true,
-            freeStart: false,
-            autoMatchCourse: false,
-            feeSek: 150,
-          };
-          db.classes.push(targetCls);
-          addedClasses++;
-        }
-
-        if (ent.siNumber > 0) {
-          const runner = upsertRunnerInSeasonDb(seasonDb, {
-            siNumber: ent.siNumber,
-            fullName: ent.fullName,
-            club: ent.club,
-            defaultClassName: ent.className,
-            eventorPersonId: ent.personId,
-            source: 'EVENTOR_API',
-          });
-          if (runner) runnerDbEntries.push(runner);
-        }
-
-        const si = ent.siNumber > 0 ? ent.siNumber : 8900000 + nextBib;
-        if (db.competitors.some((c) => c.siNumber === si)) continue;
-
-        const importedCompetitor: Competitor = {
-          id: `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          bib: nextBib++,
-          fullName: ent.fullName,
-          club: ent.club,
-          classId: targetCls.id,
-          siNumber: si,
-          cardSeries: inferSeries(si),
-          isRentalCard: ent.siNumber === 0,
-          rentalReturned: false,
-          status: 'REGISTERED',
-          allocatedStartSec: db.competition.zeroTimeSec + nextBib * 30,
-          checkTimeSec: null,
-          startTimeSec: null,
-          finishTimeSec: null,
-          runningTimeSec: null,
-          lastSeenControl: null,
-          lastSeenTimeSec: null,
-          readoutAt: null,
-          radioSplits: [],
-          cardPunches: [],
-          validation: null,
-        };
-        runCompetitorMutation(
-          {
-            source: '/api/eventor/import-event',
-            operation: 'IMPORT',
-            competitionId: db.competition.id,
-            competitorId: importedCompetitor.id,
-            siNumber: importedCompetitor.siNumber,
-            assignmentHandling: {
-              mode: 'LEGACY',
-              reason: 'Eventor import creates the Express competitor without validating or creating its SI assignment.',
-            },
-            identityAffecting: true,
-          },
-          () => db.competitors.push(importedCompetitor)
-        );
-        addedEntries++;
-      }
-
-      seasonDb.eventor.connectedEventId = cleanId;
-      seasonDb.eventor.lastSyncedAt = new Date().toISOString();
-      saveSeasonDatabase(seasonDb);
-      await writeEventorConfigToFirestore(firestoreToken, {
-        connectedEventId: cleanId,
-        lastSyncedAt: seasonDb.eventor.lastSyncedAt,
-      });
-      broadcastFullState(db.competition.shortCode);
-
-      res.json({
-        eventId: cleanId,
-        eventName: db.competition.name,
-        addedClasses,
-        addedEntries,
-        runnerDbEntries,
-      });
-    } catch (err: unknown) {
-      res.status(400).json({
-        error: err instanceof Error ? err.message : 'Kunde inte hämta tävling från Eventor API.',
-      });
-    }
+  app.post('/api/eventor/import-event', (_req, res) => {
+    res.status(410).json({
+      error:
+        'Eventor-import av tävling och deltagare är avstängd. Använd en autentiserad IOF-import som sparar deltagarna via Firestore.',
+    });
   });
 
   app.put('/api/competition', (req, res) => {
