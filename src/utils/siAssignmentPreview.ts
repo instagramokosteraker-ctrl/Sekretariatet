@@ -24,6 +24,7 @@ export interface SIAssignmentPreviewPlan {
   assignmentMismatch: boolean;
   assignmentMissing: boolean;
   duplicateCandidate: boolean;
+  reassignmentConflict: boolean;
   reassignmentRequired: boolean;
   retirementRequired: boolean;
   wouldSucceed: boolean;
@@ -52,6 +53,7 @@ export interface SIAssignmentPreviewInput {
   assignmentMismatch: boolean;
   duplicateCandidate: boolean;
   duplicateCandidateQueryFailed: boolean;
+  reassignmentConflict?: boolean;
 }
 
 export function buildSIAssignmentPreviewPlan(
@@ -59,7 +61,6 @@ export function buildSIAssignmentPreviewPlan(
 ): SIAssignmentPreviewPlan {
   const reassignmentRequired =
     input.intent === 'CHANGE_SI_NUMBER' &&
-    isValidSiNumber(input.currentSiNumber) &&
     isValidSiNumber(input.requestedSiNumber) &&
     input.currentSiNumber !== input.requestedSiNumber;
   const retirementRequired =
@@ -91,6 +92,7 @@ export function buildSIAssignmentPreviewPlan(
     blockers.push('COMPETITOR_ALREADY_EXISTS');
   }
   if (input.duplicateCandidate) blockers.push('DUPLICATE_CANDIDATE');
+  if (input.reassignmentConflict) blockers.push('REASSIGNMENT_CONFLICT');
   if (input.duplicateCandidateQueryFailed) {
     blockers.push('DUPLICATE_CANDIDATE_QUERY_FAILED');
   }
@@ -118,6 +120,7 @@ export function buildSIAssignmentPreviewPlan(
     assignmentMismatch: input.assignmentMismatch,
     assignmentMissing: input.assignmentMissing,
     duplicateCandidate: input.duplicateCandidate,
+    reassignmentConflict: input.reassignmentConflict === true,
     reassignmentRequired,
     retirementRequired,
     wouldSucceed: !wouldBeBlocked,

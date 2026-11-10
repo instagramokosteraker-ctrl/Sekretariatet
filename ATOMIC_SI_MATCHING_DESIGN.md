@@ -154,6 +154,8 @@ Required flow:
 
 Important: a card is never “moved” through a best-effort write. The operation is atomic and fails closed.
 
+**Current Phase C Step 2 rollout behavior:** The Firestore client transaction now performs the old-assignment retirement, target create/reactivation, and competitor update together. Uniqueness enforcement is intentionally not active yet: if the target is actively assigned to another competitor, that assignment is preserved, a structured `REASSIGNMENT_CONFLICT` preview diagnostic is emitted, and the competitor write continues. Missing/malformed old assignments or assignment-version limits are reported as partial outcomes; they do not block the competitor write. A target in `RETIRED` state may be reactivated with its prior competitor recorded. The stricter reject-before-write behavior described above remains the intended enforcement policy, not the current rollout behavior.
+
 ### 2.3 Competitor deletion
 
 Delete is not automatically a hard delete for migrated domains. Competitor records use a retirement/tombstone policy in the migration model.

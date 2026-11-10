@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { SICardAssignment } from '../types/sportident';
 import {
   planCreateSIAssignmentWrite,
+  planReassignSIAssignmentWrite,
   planRetireSIAssignmentWrite,
 } from './siAssignmentWrites';
 
@@ -70,5 +71,108 @@ describe('SI assignment write plans', () => {
         'cmp_test'
       )
     ).toBe('SKIP_VERSION_LIMIT');
+  });
+
+  it('plans an SI change as an old-assignment retirement and a new assignment creation', () => {
+    const plan = planReassignSIAssignmentWrite(
+      existingAssignment({ siNumber: 12345 }),
+      null,
+      'cmp_test'
+    );
+
+    expect(plan).toEqual({
+      oldAssignment: 'RETIRE',
+      targetAssignment: 'CREATE',
+      conflict: false,
+    });
+  });
+
+  it('reports an occupied target assignment without authorizing its overwrite', () => {
+    const target = existingAssignment({
+      siNumber: 67890,
+      competitorId: 'cmp_other',
+      competitorDocumentId: 'cmp_other',
+    });
+    const plan = planReassignSIAssignmentWrite(
+      existingAssignment({ siNumber: 12345 }),
+      target,
+      'cmp_test'
+    );
+
+    expect(plan.oldAssignment).toBe('RETIRE');
+    expect(plan.targetAssignment).toBe('COLLISION');
+    expect(plan.conflict).toBe(true);
+    expect(target.competitorId).toBe('cmp_other');
+  });
+
+  it('reactivates a retired target assignment and records its previous owner', () => {
+    const target = existingAssignment({
+      siNumber: 67890,
+      competitorId: 'cmp_previous',
+      competitorDocumentId: 'cmp_previous',
+      state: 'RETIRED',
+    });
+
+    expect(
+      planReassignSIAssignmentWrite(
+        existingAssignment({ siNumber: 12345 }),
+        target,
+        'cmp_test'
+      )
+    ).toEqual({
+      oldAssignment: 'RETIRE',
+      targetAssignment: 'ACTIVATE',
+      conflict: false,
+    });
+    expect(target.state).toBe('RETIRED');
+    expect(target.competitorId).toBe('cmp_previous');
+  });
+
+  it('leaves assignment inputs unchanged when a reassignment plan is abandoned', () => {
+    const current = existingAssignment({ siNumber: 12345 });
+    const target = existingAssignment({
+      siNumber: 67890,
+      competitorId: 'cmp_previous',
+      competitorDocumentId: 'cmp_previous',
+      state: 'RETIRED',
+    });
+    const before = {
+      currentState: current.state,
+      currentVersion: current.assignmentVersion,
+      targetState: target.state,
+      targetOwner: target.competitorId,
+    };
+
+    try {
+      planReassignSIAssignmentWrite(current, target, 'cmp_test');
+      throw new Error('simulated transaction abort');
+    } catch (error) {
+      expect((error as Error).message).toBe('simulated transaction abort');
+    }
+
+    expect({
+      currentState: current.state,
+      currentVersion: current.assignmentVersion,
+      targetState: target.state,
+      targetOwner: target.competitorId,
+    }).toEqual(before);
+  });
+
+  it('treats a retired target at the version ceiling as a conflict', () => {
+    expect(
+      planReassignSIAssignmentWrite(
+        existingAssignment({ siNumber: 12345 }),
+        existingAssignment({
+          siNumber: 67890,
+          state: 'RETIRED',
+          assignmentVersion: 65535,
+        }),
+        'cmp_test'
+      )
+    ).toEqual({
+      oldAssignment: 'RETIRE',
+      targetAssignment: 'SKIP_CONFLICT',
+      conflict: true,
+    });
   });
 });

@@ -88,6 +88,7 @@ import {
 } from './utils/siAssignmentPreview';
 import {
   planCreateSIAssignmentWrite,
+  planReassignSIAssignmentWrite,
   planRetireSIAssignmentWrite,
 } from './utils/siAssignmentWrites';
 import {
@@ -3439,6 +3440,7 @@ interface AtomicSIAssignmentMutationDiagnostics {
   duplicateCandidateDetected: boolean;
   duplicateCandidateCompetitorIds: string[];
   duplicateCandidateQueryError: string | null;
+  reassignmentConflict: boolean;
 }
 
 export interface AtomicSIAssignmentMutationResult extends AtomicSIAssignmentMutationDiagnostics {
@@ -3468,7 +3470,9 @@ export interface AtomicSIAssignmentMutationResult extends AtomicSIAssignmentMuta
 
 export type AtomicSIAssignmentWriteOutcome =
   | 'NOT_APPLICABLE'
-  | 'REASSIGNMENT_NOT_IMPLEMENTED'
+  | 'REASSIGNED'
+  | 'REASSIGNMENT_CONFLICT'
+  | 'REASSIGNMENT_PARTIAL'
   | 'CREATED'
   | 'ALREADY_MATCHED'
   | 'RETIRED'
@@ -3584,6 +3588,7 @@ export async function runAtomicSIAssignmentMutation(
     }
 
     let assignmentMismatch = false;
+    let reassignmentConflict = false;
     for (const [siNumber, assignmentSnap] of assignmentSnapshots) {
       if (!assignmentSnap.exists()) continue;
       const assignment = parseSICardAssignmentDocument(
@@ -3591,18 +3596,46 @@ export async function runAtomicSIAssignmentMutation(
         competitionId,
         assignmentSnap.data()
       );
+      const isReassignmentTarget =
+        effectiveIntent === 'CHANGE_SI_NUMBER' &&
+        siNumber === requestedSiNumber &&
+        requestedSiNumber !== currentSiNumber;
+      const assignmentIsValid =
+        assignment !== null && assignment.siNumber === siNumber;
+      const targetIsOccupied =
+        isReassignmentTarget &&
+        assignmentIsValid &&
+        assignment?.state === 'ACTIVE' &&
+        assignment.competitorId !== competitorId;
+      if (isReassignmentTarget && (!assignmentIsValid || targetIsOccupied)) {
+        reassignmentConflict = true;
+      }
+      const isExpectedOwner = assignment?.competitorId === competitorId;
+      const acceptableTarget =
+        isReassignmentTarget &&
+        assignmentIsValid &&
+        (assignment?.state === 'RETIRED' ||
+          (assignment?.state === 'ACTIVE' && isExpectedOwner));
+      const acceptableRetiredCurrent =
+        siNumber === currentSiNumber &&
+        assignment?.state === 'RETIRED' &&
+        isExpectedOwner;
       if (
-        !assignment ||
-        assignment.state !== 'ACTIVE' ||
-        assignment.competitorId !== competitorId ||
-        assignment.siNumber !== siNumber ||
-        (siNumber === requestedSiNumber &&
-          requestedSiNumber !== currentSiNumber &&
-          effectiveIntent !== 'DELETE_COMPETITOR' &&
-          effectiveIntent !== 'RETIRE_COMPETITOR')
+        !assignmentIsValid ||
+        (!isExpectedOwner && !acceptableTarget) ||
+        (assignment?.state !== 'ACTIVE' &&
+          !acceptableTarget &&
+          !acceptableRetiredCurrent)
       ) {
         assignmentMismatch = true;
       }
+    }
+    if (
+      effectiveIntent === 'CHANGE_SI_NUMBER' &&
+      requestedSiNumber !== currentSiNumber &&
+      duplicateCandidateCompetitorIds.length > 0
+    ) {
+      reassignmentConflict = true;
     }
     const assignmentExists = Array.from(assignmentSnapshots.values()).some((snap) =>
       snap.exists()
@@ -3644,6 +3677,7 @@ export async function runAtomicSIAssignmentMutation(
       duplicateCandidateDetected,
       duplicateCandidateCompetitorIds,
       duplicateCandidateQueryError,
+      reassignmentConflict,
     };
     const previewPlan = buildSIAssignmentPreviewPlan({
       intent: effectiveIntent,
@@ -3656,6 +3690,7 @@ export async function runAtomicSIAssignmentMutation(
       currentAssignmentMissing,
       assignmentMismatch,
       duplicateCandidate: duplicateCandidateDetected,
+      reassignmentConflict,
       duplicateCandidateQueryFailed:
         duplicateCheckApplies && duplicateCandidateQueryError !== null,
     });
@@ -3666,8 +3701,9 @@ export async function runAtomicSIAssignmentMutation(
       retirementRequired: previewPlan.retirementRequired,
       assignmentWriteOutcome:
         effectiveIntent === 'CHANGE_SI_NUMBER'
-          ? 'REASSIGNMENT_NOT_IMPLEMENTED'
+          ? 'REASSIGNMENT_PARTIAL'
           : 'NOT_APPLICABLE',
+      reassignmentConflict,
       assignmentDocuments: Array.from(assignmentSnapshots.entries()).map(
         ([siNumber, snapshot]) => ({
           siNumber,
@@ -3703,11 +3739,19 @@ export async function runAtomicSIAssignmentMutation(
               ? { siNumber: mutationSiNumber }
               : {}),
             ...(currentSiNumber !== null ? { previousSiNumber: currentSiNumber } : {}),
-            assignmentHandling: {
-              mode: 'LEGACY',
-              reason:
-                'This preparation transaction observes assignment state but deliberately does not write assignment documents.',
-            },
+            assignmentHandling:
+              mutationSiNumber !== null && mutationSiNumber !== undefined
+                ? {
+                    mode: 'VALIDATED',
+                    validatedSiNumber: mutationSiNumber,
+                    assignmentVersion: Number(
+                      assignmentSnapshot?.data()?.assignmentVersion ?? 1
+                    ),
+                  }
+                : {
+                    mode: 'LEGACY',
+                    reason: 'No valid SI number was available for assignment-aware validation.',
+                  },
             identityAffecting: true,
           },
           intent: effectiveIntent,
@@ -3768,11 +3812,15 @@ export async function runAtomicSIAssignmentMutation(
       if (
         result.assignmentWriteOutcome === 'SKIPPED_CONFLICT' ||
         result.assignmentWriteOutcome === 'SKIPPED_INVALID_DATA' ||
-        result.assignmentWriteOutcome === 'SKIPPED_VERSION_LIMIT'
+        result.assignmentWriteOutcome === 'SKIPPED_VERSION_LIMIT' ||
+        result.assignmentWriteOutcome === 'REASSIGNMENT_CONFLICT' ||
+        result.assignmentWriteOutcome === 'REASSIGNMENT_PARTIAL'
       ) {
         const diagnostic =
           effectiveIntent === 'CREATE_COMPETITOR'
             ? 'COMPETITOR_CREATED_WITHOUT_ASSIGNMENT'
+            : effectiveIntent === 'CHANGE_SI_NUMBER'
+              ? 'SI_REASSIGNMENT_ASSIGNMENT_UPDATE_INCOMPLETE'
             : effectiveIntent === 'DELETE_COMPETITOR'
               ? 'COMPETITOR_DELETED_WITHOUT_ASSIGNMENT_RETIREMENT'
               : 'COMPETITOR_RETIREMENT_WITHOUT_ASSIGNMENT_UPDATE';
@@ -3802,11 +3850,13 @@ export async function runAtomicSIAssignmentMutation(
     enforcementActive: false,
     assignmentWritesEnabled:
       result.intent === 'CREATE_COMPETITOR' ||
+      result.intent === 'CHANGE_SI_NUMBER' ||
       result.intent === 'RETIRE_COMPETITOR' ||
       result.intent === 'DELETE_COMPETITOR',
     assignmentWritesApplied:
       result.assignmentWriteOutcome === 'CREATED' ||
-      result.assignmentWriteOutcome === 'RETIRED',
+      result.assignmentWriteOutcome === 'RETIRED' ||
+      result.assignmentWriteOutcome === 'REASSIGNED',
     writesContinue: true,
   };
   const log = result.previewPlan.wouldBeBlocked ? console.warn : console.info;
@@ -4384,7 +4434,13 @@ export async function updateCompetitorInFirestore(
           : {}),
       },
     },
-    ({ transaction, competitionData, competitorData }) => {
+    ({
+      transaction,
+      competitionData,
+      competitorData,
+      assignmentSnapshots,
+      result: transactionResult,
+    }) => {
       if (!competitorData) return;
       const competition = competitionData;
       const existing = competitorData;
@@ -4393,6 +4449,154 @@ export async function updateCompetitorInFirestore(
       }
       const nextSiNumber =
         typeof mutable.siNumber === 'number' ? mutable.siNumber : Number(existing.siNumber);
+      let assignmentWriteOutcome: AtomicSIAssignmentWriteOutcome | undefined;
+      const currentSiNumber =
+        Number.isInteger(existing.siNumber) && Number(existing.siNumber) > 0
+          ? Number(existing.siNumber)
+          : null;
+      if (
+        typeof mutable.siNumber === 'number' &&
+        (!Number.isInteger(nextSiNumber) ||
+          nextSiNumber < 1 ||
+          nextSiNumber > 99999999)
+      ) {
+        assignmentWriteOutcome = 'SKIPPED_INVALID_DATA';
+      }
+      if (
+        typeof mutable.siNumber === 'number' &&
+        currentSiNumber !== nextSiNumber &&
+        Number.isInteger(nextSiNumber) &&
+        nextSiNumber >= 1 &&
+        nextSiNumber <= 99999999
+      ) {
+        const currentAssignmentSnapshot =
+          currentSiNumber === null ? undefined : assignmentSnapshots.get(currentSiNumber);
+        const targetAssignmentSnapshot = assignmentSnapshots.get(nextSiNumber);
+        const currentAssignment = currentAssignmentSnapshot?.exists()
+          ? parseSICardAssignmentDocument(
+              currentAssignmentSnapshot.id,
+              context.competitionId,
+              currentAssignmentSnapshot.data()
+            )
+          : null;
+        const targetAssignment = targetAssignmentSnapshot?.exists()
+          ? parseSICardAssignmentDocument(
+              targetAssignmentSnapshot.id,
+              context.competitionId,
+              targetAssignmentSnapshot.data()
+            )
+          : null;
+        const plan = planReassignSIAssignmentWrite(currentAssignment, targetAssignment, id);
+        const currentMalformed =
+          currentAssignmentSnapshot?.exists() && currentAssignment === null;
+        const targetMalformed =
+          targetAssignmentSnapshot?.exists() && targetAssignment === null;
+        const oldAction = currentMalformed ? 'SKIP_CONFLICT' : plan.oldAssignment;
+        const targetAction = targetMalformed ? 'SKIP_CONFLICT' : plan.targetAssignment;
+        const now = Timestamp.now();
+        let reassignmentPartial =
+          plan.conflict ||
+          currentMalformed ||
+          targetMalformed ||
+          (oldAction === 'MISSING' && currentSiNumber !== null);
+
+        if (oldAction === 'RETIRE' && currentAssignment) {
+          if (currentSiNumber !== null) {
+            transaction.update(
+              getCompetitionSICardAssignmentRef(context.competitionId, currentSiNumber),
+              {
+                state: 'RETIRED',
+                assignmentVersion: currentAssignment.assignmentVersion + 1,
+                updatedAt: now,
+                retiredAt: now,
+                retirementReason: 'si_reassigned',
+                previousCompetitorId: id,
+              }
+            );
+          }
+        } else if (oldAction === 'SKIP_CONFLICT' || oldAction === 'SKIP_VERSION_LIMIT') {
+          reassignmentPartial = true;
+        }
+
+        if (targetAction === 'CREATE') {
+          const cardSeries =
+            typeof mutable.cardSeries === 'string' &&
+            mutable.cardSeries.length > 0 &&
+            mutable.cardSeries.length <= 24
+              ? mutable.cardSeries
+              : typeof existing.cardSeries === 'string'
+                ? existing.cardSeries
+                : '';
+          if (cardSeries.length > 0 && cardSeries.length <= 24) {
+            transaction.set(
+              getCompetitionSICardAssignmentRef(context.competitionId, nextSiNumber),
+              {
+                competitionId: context.competitionId,
+                siNumber: nextSiNumber,
+                cardSeries,
+                competitorId: id,
+                competitorDocumentId: id,
+                state: 'ACTIVE',
+                assignmentVersion: 1,
+                source: 'MANUAL',
+                ownerUid: context.ownerUid,
+                schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+                createdAt: now,
+                updatedAt: now,
+              }
+            );
+          } else {
+            reassignmentPartial = true;
+          }
+        } else if (targetAction === 'ACTIVATE' && targetAssignment) {
+          const cardSeries =
+            typeof mutable.cardSeries === 'string' &&
+            mutable.cardSeries.length > 0 &&
+            mutable.cardSeries.length <= 24
+              ? mutable.cardSeries
+              : targetAssignment.cardSeries;
+          transaction.update(
+            getCompetitionSICardAssignmentRef(context.competitionId, nextSiNumber),
+            {
+              cardSeries,
+              competitorId: id,
+              competitorDocumentId: id,
+              state: 'ACTIVE',
+              assignmentVersion: targetAssignment.assignmentVersion + 1,
+              updatedAt: now,
+              retiredAt: null,
+              retirementReason: null,
+              previousCompetitorId:
+                targetAssignment.competitorId ?? targetAssignment.previousCompetitorId ?? null,
+            }
+          );
+        } else if (
+          targetAction === 'COLLISION' ||
+          targetAction === 'SKIP_CONFLICT'
+        ) {
+          reassignmentPartial = true;
+        }
+
+        assignmentWriteOutcome = reassignmentPartial
+          ? plan.conflict && targetAction === 'COLLISION'
+            ? 'REASSIGNMENT_CONFLICT'
+            : 'REASSIGNMENT_PARTIAL'
+          : 'REASSIGNED';
+        console.info(
+          `[si-assignment-reassignment] ${JSON.stringify({
+            competitionId: context.competitionId,
+            competitorId: id,
+            fromSiNumber: currentSiNumber,
+            toSiNumber: nextSiNumber,
+            oldAssignmentAction: oldAction,
+            targetAssignmentAction: targetAction,
+            conflict: reassignmentPartial || transactionResult.reassignmentConflict,
+            assignmentWriteOutcome,
+            enforcementActive: false,
+            writesContinue: true,
+          })}`
+        );
+      }
       console.info(
         `[atomic-si-mutation-would-enforce] ${JSON.stringify({
           intent:
@@ -4424,6 +4628,7 @@ export async function updateCompetitorInFirestore(
           });
         }
       }
+      return assignmentWriteOutcome;
     }
   );
   if (mutationResult.status !== 'COMMITTED') {

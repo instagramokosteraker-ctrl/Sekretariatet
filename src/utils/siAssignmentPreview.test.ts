@@ -111,6 +111,29 @@ describe('SI assignment mutation preview', () => {
     });
   });
 
+  it('prepares an assignment when a competitor previously had no SI number', () => {
+    const plan = buildSIAssignmentPreviewPlan({
+      intent: 'CHANGE_SI_NUMBER',
+      competitionExists: true,
+      competitorExists: true,
+      currentSiNumber: null,
+      requestedSiNumber: 67890,
+      assignmentExists: false,
+      assignmentMissing: true,
+      currentAssignmentMissing: false,
+      assignmentMismatch: false,
+      duplicateCandidate: false,
+      duplicateCandidateQueryFailed: false,
+    });
+
+    expect(plan.reassignmentRequired).toBe(true);
+    expect(plan.assignmentMutation).toEqual({
+      operation: 'REASSIGN',
+      fromSiNumber: null,
+      toSiNumber: 67890,
+    });
+  });
+
   it('simulates blocking reassignment when its current assignment is missing', () => {
     const plan = buildSIAssignmentPreviewPlan({
       intent: 'CHANGE_SI_NUMBER',
@@ -129,6 +152,28 @@ describe('SI assignment mutation preview', () => {
     expect(plan.wouldBeBlocked).toBe(true);
     expect(plan.blockers).toContain('ASSIGNMENT_MISSING');
     expect(plan.assignmentMutation.operation).toBe('REASSIGN');
+  });
+
+  it('reports an occupied reassignment target as a preview conflict', () => {
+    const plan = buildSIAssignmentPreviewPlan({
+      intent: 'CHANGE_SI_NUMBER',
+      competitionExists: true,
+      competitorExists: true,
+      currentSiNumber: 12345,
+      requestedSiNumber: 67890,
+      assignmentExists: true,
+      assignmentMissing: false,
+      currentAssignmentMissing: false,
+      assignmentMismatch: true,
+      duplicateCandidate: false,
+      duplicateCandidateQueryFailed: false,
+      reassignmentConflict: true,
+    });
+
+    expect(plan.reassignmentConflict).toBe(true);
+    expect(plan.wouldBeBlocked).toBe(true);
+    expect(plan.blockers).toContain('REASSIGNMENT_CONFLICT');
+    expect(plan.competitorMutation.wouldSucceed).toBe(false);
   });
 
   it('counts simulated outcomes and required assignment changes', () => {
