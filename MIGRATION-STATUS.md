@@ -54,20 +54,22 @@ Last updated: 2026-11-10
 
 **Legacy-writer milestone — restore identity fence:** The highest-risk remaining writer was `/api/system/restore`, because it replaces the complete Express season and can create, delete, reassign, or change lifecycle status for many competitors from one backup. Restore now compares the current and backup competitor identities and lifecycle statuses (competition, competitor ID, SI number, card series, and status) before applying anything. Any difference returns HTTP 409 with a user-facing explanation and a structured warning; a backup with the same competitor identity/status set can still restore other season data. No assignment writes or uniqueness enforcement were added.
 
+**Legacy-writer milestone — cloud-hydrate identity fence:** `/api/system/cloud-hydrate` now treats the local competitor identity set as authoritative. It hydrates non-identity mirror fields for matching competitor IDs, while preserving `id`, `competitorId`, `siNumber`, `cardSeries`, lifecycle `status`, and any assignment relationship/state metadata from the existing local record. Incoming additions, removals, identity changes, duplicate IDs, and omitted competitions are skipped/preserved and produce structured warnings plus mutation diagnostics. Cloud hydrate does not write Firestore assignment documents; their state remains unchanged.
+
 **Remaining writer inventory before uniqueness enforcement:**
 - **Risk ranking (SI-assignment divergence):**
-  1. **Restore — fenced for identity/lifecycle changes.** Previously replaced the full season; it now rejects changes to competitor IDs, SI numbers, card series, status, or competition membership.
-  2. **Cloud hydrate — MUST BE REDIRECTED or kept strictly mirror-only.** Replaces the Express competitor list from a snapshot and can remove local competitors without retirement.
-  3. **Express CRUD/direct-entry — MUST BE REDIRECTED.** Active create, SI-update, and delete paths mutate the Express season independently.
-  4. **Readout auto-create — MUST BE REDIRECTED.** Creates an operational competitor directly from runner data without an assignment transaction.
-  5. **Eventor/IOF import — MUST BE REDIRECTED.** Bulk imports can add competitors without assignment transactions.
-  6. **Snapshot seeding — MUST BE REDIRECTED or removed.** It still attempts bulk Firestore competitor creates without assignments; the client rules fence denies incomplete commits.
-  7. **Competition deletion — MUST BE REDIRECTED.** Removes a competition and its local competitors without retiring their assignments.
-- **MUST BE REDIRECTED:** All remaining active writers in ranks 2–7. They do not use the trusted atomic assignment transaction; server/Express paths can also sit outside Firestore client rules.
-- **Next highest active bypass:** Cloud hydrate remains the broadest unfenced Express-side competitor replacement path.
+  1. **Express CRUD/direct-entry — MUST BE REDIRECTED.** Active create, SI-update, and delete paths mutate the Express season independently.
+  2. **Eventor/IOF import — MUST BE REDIRECTED.** Bulk imports can add competitors without assignment transactions.
+  3. **Readout auto-create — MUST BE REDIRECTED.** Creates an operational competitor directly from runner data without an assignment transaction.
+  4. **Competition deletion — MUST BE REDIRECTED.** Removes a competition and its local competitors without retiring their assignments.
+  5. **Snapshot seeding — MUST BE REDIRECTED or removed.** It still attempts Firestore competitor creates without assignments; the client rules fence denies incomplete commits.
+  6. **Restore — identity/lifecycle changes fenced.** Backups with unchanged competitor identities/status can still restore other season data.
+  7. **Cloud hydrate — identity changes fenced.** Non-identity mirror fields continue to hydrate; additions, removals, reassignment, and assignment metadata changes are blocked.
+- **MUST BE REDIRECTED:** Remaining active writers in ranks 1–5. They do not use the trusted atomic assignment transaction; server/Express paths can also sit outside Firestore client rules.
+- **SAFE TO KEEP (limited):** Cloud hydrate for non-identity mirror fields only; restore of non-identity data when competitor identities/status remain unchanged.
 - **MUST BE DISABLED or wrapped:** Standalone client writes to `siCardAssignments`, hard assignment deletion, and direct competitor SI create/update/delete without their corresponding assignment mutation. Rules now deny incomplete client commits; exported one-document assignment helpers must not be used as mutation APIs.
 
-Move or disable the remaining writers behind the trusted atomic path. Run the Firestore emulator suite and add trusted-server transaction tests for retries, rollback, and concurrent duplicate attempts. Restore identity changes are fenced, but server-side bypasses remain; readiness remains **NO GO** for uniqueness enforcement.
+Move or disable the remaining writers behind the trusted atomic path. Run the Firestore emulator suite and add trusted-server transaction tests for retries, rollback, and concurrent duplicate attempts. Restore and cloud-hydrate identity changes are fenced, but server-side bypasses remain; readiness remains **NO GO** for uniqueness enforcement.
 
 **P0 Step 2:** A shared `declareCompetitorMutation` diagnostic boundary records whether a mutation is `VALIDATED` or explicitly `LEGACY`.
 

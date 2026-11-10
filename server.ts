@@ -17,6 +17,7 @@ import {
   type CompetitorMutationDeclaration,
 } from './src/utils/siAssignmentDiagnostics';
 import { hasSameCompetitorIdentitySnapshot } from './src/utils/competitorIdentitySnapshot';
+import { protectCloudHydratedCompetitors } from './src/utils/cloudHydrateCompetitorFence';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3621,7 +3622,7 @@ async function startServer() {
         stations: Array.isArray(item.stations)
           ? item.stations
           : existingLocal?.stations ?? buildDefaultStations(nowIso),
-        competitors: Array.isArray(item.competitors) ? item.competitors : [],
+        competitors: [],
         emergency: {
           brokenControls: Array.isArray(item.emergency?.brokenControls)
             ? item.emergency.brokenControls
@@ -3639,31 +3640,70 @@ async function startServer() {
         events: existingLocal?.events ?? [],
         processedClientIds: existingLocal?.processedClientIds ?? [],
       };
-      for (const competitor of evRec.competitors) {
-        hydrationMutations.push({
-          source: '/api/system/cloud-hydrate',
-          operation: 'SNAPSHOT_HYDRATE',
-          competitionId: evRec.competition.id,
-          competitorId: competitor.id,
-          siNumber: competitor.siNumber,
-          assignmentHandling: {
-            mode: 'LEGACY',
-            reason: 'Cloud snapshot hydration replaces the local competitor list without SI assignment validation.',
-          },
-          identityAffecting: true,
-        });
+      const protectedHydration = protectCloudHydratedCompetitors(
+        existingLocal?.competitors ?? [],
+        Array.isArray(item.competitors) ? item.competitors : []
+      );
+      evRec.competitors = protectedHydration.competitors;
+      if (protectedHydration.blockedChanges.length > 0) {
+        console.warn(
+          `[single-writer] Blocked cloud-hydrate competitor identity changes: ${JSON.stringify({
+            competitionId: evRec.competition.id,
+            blockedChanges: protectedHydration.blockedChanges,
+            assignmentStatePreserved: true,
+          })}`
+        );
+        for (const change of protectedHydration.blockedChanges) {
+          const current = existingLocal?.competitors.find(
+            (competitor) => competitor.id === change.competitorId
+          );
+          const incoming = item.competitors?.find(
+            (competitor) => competitor.id === change.competitorId
+          );
+          hydrationMutations.push({
+            source: '/api/system/cloud-hydrate',
+            operation:
+              change.operation === 'REMOVE'
+                ? 'DELETE'
+                : change.operation === 'ADD'
+                  ? 'SNAPSHOT_HYDRATE'
+                  : 'UPDATE',
+            competitionId: evRec.competition.id,
+            competitorId: change.competitorId,
+            siNumber: current?.siNumber ?? incoming?.siNumber,
+            ...(current ? { previousSiNumber: current.siNumber } : {}),
+            assignmentHandling: {
+              mode: 'LEGACY',
+              reason: `Cloud hydrate attempted blocked ${change.operation.toLowerCase()} of Firestore-owned competitor identity fields: ${change.fields.join(', ')}.`,
+            },
+            identityAffecting: true,
+          });
+        }
       }
+      const preservedStatuses = new Map(
+        evRec.competitors.map((competitor) => [competitor.id, competitor.status])
+      );
       recalculateEventFromRawReadouts(evRec);
+      for (const competitor of evRec.competitors) {
+        const preservedStatus = preservedStatuses.get(competitor.id);
+        if (preservedStatus !== undefined) competitor.status = preservedStatus;
+      }
+      recomputeAllSplitRanks(evRec);
       nextMap[evRec.competition.id] = evRec;
     }
 
     for (const existingEvent of Object.values(seasonDb.eventsMap)) {
       const hydratedEvent = nextMap[existingEvent.competition.id];
-      for (const competitor of existingEvent.competitors) {
-        if (
-          !hydratedEvent ||
-          !hydratedEvent.competitors.some((candidate) => candidate.id === competitor.id)
-        ) {
+      if (!hydratedEvent) {
+        nextMap[existingEvent.competition.id] = existingEvent;
+        console.warn(
+          `[single-writer] Blocked cloud-hydrate competition omission: ${JSON.stringify({
+            competitionId: existingEvent.competition.id,
+            preservedCompetitorCount: existingEvent.competitors.length,
+            assignmentStatePreserved: true,
+          })}`
+        );
+        for (const competitor of existingEvent.competitors) {
           hydrationMutations.push({
             source: '/api/system/cloud-hydrate',
             operation: 'DELETE',
@@ -3672,7 +3712,7 @@ async function startServer() {
             siNumber: competitor.siNumber,
             assignmentHandling: {
               mode: 'LEGACY',
-              reason: 'Snapshot hydration removes a local competitor without retiring its SI assignment.',
+              reason: 'Cloud hydrate attempted to remove a competition containing Firestore-owned competitor identities.',
             },
             identityAffecting: true,
           });
