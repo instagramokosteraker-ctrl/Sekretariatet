@@ -1,6 +1,6 @@
 # PasserSI Architecture Modernization — Migration Status
 
-Last updated: 2026-11-09
+Last updated: 2026-11-10
 
 ## Current architecture
 
@@ -43,7 +43,7 @@ Last updated: 2026-11-09
 
 ### Phase 4 — Atomic SI matching foundation
 
-**Status:** Phase A complete; Phase B complete; schema/rule alignment complete; P0 Step 5 Atomic SI mutation transaction preparation implemented (diagnostic-only)
+**Status:** Phase A complete; Phase B complete; schema/rule alignment complete; Atomic SI Matching Phase C Preview implemented (diagnostic-only)
 **Purpose:** Add the canonical `competitions/{competitionId}/siCardAssignments/{siNumber}` collection and its schema support, then provide opt-in read-only lookup/resolver and admin validation helpers. The aligned document contract uses `state`, required `schemaVersion: 1`, Firestore `Timestamp` values, required identity/ownership fields, and explicitly optional retirement/conflict metadata. The parser, write helpers, Firestore rules, rules tests, and design document use this same contract, including `DUPLICATE_CONFIRMED`. Lookup hits, misses, retired assignments, and duplicate conditions produce diagnostic console logs, not durable audit records. The helpers are not called by competitor creation/edit or readout flows, so runtime behavior remains unchanged. No uniqueness is enforced yet.
 
 **P0 Step 2:** A shared `declareCompetitorMutation` diagnostic boundary records whether a mutation is `VALIDATED` or explicitly `LEGACY`.
@@ -55,6 +55,8 @@ Last updated: 2026-11-09
 **P0 Step 5:** `runAtomicSIAssignmentMutation` is the Firestore transaction boundary used by `saveDirectCompetitionEntryToFirestore`, `updateCompetitorInFirestore` and `deleteCompetitorFromFirestore`; its actual write callback now runs through `runAssignmentAwareCompetitorMutation` after the transaction has read and diagnosed relevant assignment documents. The other in-repository identity writers also pass through `runCompetitorIdentityMutation(s)` via the established Firestore and Express wrappers: direct-entry/CRUD, imports (including IOF and Eventor), readout auto-creation, restore, cloud hydrate, snapshot seeding, and competitor removals during competition deletion. Legacy writers emit diagnostics and continue to write; paths outside the process (including direct Firestore clients authorized by the current rules) cannot be forced through the in-process service. The transaction reads the competition and competitor documents plus relevant current/requested SI assignment documents, classifies assignment existence/missing/mismatch, and returns a structured result. Create and SI-change paths also report competitor documents that currently match the requested SI as duplicate candidates; this diagnostic query is read-only and performed before the transaction because the Firebase Web SDK transaction API supports document reads, not query reads. No path writes SI assignments or rejects duplicate SI values in this step.
 
 **Remaining before Phase C:** All identified in-repository competitor identity writers are routed through the shared mutation service, but only the three Firestore CRUD paths use the assignment-observing transaction; Express, import, restore, hydrate, and snapshot writers remain legacy mirrors and are not atomic with assignments. The service is observational and cannot fence direct Firestore clients; current rules permit independently authorized competitor and assignment writes. Before Phase C, move or disable these legacy writers, make assignment writes and competitor changes atomic in a trusted path, fence direct client writes in Firestore rules, and validate reassignment, retirement/deletion, concurrent duplicate attempts and rollback. Duplicate-candidate detection is diagnostic and may race. Uniqueness remains disabled.
+
+**Atomic SI Matching Phase C Preview:** The transaction now prepares immutable preview plans for create, SI reassignment, retirement, and deletion. It reports `assignmentExists`, `assignmentMismatch`, `duplicateCandidate`, `reassignmentRequired`, `retirementRequired`, and whether enforcement would succeed or block with reasons. The actual mutation callback still runs regardless of preview blockers; the preview performs no assignment writes and does not reject conflicts. Metrics are accumulated in memory per client runtime and logged as `[atomic-si-preview-metrics]` after completed transaction attempts. They count operations, simulated successes/blocks, and reassignment/retirement requirements. Metrics start at zero on reload; no live Firestore operation was run during implementation, so validation-time simulated counts are 0. Query-based duplicate candidate detection remains outside the transaction due to Firebase Web SDK limitations; query errors count as simulated blocks.
 
 ### Phase 5 — Move Eventor calls to Firebase Functions
 

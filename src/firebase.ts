@@ -79,6 +79,14 @@ import {
   type SIAssignmentInventoryReport,
 } from './utils/siAssignmentInventory';
 import {
+  accumulateSIAssignmentPreviewMetrics,
+  buildSIAssignmentPreviewPlan,
+  createSIAssignmentPreviewMetrics,
+  type AtomicSIAssignmentMutationIntent,
+  type SIAssignmentPreviewMetrics,
+  type SIAssignmentPreviewPlan,
+} from './utils/siAssignmentPreview';
+import {
   declareCompetitorMutation,
   runAssignmentAwareCompetitorMutation,
   runCompetitorMutation,
@@ -3418,12 +3426,7 @@ interface CompetitionMutationContext {
   isSuperAdmin: boolean;
 }
 
-export type AtomicSIAssignmentMutationIntent =
-  | 'CREATE_COMPETITOR'
-  | 'UPDATE_COMPETITOR_IDENTITY'
-  | 'CHANGE_SI_NUMBER'
-  | 'RETIRE_COMPETITOR'
-  | 'DELETE_COMPETITOR';
+export type { AtomicSIAssignmentMutationIntent } from './utils/siAssignmentPreview';
 
 interface AtomicSIAssignmentMutationDiagnostics {
   assignmentExists: boolean;
@@ -3445,7 +3448,23 @@ export interface AtomicSIAssignmentMutationResult extends AtomicSIAssignmentMuta
   competitorStatus: string | null;
   currentSiNumber: number | null;
   requestedSiNumber: number | null;
+  duplicateCandidate: boolean;
+  reassignmentRequired: boolean;
+  retirementRequired: boolean;
+  assignmentDocuments: Array<{
+    siNumber: number;
+    exists: boolean;
+    state: unknown;
+    competitorId: unknown;
+  }>;
+  previewPlan: SIAssignmentPreviewPlan;
+  metrics: SIAssignmentPreviewMetrics;
 }
+
+type AtomicSIAssignmentMutationTransactionResult = Omit<
+  AtomicSIAssignmentMutationResult,
+  'metrics'
+>;
 
 export interface AtomicSIAssignmentMutationRequest {
   intent: AtomicSIAssignmentMutationIntent;
@@ -3463,7 +3482,13 @@ export interface AtomicSIAssignmentMutationContext {
   competitionData: Record<string, unknown>;
   competitorData: Record<string, unknown> | null;
   competitorExists: boolean;
-  result: AtomicSIAssignmentMutationResult;
+  result: AtomicSIAssignmentMutationTransactionResult;
+}
+
+let atomicSIAssignmentPreviewMetrics = createSIAssignmentPreviewMetrics();
+
+export function getAtomicSIAssignmentPreviewMetrics(): SIAssignmentPreviewMetrics {
+  return { ...atomicSIAssignmentPreviewMetrics };
 }
 
 export async function runAtomicSIAssignmentMutation(
@@ -3510,7 +3535,7 @@ export async function runAtomicSIAssignmentMutation(
     }
   }
 
-  return runTransaction(db, async (transaction) => {
+  const transactionResult = await runTransaction(db, async (transaction) => {
     const [competitionSnap, competitorSnap] = await Promise.all([
       transaction.get(competitionRef),
       transaction.get(competitorRef),
@@ -3567,12 +3592,20 @@ export async function runAtomicSIAssignmentMutation(
     const assignmentMissing =
       siNumbers.length > 0 &&
       Array.from(assignmentSnapshots.values()).some((snap) => !snap.exists());
-    const result: AtomicSIAssignmentMutationResult = {
-      status: !competitionSnap.exists()
-        ? 'MISSING_COMPETITION'
-        : !competitorSnap.exists() && effectiveIntent !== 'CREATE_COMPETITOR'
-          ? 'MISSING_COMPETITOR'
-          : 'COMMITTED',
+    const currentAssignmentMissing =
+      currentSiNumber !== null &&
+      !assignmentSnapshots.get(currentSiNumber)?.exists();
+    const duplicateCheckApplies =
+      effectiveIntent === 'CREATE_COMPETITOR' || effectiveIntent === 'CHANGE_SI_NUMBER';
+    const duplicateCandidateDetected =
+      duplicateCheckApplies && duplicateCandidateCompetitorIds.length > 0;
+    const status: AtomicSIAssignmentMutationResult['status'] = !competitionSnap.exists()
+      ? 'MISSING_COMPETITION'
+      : !competitorSnap.exists() && effectiveIntent !== 'CREATE_COMPETITOR'
+        ? 'MISSING_COMPETITOR'
+        : 'COMMITTED';
+    const resultBase = {
+      status,
       intent: effectiveIntent,
       competitionId,
       competitorId,
@@ -3588,18 +3621,31 @@ export async function runAtomicSIAssignmentMutation(
       requestedSiNumber,
       assignmentExists,
       assignmentMissing,
+      currentAssignmentMissing,
       assignmentMismatch,
-      duplicateCandidateDetected: duplicateCandidateCompetitorIds.length > 0,
+      duplicateCandidateDetected,
       duplicateCandidateCompetitorIds,
       duplicateCandidateQueryError,
     };
-
-    const severity =
-      result.assignmentMismatch || result.assignmentMissing || result.duplicateCandidateDetected
-        ? 'warn'
-        : 'info';
-    const diagnostic = {
-      ...result,
+    const previewPlan = buildSIAssignmentPreviewPlan({
+      intent: effectiveIntent,
+      competitionExists: competitionSnap.exists(),
+      competitorExists: competitorSnap.exists(),
+      currentSiNumber,
+      requestedSiNumber,
+      assignmentExists,
+      assignmentMissing,
+      currentAssignmentMissing,
+      assignmentMismatch,
+      duplicateCandidate: duplicateCandidateDetected,
+      duplicateCandidateQueryFailed:
+        duplicateCheckApplies && duplicateCandidateQueryError !== null,
+    });
+    const result: AtomicSIAssignmentMutationTransactionResult = {
+      ...resultBase,
+      duplicateCandidate: duplicateCandidateDetected,
+      reassignmentRequired: previewPlan.reassignmentRequired,
+      retirementRequired: previewPlan.retirementRequired,
       assignmentDocuments: Array.from(assignmentSnapshots.entries()).map(
         ([siNumber, snapshot]) => ({
           siNumber,
@@ -3608,14 +3654,8 @@ export async function runAtomicSIAssignmentMutation(
           competitorId: snapshot.exists() ? snapshot.data().competitorId ?? null : null,
         })
       ),
-      enforcementActive: false,
-      assignmentWritesEnabled: false,
+      previewPlan,
     };
-    if (severity === 'warn') {
-      console.warn(`[atomic-si-mutation] ${JSON.stringify(diagnostic)}`);
-    } else {
-      console.info(`[atomic-si-mutation] ${JSON.stringify(diagnostic)}`);
-    }
 
     if (result.status === 'COMMITTED') {
       const mutationOperation: CompetitorMutationOperation =
@@ -3694,6 +3734,27 @@ export async function runAtomicSIAssignmentMutation(
     }
     return result;
   });
+
+  atomicSIAssignmentPreviewMetrics = accumulateSIAssignmentPreviewMetrics(
+    atomicSIAssignmentPreviewMetrics,
+    transactionResult.previewPlan
+  );
+  const result: AtomicSIAssignmentMutationResult = {
+    ...transactionResult,
+    metrics: getAtomicSIAssignmentPreviewMetrics(),
+  };
+  const previewDiagnostic = {
+    ...result,
+    enforcementActive: false,
+    assignmentWritesEnabled: false,
+    writesContinue: true,
+  };
+  const log = result.previewPlan.wouldBeBlocked ? console.warn : console.info;
+  log(`[atomic-si-preview] ${JSON.stringify(previewDiagnostic)}`);
+  console.info(
+    `[atomic-si-preview-metrics] ${JSON.stringify(result.metrics)}`
+  );
+  return result;
 }
 
 async function getCurrentFirebaseRoles(): Promise<{
