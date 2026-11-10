@@ -10,6 +10,8 @@
 
 This report includes raw Firebase UIDs and is restricted operational data. Do not copy it into public issue trackers or broadly shared logs.
 
+The timestamp-to-migration disposition and recommendation are in [OWNERUID_DISPOSITION.md](./OWNERUID_DISPOSITION.md). That assessment supersedes this report's initial statement that all six historical causes were unresolved; the forensic observations below remain unchanged.
+
 ## 1. Reflexcup#2 (`evt-1794087219877`)
 
 - competitorDocumentId: `cmp_1794087402138_z0j2wy`

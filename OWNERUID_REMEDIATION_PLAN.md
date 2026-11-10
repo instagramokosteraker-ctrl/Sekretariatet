@@ -10,6 +10,8 @@
 
 The detailed ownerUid values and forensic history are restricted to [OWNERUID_FORENSIC_ANALYSIS.md](./OWNERUID_FORENSIC_ANALYSIS.md). This plan is not authorization to change production data.
 
+The timestamp and source-history reassessment is in [OWNERUID_DISPOSITION.md](./OWNERUID_DISPOSITION.md), which supersedes this plan's earlier all-six-unknown attribution: four Reflexcup#2 cases are likely early-bootstrap artifacts; two Lång-TM cases remain unknown until the production deployment revision at the time of reassignment is verified.
+
 ## Cases requiring disposition
 
 | # | Competition | Competitor document ID | Competitor ID | SI | Assignment state | Assignment source | History |
@@ -23,20 +25,20 @@ The detailed ownerUid values and forensic history are restricted to [OWNERUID_FO
 
 ## Recommended disposition
 
-1. Keep all six cases as P0 blockers. Current state is **C — Current integrity violation**; whether the underlying cause is historical pre-migration data (A) or an ownership migration defect (B) remains unproven. Do not classify these active mismatches as harmless (D).
+1. Keep all six cases as P0 blockers until corrected and rescanned. The four Reflexcup#2 cases are **A — Historical legacy artifacts**; the two Lång-TM cases are **D — Unknown** pending deployment provenance. All six remain current parity violations; do not classify any as harmless.
 2. Verify that each Firestore competitor's `ownerUid` is authoritative using the competition owner's confirmation and available import/admin/deployment audit records. The competition owner UID by itself is not proof of competitor ownership.
 3. If confirmed, correct only the affected SI assignment `ownerUid` fields to match the corresponding competitor documents. Use the canonical Firestore transaction boundary and reread the competitor and assignment within the transaction. Preserve competitor identities and all retired historical assignments.
 4. If the owner cannot be established, leave production data unchanged and retain the blocker; do not select a value based only on timestamps or `source`.
 5. Rerun the read-only inventory across the complete intended competition set. Require zero unexplained active ownerUid mismatches and review any changed counts before closing the blocker.
-6. Separately compare the historical writer/deployment versions with current code. Current repository bootstrap and reassignment paths source assignment ownerUid from the competitor identity; a code fix is required only if a current writer can reproduce the observed mismatch.
+6. First establish which production build was active for the Lång-TM reassignment writes. If it predates hardening, data correction alone is indicated after owner verification; if it includes hardening, treat it as an active writer defect and implement a code correction as well as approved data correction. The clean Terräng-KM sample is useful evidence but does not replace deployment verification.
 
 ## Data correction, code, and inventory decisions
 
-- **Data correction:** required to restore the current parity invariant if owner review confirms the competitor ownerUid for each case. No production correction was performed.
-- **Code change:** not established as necessary from the documents or the current repository paths. Historical writer provenance remains an open investigation.
+- **Data correction:** required to restore parity after owner review for confirmed historical cases. No production correction was performed.
+- **Code change:** not currently established. Required only if the two Lång-TM mismatches were written by a production build containing the hardened transaction path.
 - **Inventory logic:** retain strict active assignment-to-competitor ownerUid parity validation. Do not ignore or downgrade the condition.
 - **Historical reassignments:** keep the same-competitor retired predecessor records. They explain SI changes and are not themselves a reason to delete or rewrite data.
 
 ## Readiness
 
-**NO-GO.** Six active P0 ownerUid mismatches remain unresolved. The refreshed scan covers four returned competitions, 14 competitors, and 20 assignments. It found no orphans, duplicate SI ownership, competitor/document ID mismatches, current SI mismatches, or active card-series mismatches; these clean checks do not offset the owner parity failures. Trusted-writer/deployed-rule assurance and concurrency/rollback validation also remain open in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).
+**NO-GO.** Six active P0 ownerUid mismatches remain unresolved; the latest scan covers four returned competitions, 14 competitors, and 20 assignments. It found no orphans, duplicate SI ownership, competitor/document ID mismatches, current SI mismatches, or active card-series mismatches. Trusted-writer/deployed-rule assurance and concurrency/rollback validation also remain open in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).
