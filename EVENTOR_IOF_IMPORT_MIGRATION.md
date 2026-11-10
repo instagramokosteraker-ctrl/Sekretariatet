@@ -44,4 +44,4 @@ IOF multi-competitor import remains per-competitor transactional rather than glo
 
 ## Next blocker
 
-Eventor/IOF competitor identity writes are no longer active blockers. The highest-priority remaining blocker is assignment-aware competition deletion: `deleteCompetitionFromFirestore` must resolve/retire SI assignments atomically with competitor deletion. See the canonical blocker list in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).
+Eventor/IOF competitor identity writes are no longer active blockers. At the time this migration was completed, the next blocker was assignment-aware competition deletion. That deletion path has since been disabled rather than migrated; the current highest-priority blocker is trusted-writer enforcement and production-wide uniqueness validation. See [COMPETITION_DELETION_MIGRATION.md](./COMPETITION_DELETION_MIGRATION.md) and the canonical blocker list in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).

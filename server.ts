@@ -3698,32 +3698,10 @@ async function startServer() {
 
   app.post('/api/system/clear-demo', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
-    const body = req.body as { clearRunnerDb?: boolean } | undefined;
-    const clearMutations = Object.values(seasonDb.eventsMap).flatMap((event) =>
-      event.competitors.map((competitor): CompetitorMutationDeclaration => ({
-        source: '/api/system/clear-demo',
-        operation: 'DELETE',
-        competitionId: event.competition.id,
-        competitorId: competitor.id,
-        siNumber: competitor.siNumber,
-        assignmentHandling: {
-          mode: 'LEGACY',
-          reason: 'Clearing the legacy season removes competitors without retiring SI assignments.',
-        },
-        identityAffecting: true,
-      }))
-    );
-    runCompetitorMutations(clearMutations, () => {
-      seasonDb.eventsMap = {};
-      seasonDb.activeEventId = '';
+    res.status(410).json({
+      error:
+        'Rensning av tävlingar är tillfälligt avstängd tills SI-tilldelningar kan hanteras atomiskt.',
     });
-    seasonDb.demoCleared = true;
-    if (body?.clearRunnerDb) {
-      seasonDb.runnerDb = [];
-    }
-    persistUserMutation();
-    broadcastFullState();
-    res.json(buildFullStatePayload());
   });
 
   // ==========================================================================
@@ -4154,39 +4132,10 @@ async function startServer() {
 
   app.delete('/api/competitions/:id', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
-    const targetId = req.params.id;
-    if (!seasonDb.eventsMap[targetId]) {
-      res.status(404).json({ error: 'Tävlingen hittades inte.' });
-      return;
-    }
-    const deletedEvent = seasonDb.eventsMap[targetId];
-    const competitionDeleteMutations = deletedEvent.competitors.map(
-      (competitor): CompetitorMutationDeclaration => ({
-        source: '/api/competitions/:id',
-        operation: 'DELETE',
-        competitionId: targetId,
-        competitorId: competitor.id,
-        siNumber: competitor.siNumber,
-        assignmentHandling: {
-          mode: 'LEGACY',
-          reason: 'Deleting the Express competition removes its competitor mirror without retiring SI assignments.',
-        },
-        identityAffecting: true,
-      })
-    );
-    runCompetitorMutations(competitionDeleteMutations, () => {
-      delete seasonDb.eventsMap[targetId];
+    res.status(410).json({
+      error:
+        'Radering av tävlingar är tillfälligt avstängd tills SI-tilldelningar kan hanteras atomiskt.',
     });
-    const remainingKeys = Object.keys(seasonDb.eventsMap);
-    if (remainingKeys.length === 0) {
-      seasonDb.activeEventId = '';
-      seasonDb.demoCleared = true;
-    } else if (seasonDb.activeEventId === targetId) {
-      seasonDb.activeEventId = remainingKeys[0];
-    }
-    persistUserMutation();
-    broadcastFullState();
-    res.json(buildFullStatePayload());
   });
 
   // ==========================================================================
@@ -6152,15 +6101,10 @@ async function startServer() {
 
   app.post('/api/system/reset-seed', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
-    const prevAuth = ensureSeasonAuthConfig(seasonDb);
-    const prevClub = ensureClubSettings(seasonDb);
-    const fresh = buildSeasonSeed();
-    fresh.authConfig = prevAuth;
-    fresh.clubSettings = prevClub;
-    seasonDb = fresh;
-    persistUserMutation();
-    broadcastFullState();
-    res.json(buildFullStatePayload());
+    res.status(410).json({
+      error:
+        'Återställning av demotävlingar är tillfälligt avstängd tills SI-tilldelningar kan hanteras atomiskt.',
+    });
   });
 
   app.get('/api/system/backup', (req, res) => {
@@ -6204,6 +6148,19 @@ async function startServer() {
     }
 
     const eventsMap = candidate.eventsMap as Record<string, SingleEventRecord>;
+    const currentCompetitionIds = Object.keys(seasonDb.eventsMap).sort();
+    const restoredCompetitionIds = Object.keys(eventsMap).sort();
+    if (
+      currentCompetitionIds.length !== restoredCompetitionIds.length ||
+      currentCompetitionIds.some((id, index) => id !== restoredCompetitionIds[index])
+    ) {
+      res.status(409).json({
+        error:
+          'Säkerhetskopian lägger till eller tar bort tävlingar. Återställning av tävlingslivscykeln är tillfälligt avstängd.',
+      });
+      return;
+    }
+
     const identityRows = (events: Record<string, SingleEventRecord>) =>
       Object.values(events).flatMap((event) =>
         (event.competitors || []).map((competitor) => ({

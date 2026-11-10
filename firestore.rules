@@ -1330,13 +1330,7 @@ service cloud.firestore {
         )
       );
 
-      allow delete: if isVerifiedUser() &&
-        isValidId(competitionId) &&
-        resource != null &&
-        (
-          ((existing().ownerUid == request.auth.uid || isAdmin()) && existing().status != 'COMPLETED' && isAdmin()) ||
-          isSuperAdmin()
-        );
+      allow delete: if false;
 
       // -----------------------------------------------------------------------
       // 4a. /competitions/{competitionId}/siCardAssignments/{siNumber}

@@ -151,6 +151,13 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       email_verified: true,
     });
 
+    await assertFails(
+      raceAdminCtx.firestore().doc('competitions/evt_live').delete()
+    );
+    await assertFails(
+      otherRaceAdminCtx.firestore().doc('competitions/evt_done').delete()
+    );
+
     // Eventor credentials are held only in the admin-restricted private subcollection.
     await assertFails(
       attackerCtx.firestore().doc('clubSettings/default/private/eventor').get()

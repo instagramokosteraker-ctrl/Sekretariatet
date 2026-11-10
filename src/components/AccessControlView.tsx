@@ -51,7 +51,6 @@ import {
   TOKEN_SERVICE_ACTIVATION_URL,
   auth,
   createCompetitionInFirestore,
-  deleteCompetitionFromFirestore,
   ensureAdminRoleInFirestore,
   ensureValidFirestoreUser,
   getStockholmTodayIso,
@@ -65,7 +64,6 @@ import {
   removeAdminInviteFromFirestore,
   removeOfficialRoleFromFirestore,
   saveClubSettingsToFirestore,
-  seedDemoSeasonToFirestore,
   signInWithGooglePopup,
   subscribeFirebaseAuth,
   subscribeTokenServiceStatus,
@@ -163,9 +161,6 @@ export function AccessControlView({
 
   // Competition management state
   const [eventBusyId, setEventBusyId] = useState<string | null>(null);
-  const [confirmDeleteEventId, setConfirmDeleteEventId] = useState<string | null>(null);
-  const [confirmClearAll, setConfirmClearAll] = useState<boolean>(false);
-  const [confirmResetSeed, setConfirmResetSeed] = useState<boolean>(false);
   const [zeroDrafts, setZeroDrafts] = useState<Record<string, string>>({});
   const [eventsNotice, setEventsNotice] = useState<{ ok: boolean; msg: string } | null>(null);
   const [backupBusy, setBackupBusy] = useState<boolean>(false);
@@ -614,180 +609,6 @@ export function AccessControlView({
       setEventsNotice({
         ok: false,
         msg: error instanceof Error ? error.message : 'Kunde inte duplicera tävlingen.',
-      });
-    } finally {
-      setEventBusyId(null);
-    }
-  };
-
-  const handleDeleteEvent = async (ev: CompetitionSummary) => {
-    setEventBusyId(ev.id);
-    setEventsNotice(null);
-    try {
-      if (firebaseReadyUser) {
-        await deleteCompetitionFromFirestore(ev.id);
-        await loadCloudCompetitions();
-        try {
-          const mirrorResponse = await apiFetch(
-            `/api/competitions/${encodeURIComponent(ev.id)}`,
-            { method: 'DELETE' }
-          );
-          if (!mirrorResponse.ok && mirrorResponse.status !== 404) {
-            console.warn(
-              `Tävlingen raderades från Firestore men Express-spegeln svarade HTTP ${mirrorResponse.status}.`
-            );
-          }
-        } catch (error) {
-          console.warn('Tävlingen raderades från Firestore men Express-spegeln kunde inte nås:', error);
-        }
-      } else {
-        const response = await apiFetch(
-          `/api/competitions/${encodeURIComponent(ev.id)}`,
-          { method: 'DELETE' }
-        );
-        if (!response.ok) {
-          await ensureApiResponseOk(response, 'Kunde inte radera tävlingen.');
-        }
-        const body = await response.text();
-        if (body && response.headers.get('content-type')?.includes('application/json')) {
-          onApplyStateSnapshot(JSON.parse(body) as MeosAppState);
-        }
-      }
-
-      setConfirmDeleteEventId(null);
-      setEventsNotice({
-        ok: true,
-        msg: `Raderade "${ev.name}"${firebaseReadyUser ? ' från Firestore' : ''}.`,
-      });
-    } catch (error) {
-      setEventsNotice({
-        ok: false,
-        msg: error instanceof Error ? error.message : 'Kunde inte radera tävlingen.',
-      });
-    } finally {
-      setEventBusyId(null);
-    }
-  };
-
-  const handleClearAllEvents = async () => {
-    setEventBusyId('CLEAR_ALL');
-    setEventsNotice(null);
-    try {
-      const res = await apiFetch('/api/system/clear-demo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clearRunnerDb: false }),
-      });
-      if (!res.ok) {
-        setEventsNotice({ ok: false, msg: 'Kunde inte rensa tävlingslistan.' });
-        return;
-      }
-      const snap = (await res.json()) as MeosAppState;
-      onApplyStateSnapshot(snap);
-      setConfirmClearAll(false);
-
-      if (firebaseReadyUser) {
-        try {
-          await pushSeasonSnapshotToFirestore();
-        } catch {
-          // ignore offline
-        }
-      }
-      setEventsNotice({
-        ok: true,
-        msg: 'Alla tävlingar raderades. Säsongen är tom och redo för skarpa tävlingar.',
-      });
-    } finally {
-      setEventBusyId(null);
-    }
-  };
-
-  const handleResetDemoSeed = async () => {
-    setEventBusyId('RESET_SEED');
-    setEventsNotice(null);
-    try {
-      try {
-        const res = await apiFetch('/api/system/reset-seed', { method: 'POST' });
-        if (res.ok) {
-          const snap = (await res.json()) as MeosAppState;
-          onApplyStateSnapshot(snap);
-          setConfirmResetSeed(false);
-          void loadManageData();
-          setEventsNotice({
-            ok: true,
-            msg: 'Återställde klubbens demotävlingar och exempeldata.',
-          });
-          return;
-        }
-      } catch {
-        // Fallback to client-side Firestore seeding
-      }
-
-      const cloudSnap = await seedDemoSeasonToFirestore(currentUser.uid);
-      if (cloudSnap && cloudSnap.events.length > 0) {
-        const firstEvt = cloudSnap.events[0];
-        onApplyStateSnapshot({
-          activeEventId: firstEvt.competition.id,
-          competitionsList: cloudSnap.events.map((e) => ({
-            id: e.competition.id,
-            shortCode: e.competition.shortCode,
-            status: e.competition.status,
-            name: e.competition.name,
-            organizer: e.competition.organizer,
-            date: e.competition.date,
-            zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
-            arenaInfo: e.competition.arenaInfo || '',
-            seriesName: e.competition.seriesName,
-            feeTrackingEnabled: Boolean(e.competition.feeTrackingEnabled),
-            competitorCount: e.competitors.length,
-            finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
-            classCount: e.classes.length,
-          })),
-          isEmptySeason: false,
-          isFreshColdStart: false,
-          demoCleared: false,
-          clubSettings: cloudSnap.clubSettings,
-          seriesStandings: [],
-          competition: firstEvt.competition,
-          courses: firstEvt.courses,
-          classes: firstEvt.classes,
-          stations: [],
-          competitors: firstEvt.competitors,
-          runnerDb: [],
-          eventor: {
-            apiKeyConfigured: false,
-            baseUrl: '',
-            connectedOrgId: null,
-            connectedOrgName: null,
-            connectedEventId: null,
-            lastSyncedAt: null,
-            autoCreateFromRunnerDbOnReadout: true,
-          },
-          emergency: { brokenControls: [], controlTimeOffsets: {} },
-          roc: {
-            enabled: false,
-            unitId: '1042',
-            baseUrl: '',
-            pollIntervalSec: 5,
-            lastPunchId: 0,
-            lastPolledAt: null,
-            totalReceived: 0,
-            lastError: null,
-          },
-          events: [],
-          connectedMonitors: 1,
-        });
-      }
-      setConfirmResetSeed(false);
-      void loadManageData();
-      setEventsNotice({
-        ok: true,
-        msg: 'Återställde klubbens demotävlingar och exempeldata direkt i Firestore.',
-      });
-    } catch (err) {
-      setEventsNotice({
-        ok: false,
-        msg: err instanceof Error ? err.message : 'Kunde inte återställa demodata.',
       });
     } finally {
       setEventBusyId(null);
@@ -1988,36 +1809,6 @@ export function AccessControlView({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {competitionsList.length > 0 &&
-                  (confirmClearAll ? (
-                    <div className="inline-flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        disabled={eventBusyId === 'CLEAR_ALL'}
-                        onClick={() => void handleClearAllEvents()}
-                        className="px-2.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg whitespace-nowrap shrink-0"
-                      >
-                        {eventBusyId === 'CLEAR_ALL' ? 'Rensar...' : 'Bekräfta radera alla'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmClearAll(false)}
-                        className="px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap shrink-0"
-                      >
-                        Avbryt
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmClearAll(true)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-700 dark:text-red-400 border border-red-200 dark:border-red-900/70 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Rensa alla</span>
-                    </button>
-                  ))}
-
                 <button
                   type="button"
                   onClick={onOpenCreateCompetition}
@@ -2027,6 +1818,10 @@ export function AccessControlView({
                   <span>Ny tävling</span>
                 </button>
               </div>
+            </div>
+
+            <div className="px-4 py-2 text-xs text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-900/80">
+              Radering och rensning av tävlingar är tillfälligt avstängd tills SI-tilldelningar kan hanteras atomiskt.
             </div>
 
             {eventsNotice && (
@@ -2068,7 +1863,6 @@ export function AccessControlView({
               <div className="divide-y divide-slate-200/80 dark:divide-slate-800/80 text-xs">
                 {competitionsList.map((ev) => {
                   const isActive = ev.id === activeEventId;
-                  const isDeleting = confirmDeleteEventId === ev.id;
                   const isBusy = eventBusyId === ev.id;
                   return (
                     <div
@@ -2215,64 +2009,34 @@ export function AccessControlView({
                           <span>Avgift</span>
                         </label>
 
-                        {isDeleting ? (
-                          <div className="inline-flex items-center gap-1">
+                        <div className="inline-flex items-center gap-1">
+                          {isActive ? (
+                            <span className="px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
+                              Aktiv
+                            </span>
+                          ) : (
                             <button
                               type="button"
                               disabled={isBusy}
-                              onClick={() => void handleDeleteEvent(ev)}
-                              className="px-2 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-md whitespace-nowrap shrink-0"
+                              onClick={() => void handleActivateEvent(ev.id)}
+                              className="px-2 py-1 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md whitespace-nowrap shrink-0"
                             >
-                              {isBusy ? 'Raderar...' : 'Bekräfta'}
+                              Öppna
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteEventId(null)}
-                              className="px-2 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md whitespace-nowrap shrink-0"
-                            >
-                              Avbryt
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="inline-flex items-center gap-1">
-                            {isActive ? (
-                              <span className="px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
-                                Aktiv
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={isBusy}
-                                onClick={() => void handleActivateEvent(ev.id)}
-                                className="px-2 py-1 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md whitespace-nowrap shrink-0"
-                              >
-                                Öppna
-                              </button>
-                            )}
+                          )}
 
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => void handleDuplicateEvent(ev)}
-                              title="Skapa kopia med samma banor och klasser"
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-md whitespace-nowrap shrink-0"
-                            >
-                              <Copy className="w-3 h-3" />
-                              <span className="hidden sm:inline">Kopia</span>
-                            </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleDuplicateEvent(ev)}
+                            title="Skapa kopia med samma banor och klasser"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-md whitespace-nowrap shrink-0"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span className="hidden sm:inline">Kopia</span>
+                          </button>
 
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={() => setConfirmDeleteEventId(ev.id)}
-                              title="Radera tävling"
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md whitespace-nowrap shrink-0"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              <span className="hidden sm:inline">Radera</span>
-                            </button>
-                          </div>
-                        )}
+                        </div>
                       </div>
                     </div>
                   );
