@@ -5,7 +5,7 @@ export type SIAssignmentInventorySeverity = 'INFO' | 'WARNING' | 'ERROR';
 export interface SIAssignmentInventoryQueryFailure {
   path: string;
   competitionId: string | null;
-  operation: 'list';
+  operation: 'get' | 'list';
   errorCode: string;
   userRole: string;
   adminTier: string;

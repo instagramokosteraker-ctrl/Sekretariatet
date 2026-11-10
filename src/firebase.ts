@@ -708,18 +708,10 @@ export async function validateCompetitionSICardAssignments(
 }
 
 export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssignmentInventoryReport> {
-  const authorization = await getCurrentFirebaseRoles();
-  if (!authorization.adminTier) {
-    throw new Error('Endast SUPER_ADMIN och RACE_ADMIN får skapa SI-inventeringen.');
-  }
-
-  const actualRole = authorization.adminTier
-    ? 'ADMIN'
-    : authorization.officialRole ?? 'UNKNOWN';
-  const adminTier = authorization.adminTier ?? 'NONE';
   const readInventoryCollection = async <T>(
     path: string,
     competitionId: string | null,
+    operation: 'get' | 'list',
     requiredRole: string,
     read: () => Promise<T>
   ): Promise<T> => {
@@ -738,7 +730,7 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
       throw new SIAssignmentInventoryQueryError({
         path,
         competitionId,
-        operation: 'list',
+        operation,
         errorCode,
         userRole: actualRole,
         adminTier,
@@ -748,10 +740,65 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
     }
   };
 
+  const currentUser = await ensureValidFirestoreUser();
+  if (
+    !currentUser ||
+    !currentUser.emailVerified ||
+    !currentUser.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('SI-inventeringen kräver ett verifierat Google-konto.');
+  }
+
+  const normalizedEmail = (currentUser.email ?? '').trim().toLowerCase();
+  let actualRole = 'UNKNOWN';
+  let adminTier = 'UNKNOWN';
+  const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(normalizedEmail);
+  if (isBootstrapAdmin) {
+    actualRole = 'ADMIN';
+    adminTier = 'SUPER_ADMIN';
+  } else {
+    const uid = sanitizeFirestoreId(currentUser.uid, 'usr');
+    const adminPath = `admins/${uid}`;
+    const adminSnapshot = await readInventoryCollection(
+      adminPath,
+      null,
+      'get',
+      'Verifierad användare får läsa sin egen adminroll',
+      () => getDoc(doc(db, 'admins', uid))
+    );
+    if (adminSnapshot.exists()) {
+      const role = adminSnapshot.data().role;
+      if (role === 'SUPER_ADMIN' || role === 'RACE_ADMIN') {
+        actualRole = 'ADMIN';
+        adminTier = role;
+      }
+    } else {
+      const roleAssignmentPath = `roleAssignments/${uid}`;
+      const roleAssignmentSnapshot = await readInventoryCollection(
+        roleAssignmentPath,
+        null,
+        'get',
+        'Verifierad användare får läsa sin egen rolltilldelning',
+        () => getDoc(doc(db, 'roleAssignments', uid))
+      );
+      if (roleAssignmentSnapshot.exists()) {
+        const role = roleAssignmentSnapshot.data().role;
+        if (typeof role === 'string') actualRole = role;
+      }
+    }
+  }
+
+  if (adminTier !== 'SUPER_ADMIN' && adminTier !== 'RACE_ADMIN') {
+    throw new Error(
+      `Endast SUPER_ADMIN och RACE_ADMIN får skapa SI-inventeringen. Faktisk roll: ${actualRole}; adminTier: ${adminTier}.`
+    );
+  }
+
   const competitionPath = 'competitions';
   const competitionSnapshot = await readInventoryCollection(
     competitionPath,
     null,
+    'list',
     'Verifierad användare enligt Firestore-regeln; inventeringsfunktionen kräver SUPER_ADMIN eller RACE_ADMIN',
     () => getDocs(collection(db, 'competitions'))
   );
@@ -764,6 +811,7 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
       readInventoryCollection(
         `competitions/${competitionDoc.id}/competitors`,
         competitionDoc.id,
+        'list',
         'Inget rollkrav i regeln; giltigt competitionId och befintlig tävling krävs',
         () =>
           getDocs(
@@ -773,6 +821,7 @@ export async function scanSIAssignmentInventoryFromFirestore(): Promise<SIAssign
       readInventoryCollection(
         `competitions/${competitionDoc.id}/siCardAssignments`,
         competitionDoc.id,
+        'list',
         'SUPER_ADMIN, RACE_ADMIN eller officiell roll READOUT',
         () =>
           getDocs(
