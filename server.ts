@@ -16,6 +16,7 @@ import {
   runCompetitorMutations,
   type CompetitorMutationDeclaration,
 } from './src/utils/siAssignmentDiagnostics';
+import { hasSameCompetitorIdentitySnapshot } from './src/utils/competitorIdentitySnapshot';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -6460,6 +6461,41 @@ async function startServer() {
     }
 
     const eventsMap = candidate.eventsMap as Record<string, SingleEventRecord>;
+    const identityRows = (events: Record<string, SingleEventRecord>) =>
+      Object.values(events).flatMap((event) =>
+        (event.competitors || []).map((competitor) => ({
+          competitionId: event.competition.id,
+          competitorId: competitor.id,
+          siNumber: Number(competitor.siNumber),
+          cardSeries: competitor.cardSeries,
+          status: competitor.status,
+        }))
+      );
+    const currentCompetitorIdentities = identityRows(seasonDb.eventsMap);
+    const restoredCompetitorIdentities = identityRows(eventsMap);
+    if (
+      !hasSameCompetitorIdentitySnapshot(
+        currentCompetitorIdentities,
+        restoredCompetitorIdentities
+      )
+    ) {
+      console.warn(
+        `[single-writer] Blocked legacy backup restore with competitor identity changes: ${JSON.stringify({
+          operation: 'RESTORE',
+          mode: 'IDENTITY_MIRROR_ONLY',
+          currentCompetitorCount: currentCompetitorIdentities.length,
+          restoredCompetitorCount: restoredCompetitorIdentities.length,
+          reason:
+            'Competitor creation, deletion, reassignment, card-series changes, or lifecycle changes require the atomic SI assignment workflow.',
+        })}`
+      );
+      res.status(409).json({
+        error:
+          'Säkerhetskopian ändrar deltagarnas SI-tilldelning eller status. Återställning med sådana ändringar är tillfälligt avstängd; gör ändringarna via SI-tilldelningsflödet.',
+      });
+      return;
+    }
+
     const restoredIds = new Set(
       Object.values(eventsMap).flatMap((event) =>
         (event.competitors || []).map((competitor) => competitor.id)
@@ -6494,9 +6530,10 @@ async function startServer() {
           siNumber: competitor.siNumber,
           assignmentHandling: {
             mode: 'LEGACY',
-            reason: 'Backup restore accepts competitor records without validating or restoring SI assignments.',
+            reason:
+              'Backup restore is restricted to unchanged competitor SI identities; assignment writes are not required.',
           },
-          identityAffecting: true,
+          identityAffecting: false,
         });
       }
       ev.competition.feeTrackingEnabled = Boolean(ev.competition.feeTrackingEnabled);
