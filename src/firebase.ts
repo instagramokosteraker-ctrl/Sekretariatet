@@ -27,6 +27,7 @@ import {
   writeBatch,
   type DocumentReference,
   type DocumentSnapshot,
+  type Transaction,
 } from 'firebase/firestore';
 import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './utils/readoutValidation';
 import {
@@ -3415,6 +3416,218 @@ interface CompetitionMutationContext {
   isSuperAdmin: boolean;
 }
 
+export type AtomicSIAssignmentMutationIntent =
+  | 'CREATE_COMPETITOR'
+  | 'UPDATE_COMPETITOR_IDENTITY'
+  | 'CHANGE_SI_NUMBER'
+  | 'RETIRE_COMPETITOR'
+  | 'DELETE_COMPETITOR';
+
+interface AtomicSIAssignmentMutationDiagnostics {
+  assignmentExists: boolean;
+  assignmentMissing: boolean;
+  assignmentMismatch: boolean;
+  duplicateCandidateDetected: boolean;
+  duplicateCandidateCompetitorIds: string[];
+  duplicateCandidateQueryError: string | null;
+}
+
+export interface AtomicSIAssignmentMutationResult extends AtomicSIAssignmentMutationDiagnostics {
+  status: 'COMMITTED' | 'MISSING_COMPETITION' | 'MISSING_COMPETITOR';
+  intent: AtomicSIAssignmentMutationIntent;
+  competitionId: string;
+  competitorId: string;
+  competitionExists: boolean;
+  competitorExists: boolean;
+  competitionStatus: string | null;
+  competitorStatus: string | null;
+  currentSiNumber: number | null;
+  requestedSiNumber: number | null;
+}
+
+export interface AtomicSIAssignmentMutationRequest {
+  intent: AtomicSIAssignmentMutationIntent;
+  competitor: {
+    competitionId: string;
+    competitorId: string;
+  };
+  assignment: {
+    requestedSiNumber?: number;
+  };
+}
+
+export interface AtomicSIAssignmentMutationContext {
+  transaction: Transaction;
+  competitionData: Record<string, unknown>;
+  competitorData: Record<string, unknown> | null;
+  competitorExists: boolean;
+  result: AtomicSIAssignmentMutationResult;
+}
+
+export async function runAtomicSIAssignmentMutation(
+  params: AtomicSIAssignmentMutationRequest,
+  write: (context: AtomicSIAssignmentMutationContext) => void | Promise<void>
+): Promise<AtomicSIAssignmentMutationResult> {
+  const competitionId = sanitizeFirestoreId(params.competitor.competitionId, 'evt');
+  const competitorId = sanitizeFirestoreId(params.competitor.competitorId, 'cmp');
+  const requestedAssignmentSiNumber = params.assignment.requestedSiNumber;
+  const competitionRef = doc(db, 'competitions', competitionId);
+  const competitorRef = doc(db, 'competitions', competitionId, 'competitors', competitorId);
+  const shouldCheckDuplicateCandidates =
+    Number.isInteger(requestedAssignmentSiNumber) &&
+    Number(requestedAssignmentSiNumber) > 0 &&
+    (params.intent === 'CREATE_COMPETITOR' || params.intent === 'CHANGE_SI_NUMBER');
+  let duplicateCandidateCompetitorIds: string[] = [];
+  let duplicateCandidateQueryError: string | null = null;
+  if (shouldCheckDuplicateCandidates) {
+    try {
+      duplicateCandidateCompetitorIds = (
+        await getDocs(
+          query(
+            collection(db, 'competitions', competitionId, 'competitors'),
+            where('siNumber', '==', Number(requestedAssignmentSiNumber))
+          )
+        )
+      ).docs
+        .filter((snapshot) => snapshot.id !== competitorId)
+        .map((snapshot) => snapshot.id);
+    } catch (error) {
+      duplicateCandidateQueryError =
+        error instanceof Error ? error.message : String(error);
+      console.error(
+        `[atomic-si-mutation] ${JSON.stringify({
+          intent: params.intent,
+          competitionId,
+          competitorId,
+          requestedSiNumber: requestedAssignmentSiNumber,
+          diagnostic: 'DUPLICATE_CANDIDATE_QUERY_FAILED',
+          error: duplicateCandidateQueryError,
+          enforcementActive: false,
+        })}`
+      );
+    }
+  }
+
+  return runTransaction(db, async (transaction) => {
+    const [competitionSnap, competitorSnap] = await Promise.all([
+      transaction.get(competitionRef),
+      transaction.get(competitorRef),
+    ]);
+    const competitorData = competitorSnap.exists() ? competitorSnap.data() : null;
+    const currentSiNumber =
+      typeof competitorData?.siNumber === 'number' ? competitorData.siNumber : null;
+    const requestedSiNumber =
+      Number.isInteger(requestedAssignmentSiNumber) && Number(requestedAssignmentSiNumber) > 0
+        ? Number(requestedAssignmentSiNumber)
+        : currentSiNumber;
+    const effectiveIntent: AtomicSIAssignmentMutationIntent =
+      params.intent === 'CHANGE_SI_NUMBER' && requestedSiNumber === currentSiNumber
+        ? 'UPDATE_COMPETITOR_IDENTITY'
+        : params.intent;
+    const siNumbers = Array.from(
+      new Set([currentSiNumber, requestedSiNumber].filter((value): value is number =>
+        Number.isInteger(value) && Number(value) > 0
+      ))
+    );
+    const assignmentSnapshots = new Map<number, DocumentSnapshot>();
+    for (const siNumber of siNumbers) {
+      assignmentSnapshots.set(
+        siNumber,
+        await transaction.get(getCompetitionSICardAssignmentRef(competitionId, siNumber))
+      );
+    }
+
+    let assignmentMismatch = false;
+    for (const [siNumber, assignmentSnap] of assignmentSnapshots) {
+      if (!assignmentSnap.exists()) continue;
+      const assignment = parseSICardAssignmentDocument(
+        assignmentSnap.id,
+        competitionId,
+        assignmentSnap.data()
+      );
+      if (
+        !assignment ||
+        assignment.state !== 'ACTIVE' ||
+        assignment.competitorId !== competitorId ||
+        assignment.siNumber !== siNumber ||
+        (siNumber === requestedSiNumber &&
+          requestedSiNumber !== currentSiNumber &&
+          effectiveIntent !== 'DELETE_COMPETITOR' &&
+          effectiveIntent !== 'RETIRE_COMPETITOR') ||
+        (effectiveIntent === 'CREATE_COMPETITOR' && !competitorSnap.exists())
+      ) {
+        assignmentMismatch = true;
+      }
+    }
+    const assignmentExists = Array.from(assignmentSnapshots.values()).some((snap) =>
+      snap.exists()
+    );
+    const assignmentMissing =
+      siNumbers.length > 0 &&
+      Array.from(assignmentSnapshots.values()).some((snap) => !snap.exists());
+    const result: AtomicSIAssignmentMutationResult = {
+      status: !competitionSnap.exists()
+        ? 'MISSING_COMPETITION'
+        : !competitorSnap.exists() && effectiveIntent !== 'CREATE_COMPETITOR'
+          ? 'MISSING_COMPETITOR'
+          : 'COMMITTED',
+      intent: effectiveIntent,
+      competitionId,
+      competitorId,
+      competitionExists: competitionSnap.exists(),
+      competitorExists: competitorSnap.exists(),
+      competitionStatus:
+        typeof competitionSnap.data()?.status === 'string'
+          ? competitionSnap.data()?.status
+          : null,
+      competitorStatus:
+        typeof competitorData?.status === 'string' ? competitorData.status : null,
+      currentSiNumber,
+      requestedSiNumber,
+      assignmentExists,
+      assignmentMissing,
+      assignmentMismatch,
+      duplicateCandidateDetected: duplicateCandidateCompetitorIds.length > 0,
+      duplicateCandidateCompetitorIds,
+      duplicateCandidateQueryError,
+    };
+
+    const severity =
+      result.assignmentMismatch || result.assignmentMissing || result.duplicateCandidateDetected
+        ? 'warn'
+        : 'info';
+    const diagnostic = {
+      ...result,
+      assignmentDocuments: Array.from(assignmentSnapshots.entries()).map(
+        ([siNumber, snapshot]) => ({
+          siNumber,
+          exists: snapshot.exists(),
+          state: snapshot.exists() ? snapshot.data().state ?? null : null,
+          competitorId: snapshot.exists() ? snapshot.data().competitorId ?? null : null,
+        })
+      ),
+      enforcementActive: false,
+      assignmentWritesEnabled: false,
+    };
+    if (severity === 'warn') {
+      console.warn(`[atomic-si-mutation] ${JSON.stringify(diagnostic)}`);
+    } else {
+      console.info(`[atomic-si-mutation] ${JSON.stringify(diagnostic)}`);
+    }
+
+    if (result.status === 'COMMITTED') {
+      await write({
+        transaction,
+        competitionData: competitionSnap.data() ?? {},
+        competitorData,
+        competitorExists: competitorSnap.exists(),
+        result,
+      });
+    }
+    return result;
+  });
+}
+
 async function getCurrentFirebaseRoles(): Promise<{
   user: User;
   adminTier: ClubAdminTier | null;
@@ -3969,56 +4182,64 @@ export async function updateCompetitorInFirestore(
     'competitors',
     id
   );
-  await runTransaction(db, async (transaction) => {
-    const [competitionSnap, competitorSnap] = await Promise.all([
-      transaction.get(competitionRef),
-      transaction.get(competitorRef),
-    ]);
-    if (!competitionSnap.exists() || !competitorSnap.exists()) {
-      throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
-    }
-    const competition = competitionSnap.data();
-    const existing = competitorSnap.data();
-    if (competition.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
-      throw new Error('Ditt konto saknar behörighet att uppdatera deltagaren.');
-    }
-    const nextSiNumber =
-      typeof mutable.siNumber === 'number' ? mutable.siNumber : Number(existing.siNumber);
-    return runCompetitorMutation(
-      {
-        source: 'updateCompetitorInFirestore',
-        operation: 'UPDATE',
-        competitionId: context.competitionId,
-        competitorId: id,
-        siNumber: nextSiNumber,
-        previousSiNumber: Number(existing.siNumber),
-        assignmentHandling: {
-          mode: 'LEGACY',
-          reason: 'Competitor update does not validate or update the SI assignment.',
-        },
-        identityAffecting: nextSiNumber !== Number(existing.siNumber),
+  const mutationResult = await runAtomicSIAssignmentMutation(
+    {
+      intent:
+        typeof mutable.siNumber === 'number'
+          ? 'CHANGE_SI_NUMBER'
+          : 'UPDATE_COMPETITOR_IDENTITY',
+      competitor: { competitionId: context.competitionId, competitorId: id },
+      assignment: {
+        ...(typeof mutable.siNumber === 'number'
+          ? { requestedSiNumber: mutable.siNumber }
+          : {}),
       },
-      () => {
-        transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
-        if (typeof mutable.status === 'string') {
-          const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
-          const previouslyFinished = finishedStatuses.has(String(existing.status));
-          const willBeFinished = finishedStatuses.has(mutable.status);
-          if (previouslyFinished !== willBeFinished) {
-            transaction.update(competitionRef, {
-              finishedCount: clampInt(
-                Number(competition.finishedCount || 0) + (willBeFinished ? 1 : -1),
-                0,
-                Number(competition.competitorCount || 0),
-                0
-              ),
-              updatedAt: serverTimestamp(),
-            });
-          }
+    },
+    ({ transaction, competitionData, competitorData }) => {
+      if (!competitorData) return;
+      const competition = competitionData;
+      const existing = competitorData;
+      if (competition.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+        throw new Error('Ditt konto saknar behörighet att uppdatera deltagaren.');
+      }
+      const nextSiNumber =
+        typeof mutable.siNumber === 'number' ? mutable.siNumber : Number(existing.siNumber);
+      console.info(
+        `[atomic-si-mutation-would-enforce] ${JSON.stringify({
+          intent:
+            typeof mutable.siNumber === 'number'
+              ? 'CHANGE_SI_NUMBER'
+              : 'UPDATE_COMPETITOR_IDENTITY',
+          competitionId: context.competitionId,
+          competitorId: id,
+          currentSiNumber: Number(existing.siNumber),
+          requestedSiNumber: nextSiNumber,
+          action: 'validate_assignment_and_update_competitor_atomically',
+          enforcementActive: false,
+        })}`
+      );
+      transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
+      if (typeof mutable.status === 'string') {
+        const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
+        const previouslyFinished = finishedStatuses.has(String(existing.status));
+        const willBeFinished = finishedStatuses.has(mutable.status);
+        if (previouslyFinished !== willBeFinished) {
+          transaction.update(competitionRef, {
+            finishedCount: clampInt(
+              Number(competition.finishedCount || 0) + (willBeFinished ? 1 : -1),
+              0,
+              Number(competition.competitorCount || 0),
+              0
+            ),
+            updatedAt: serverTimestamp(),
+          });
         }
       }
-    );
-  });
+    }
+  );
+  if (mutationResult.status !== 'COMMITTED') {
+    throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+  }
 }
 
 export async function updateCompetitorBillingFieldsInFirestore(
@@ -4094,51 +4315,50 @@ export async function deleteCompetitorFromFirestore(
     sanitizeFirestoreId(competitorId, 'cmp')
   );
 
-  await runTransaction(db, async (transaction) => {
-    const [competitionSnap, competitorSnap] = await Promise.all([
-      transaction.get(competitionRef),
-      transaction.get(competitorRef),
-    ]);
-    if (!competitionSnap.exists() || !competitorSnap.exists()) {
-      throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
-    }
-    const competition = competitionSnap.data();
-    const competitor = competitorSnap.data();
-    if (
-      competition.ownerUid !== context.ownerUid &&
-      !context.isSuperAdmin
-    ) {
-      throw new Error('Ditt konto saknar behörighet att ta bort deltagaren.');
-    }
-    if (competition.status === 'COMPLETED' && !context.isSuperAdmin) {
-      throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
-    }
-    const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
-    runCompetitorMutation(
-      {
-        source: 'deleteCompetitorFromFirestore',
-        operation: 'DELETE',
+  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
+  const mutationResult = await runAtomicSIAssignmentMutation(
+    {
+      intent: 'DELETE_COMPETITOR',
+      competitor: {
         competitionId: context.competitionId,
-        competitorId: sanitizeFirestoreId(competitorId, 'cmp'),
-        siNumber: Number(competitor.siNumber),
-        assignmentHandling: {
-          mode: 'LEGACY',
-          reason: 'Competitor deletion does not retire or update the SI assignment.',
-        },
-        identityAffecting: true,
+        competitorId: safeCompetitorId,
       },
-      () => {
-        transaction.delete(competitorRef);
-        transaction.update(competitionRef, {
-          competitorCount: Math.max(0, Number(competition.competitorCount || 0) - 1),
-          ...(finished
-            ? { finishedCount: Math.max(0, Number(competition.finishedCount || 0) - 1) }
-            : {}),
-          updatedAt: serverTimestamp(),
-        });
+      assignment: {},
+    },
+    ({ transaction, competitionData, competitorData }) => {
+      if (!competitorData) return;
+      const competition = competitionData;
+      const competitor = competitorData;
+      if (competition.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+        throw new Error('Ditt konto saknar behörighet att ta bort deltagaren.');
       }
-    );
-  });
+      if (competition.status === 'COMPLETED' && !context.isSuperAdmin) {
+        throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
+      }
+      const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
+      console.info(
+        `[atomic-si-mutation-would-enforce] ${JSON.stringify({
+          intent: 'DELETE_COMPETITOR',
+          competitionId: context.competitionId,
+          competitorId: safeCompetitorId,
+          currentSiNumber: Number(competitor.siNumber),
+          action: 'retire_assignment_and_delete_competitor_atomically',
+          enforcementActive: false,
+        })}`
+      );
+      transaction.delete(competitorRef);
+      transaction.update(competitionRef, {
+        competitorCount: Math.max(0, Number(competition.competitorCount || 0) - 1),
+        ...(finished
+          ? { finishedCount: Math.max(0, Number(competition.finishedCount || 0) - 1) }
+          : {}),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  );
+  if (mutationResult.status !== 'COMMITTED') {
+    throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+  }
 }
 
 export async function deleteRunnerDbEntryFromFirestore(siNumber: number): Promise<void> {
@@ -5052,16 +5272,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     collection(db, 'competitions', competitionId, 'competitors')
   );
   const existingCompetitors = competitorSnapshots.docs.map((snapshot) => snapshot.data());
-  const activeStatuses = new Set(['REGISTERED', 'CHECKED', 'IN_FOREST', 'PRELIMINARY_FIN']);
-  const activeConflict = existingCompetitors.find(
-    (competitor) =>
-      Number(competitor.siNumber) === siNumber && activeStatuses.has(String(competitor.status))
-  );
-  if (activeConflict) {
-    throw new Error(
-      `SI-bricka ${siNumber} används redan av en aktiv deltagare (#${activeConflict.bib} ${activeConflict.fullName}).`
-    );
-  }
 
   const classId = sanitizeFirestoreId(
     params.payload.classId || params.classes[0]?.id || 'cls_open',
@@ -5142,7 +5352,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     validation,
   };
 
-  const createdAt = serverTimestamp();
   const mutableCompetitor = {
     bib,
     fullName: competitor.fullName.slice(0, 120),
@@ -5165,95 +5374,108 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     punchCodes: rawPunches.map((punch) => clampInt(punch.code, 1, 999, 31)),
     punchTimes: rawPunches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
   };
-  const nextCompetitorCount = existingCompetitors.length + 1;
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
-    competitorId,
-    competitionId,
-    ...mutableCompetitor,
-    ownerUid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  batch.update(competitionRef, {
-    competitorCount: nextCompetitorCount,
-    finishedCount: Math.min(
-      nextCompetitorCount,
-      Number(competitionData.finishedCount || 0) + (status === 'OK' || status === 'MP' ? 1 : 0)
-    ),
-    updatedAt: serverTimestamp(),
-  });
-
   let runnerDbEntry: RunnerDbEntry | null = null;
-  if (!competitor.isRentalCard && !competitor.isBorrowedCard) {
-    const runnerId = String(siNumber);
-    const runnerRef = doc(db, 'runnerDb', runnerId);
-    const runnerSnap = await getDoc(runnerRef);
-    const existingRunner = runnerSnap.exists() ? runnerSnap.data() : null;
-    const sameRunner =
-      existingRunner?.fullName?.trim().toLowerCase() === fullName.toLowerCase();
+  try {
+    const mutationResult = await runAtomicSIAssignmentMutation(
+      {
+        intent: 'CREATE_COMPETITOR',
+        competitor: { competitionId, competitorId },
+        assignment: { requestedSiNumber: siNumber },
+      },
+      async ({ transaction, competitionData: currentCompetition }) => {
+        const runnerId = String(siNumber);
+        const runnerRef = doc(db, 'runnerDb', runnerId);
+        const runnerSnap =
+          !competitor.isRentalCard && !competitor.isBorrowedCard
+            ? await transaction.get(runnerRef)
+            : null;
+        const existingRunner = runnerSnap?.exists() ? runnerSnap.data() : null;
+        const sameRunner =
+          existingRunner?.fullName?.trim().toLowerCase() === fullName.toLowerCase();
+        let nextRunnerData: Record<string, unknown> | null = null;
+        if (
+          !competitor.isRentalCard &&
+          !competitor.isBorrowedCard &&
+          (!existingRunner || sameRunner)
+        ) {
+          nextRunnerData = {
+            cardSeries: competitor.cardSeries,
+            fullName: fullName.slice(0, 120),
+            club: competitor.club.slice(0, 100) || 'Klubblös',
+            birthYear:
+              typeof existingRunner?.birthYear === 'number' ? existingRunner.birthYear : null,
+            defaultClassName: targetClass?.name || '',
+            eventorPersonId:
+              typeof existingRunner?.eventorPersonId === 'string'
+                ? existingRunner.eventorPersonId
+                : '',
+            eventorOrgId:
+              typeof existingRunner?.eventorOrgId === 'string'
+                ? existingRunner.eventorOrgId
+                : '',
+            source: existingRunner?.source || 'LEARNED_ENTRY',
+            updatedAtIso: nowIso,
+          };
+        }
 
-    if (!existingRunner || sameRunner) {
-      const runnerData = {
-        cardSeries: competitor.cardSeries,
-        fullName: fullName.slice(0, 120),
-        club: competitor.club.slice(0, 100) || 'Klubblös',
-        birthYear:
-          typeof existingRunner?.birthYear === 'number' ? existingRunner.birthYear : null,
-        defaultClassName: targetClass?.name || '',
-        eventorPersonId:
-          typeof existingRunner?.eventorPersonId === 'string'
-            ? existingRunner.eventorPersonId
-            : '',
-        eventorOrgId:
-          typeof existingRunner?.eventorOrgId === 'string' ? existingRunner.eventorOrgId : '',
-        source: existingRunner?.source || 'LEARNED_ENTRY',
-        updatedAtIso: nowIso,
-      };
-
-      if (existingRunner) {
-        batch.update(runnerRef, {
-          ...runnerData,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        batch.set(runnerRef, {
-          runnerId,
-          siNumber,
-          ...runnerData,
-          source: 'LEARNED_ENTRY',
+        const nextCompetitorCount =
+          Number(currentCompetition.competitorCount || 0) + 1;
+        console.info(`[atomic-si-mutation-would-enforce] ${JSON.stringify({
+          intent: 'CREATE_COMPETITOR',
+          competitionId,
+          competitorId,
+          requestedSiNumber: siNumber,
+          action: 'validate_assignment_and_create_competitor_atomically',
+          enforcementActive: false,
+        })}`);
+        transaction.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
+          competitorId,
+          competitionId,
+          ...mutableCompetitor,
           ownerUid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        transaction.update(competitionRef, {
+          competitorCount: nextCompetitorCount,
+          finishedCount: Math.min(
+            nextCompetitorCount,
+            Number(currentCompetition.finishedCount || 0) +
+              (status === 'OK' || status === 'MP' ? 1 : 0)
+          ),
+          updatedAt: serverTimestamp(),
+        });
+
+        if (nextRunnerData) {
+          if (existingRunner) {
+            transaction.update(runnerRef, {
+              ...nextRunnerData,
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            transaction.set(runnerRef, {
+              runnerId,
+              siNumber,
+              ...nextRunnerData,
+              source: 'LEARNED_ENTRY',
+              ownerUid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          runnerDbEntry = {
+            id: runnerId,
+            siNumber,
+            ...(nextRunnerData as Omit<RunnerDbEntry, 'id' | 'siNumber' | 'updatedAt'>),
+            source: String(nextRunnerData.source) as RunnerDbEntry['source'],
+            updatedAt: nowIso,
+          };
+        }
       }
-
-      runnerDbEntry = {
-        id: runnerId,
-        siNumber,
-        ...runnerData,
-        source: runnerData.source as RunnerDbEntry['source'],
-        updatedAt: nowIso,
-      };
-    }
-  }
-
-  try {
-    await runCompetitorMutation(
-      {
-        source: 'saveDirectCompetitionEntryToFirestore',
-        operation: 'CREATE',
-        competitionId,
-        competitorId,
-        siNumber,
-        assignmentHandling: {
-          mode: 'LEGACY',
-          reason: 'Direct-entry write does not create an SI assignment.',
-        },
-        identityAffecting: true,
-      },
-      () => batch.commit()
     );
+    if (mutationResult.status !== 'COMMITTED') {
+      throw new Error('Tävlingen hittades inte i Firestore.');
+    }
   } catch (err) {
     handleWriteOrOfflineError(
       err,
