@@ -647,13 +647,23 @@ service cloud.firestore {
         (!('lastValidatedAt' in data) || data.lastValidatedAt == null || data.lastValidatedAt is timestamp);
     }
 
-    function hasActiveSIAssignmentAfter(competitionId, siNumber) {
-      return existsAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
-        ) &&
-        getAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
-        ).data.state == 'ACTIVE';
+    function hasActiveSIAssignmentAfter(competitionId, siNumber, competitorId, ownerUid) {
+      let assignmentPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber));
+      let competitorPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
+      return existsAfter(assignmentPath) &&
+        getAfter(assignmentPath).data.state == 'ACTIVE' &&
+        getAfter(assignmentPath).data.competitionId == competitionId &&
+        getAfter(assignmentPath).data.siNumber == siNumber &&
+        getAfter(assignmentPath).data.competitorId == competitorId &&
+        getAfter(assignmentPath).data.competitorDocumentId == competitorId &&
+        getAfter(assignmentPath).data.ownerUid == ownerUid &&
+        existsAfter(competitorPath) &&
+        getAfter(competitorPath).data.competitorId == competitorId &&
+        getAfter(competitorPath).data.competitionId == competitionId &&
+        getAfter(competitorPath).data.siNumber == siNumber &&
+        getAfter(competitorPath).data.ownerUid == ownerUid;
     }
 
     function hasRetiredSIAssignmentAfter(competitionId, siNumber, competitorId) {
@@ -706,7 +716,13 @@ service cloud.firestore {
               ).data.siNumber == assignment.siNumber &&
               getAfter(
                 /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-              ).data.competitorId == assignment.competitorId
+              ).data.competitorId == assignment.competitorId &&
+              getAfter(
+                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+              ).data.competitionId == competitionId &&
+              getAfter(
+                /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+              ).data.ownerUid == assignment.ownerUid
             : assignment.state == 'RETIRED' &&
               (
                 !existsAfter(
@@ -716,6 +732,9 @@ service cloud.firestore {
                   getAfter(
                     /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
                   ).data.competitorId == assignment.competitorId &&
+                  getAfter(
+                    /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+                  ).data.ownerUid == assignment.ownerUid &&
                   (
                     getAfter(
                       /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
@@ -796,7 +815,10 @@ service cloud.firestore {
         ).data.siNumber == assignment.siNumber &&
         getAfter(
           /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-        ).data.cardSeries == assignment.cardSeries;
+        ).data.cardSeries == assignment.cardSeries &&
+        getAfter(
+          /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
+        ).data.ownerUid == assignment.ownerUid;
     }
 
     // =========================================================================
@@ -1616,7 +1638,9 @@ service cloud.firestore {
           parentCompetitionExists(competitionId) &&
           hasActiveSIAssignmentAfter(
             competitionId,
-            incoming().siNumber
+            incoming().siNumber,
+            incoming().competitorId,
+            incoming().ownerUid
           ) &&
           (
             (
@@ -1653,7 +1677,9 @@ service cloud.firestore {
               ) &&
               hasActiveSIAssignmentAfter(
                 competitionId,
-                incoming().siNumber
+                incoming().siNumber,
+                incoming().competitorId,
+                incoming().ownerUid
               )
             )
           ) &&

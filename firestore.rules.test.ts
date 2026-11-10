@@ -459,6 +459,141 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     // Competitor creation is now accepted only with its matching assignment.
     await assertSucceeds(initialCompetitorBatch.commit());
 
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      const seededAssignments = [
+        {
+          ...siCardAssignment,
+          siNumber: 8500119,
+          competitorId: 'cmp_wrong_assignment_owner',
+          competitorDocumentId: 'cmp_wrong_assignment_owner',
+          ownerUid: 'race_admin_2',
+        },
+        {
+          ...siCardAssignment,
+          siNumber: 8500120,
+          competitorId: 'cmp_assigned_elsewhere',
+          competitorDocumentId: 'cmp_assigned_elsewhere',
+        },
+        {
+          ...siCardAssignment,
+          siNumber: 8500121,
+          competitorId: 'cmp_wrong_assignment_document',
+          competitorDocumentId: 'cmp_other_document',
+        },
+        {
+          ...siCardAssignment,
+          siNumber: 8500122,
+          competitorId: 'cmp_wrong_assignment_si',
+          competitorDocumentId: 'cmp_wrong_assignment_si',
+        },
+        {
+          ...siCardAssignment,
+          siNumber: 8500123,
+          competitorId: 'cmp_wrong_competitor_field',
+          competitorDocumentId: 'cmp_wrong_competitor_field',
+        },
+      ];
+      for (const assignment of seededAssignments) {
+        await adminDb
+          .doc(`competitions/evt_live/siCardAssignments/${assignment.siNumber}`)
+          .set(
+            assignment.siNumber === 8500122
+              ? { ...assignment, siNumber: 8500999 }
+              : assignment
+          );
+      }
+      await adminDb
+        .doc('competitions/evt_live/competitors/cmp_assignment_owner_mismatch')
+        .set({
+          ...initialCompetitor,
+          competitorId: 'cmp_assignment_owner_mismatch',
+          siNumber: 8500124,
+        });
+    });
+
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_wrong_assignment_owner')
+        .set({
+          ...initialCompetitor,
+          competitorId: 'cmp_wrong_assignment_owner',
+          siNumber: 8500119,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_new_owner')
+        .set({
+          ...initialCompetitor,
+          competitorId: 'cmp_new_owner',
+          siNumber: 8500120,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_wrong_assignment_document')
+        .set({
+          ...initialCompetitor,
+          competitorId: 'cmp_wrong_assignment_document',
+          siNumber: 8500121,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_wrong_assignment_si')
+        .set({
+          ...initialCompetitor,
+          competitorId: 'cmp_wrong_assignment_si',
+          siNumber: 8500122,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_wrong_competitor_field')
+        .set({
+          ...initialCompetitor,
+          competitorId: 'cmp_different_document_id',
+          siNumber: 8500123,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    const mismatchedOwnerAssignment = writeBatch(otherRaceAdminCtx.firestore());
+    mismatchedOwnerAssignment.update(
+      doc(
+        otherRaceAdminCtx.firestore(),
+        'competitions/evt_live/competitors/cmp_assignment_owner_mismatch'
+      ),
+      { status: 'CHECKED', updatedAt: serverTimestamp() }
+    );
+    mismatchedOwnerAssignment.set(
+      doc(otherRaceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500124'),
+      {
+        ...siCardAssignment,
+        siNumber: 8500124,
+        competitorId: 'cmp_assignment_owner_mismatch',
+        competitorDocumentId: 'cmp_assignment_owner_mismatch',
+        ownerUid: 'race_admin_2',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    await assertFails(mismatchedOwnerAssignment.commit());
+
     const readoutCreatedCompetitor = {
       ...initialCompetitor,
       competitorId: 'cmp_readout_test',
@@ -1027,9 +1162,8 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     );
     await assertSucceeds(reassignmentBatch.commit());
 
-    // This paired-transaction fence is not a uniqueness check: duplicates are
-    // still accepted when the requested SI already has an ACTIVE assignment.
-    await assertSucceeds(
+    // An ACTIVE assignment owned by another competitor cannot be reused.
+    await assertFails(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/competitors/cmp_duplicate')
