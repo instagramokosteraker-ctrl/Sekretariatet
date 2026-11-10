@@ -1,9 +1,12 @@
 # OwnerUid Remediation Plan
 
-- Based on read-only Firestore scan: `2026-11-10T21:31:23.608Z`
-- Competitions read: 3
+- Based on read-only Firestore scan: `2026-11-10T21:52:24.668Z`
+- Competitions read: 4
+- Competitors: 14
+- Assignments: 20
 - Active ownerUid parity mismatches: 6
 - No production data was modified.
+- The added Terräng-KM competition has 2 competitors and 4 assignments with no ownerUid mismatch; it adds 2 expected historical reassignments.
 
 The detailed ownerUid values and forensic history are restricted to [OWNERUID_FORENSIC_ANALYSIS.md](./OWNERUID_FORENSIC_ANALYSIS.md). This plan is not authorization to change production data.
 
@@ -36,4 +39,4 @@ The detailed ownerUid values and forensic history are restricted to [OWNERUID_FO
 
 ## Readiness
 
-**NO-GO.** Six active P0 ownerUid mismatches remain unresolved. The latest scan found no orphans, duplicate SI ownership, competitor/document ID mismatches, current SI mismatches, or active card-series mismatches, but those clean checks do not offset the owner parity failures. Trusted-writer/deployed-rule assurance and concurrency/rollback validation also remain open in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).
+**NO-GO.** Six active P0 ownerUid mismatches remain unresolved. The refreshed scan covers four returned competitions, 14 competitors, and 20 assignments. It found no orphans, duplicate SI ownership, competitor/document ID mismatches, current SI mismatches, or active card-series mismatches; these clean checks do not offset the owner parity failures. Trusted-writer/deployed-rule assurance and concurrency/rollback validation also remain open in [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md).

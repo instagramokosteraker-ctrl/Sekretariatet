@@ -1,11 +1,12 @@
 # OwnerUid Forensic Analysis
 
-- Read-only Firestore scan: `2026-11-10T21:31:23.608Z`
-- Competitions read: 3
-- Competitors: 12
-- Assignments: 16
+- Read-only Firestore scan: `2026-11-10T21:52:24.668Z`
+- Competitions read: 4
+- Competitors: 14
+- Assignments: 20
 - Active ownerUid parity mismatches: 6
 - No production data was modified.
+- The added Terräng-KM competition has 2 competitors and 4 assignments; it adds no ownerUid mismatch.
 
 This report includes raw Firebase UIDs and is restricted operational data. Do not copy it into public issue trackers or broadly shared logs.
 
@@ -122,4 +123,4 @@ The current repository's bootstrap and reassignment implementations source assig
 - **Inventory logic:** do not ignore or downgrade these active parity failures.
 - **Historical reassignments:** the four retired assignments elsewhere in the inventory have same-competitor ACTIVE successors and remain informational history, not P0 anomalies.
 
-The scan covered all three competition documents returned to the authorized query; it cannot prove that the configured project has no inaccessible or unreturned competitions.
+The refreshed scan covered all four competition documents returned to the authorized query; it cannot prove that the configured project has no inaccessible or unreturned competitions. Relative to the prior scan, one competition, two competitors, and four assignments were added; six historical reassignments now appear in total. The six ownerUid mismatches and their records are unchanged.

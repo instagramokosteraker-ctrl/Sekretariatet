@@ -1,7 +1,7 @@
 # Conflict Remediation Plan V2
 
-- Based on inventory scanned: 2026-11-10T21:10:54.882Z
-- Competitions: 3
+- Based on inventory scanned: 2026-11-10T21:52:24.668Z
+- Competitions: 4
 - Read-only inventory findings requiring review: 6
 
 No production data was modified. Do not repair records from this report alone; confirm authoritative identity and ownership history first.
@@ -19,6 +19,7 @@ No production data was modified. Do not repair records from this report alone; c
 | Reflexcup#2 | `evt-1794087219877` | 4 | 4 | 0 | 0 | 0 | 0 | 4 |
 | Medel_RM | `evt-1794342973709` | 3 | 3 | 2 | 2 | 0 | 0 | 0 |
 | Lång-TM | `evt-1794343263813` | 5 | 5 | 2 | 2 | 0 | 0 | 2 |
+| Terräng-KM | `evt-1794346921290` | 2 | 2 | 2 | 2 | 0 | 0 | 0 |
 
 ## P0 — Owner UID parity mismatches
 
@@ -48,6 +49,8 @@ The four retired records below each have an ACTIVE successor for the same compet
 | Medel_RM | `cmp_1794343175042_5qosxt` | `8100116` | `7100116` |
 | Lång-TM | `cmp_1794343935035_1f32fw` | `12345` | `123456` |
 | Lång-TM | `cmp_1794343951204_oa6epr` | `23456` | `234567` |
+| Terräng-KM | `cmp_1794347002438_r0ysuv` | `121212` | `1212122` |
+| Terräng-KM | `cmp_1794346985198_19qdji` | `860917` | `8609171` |
 
 The earlier basic inventory classified the latter two as lifecycle errors because it did not look for a same-competitor active successor. The V2 successor check confirms these as historical reassignments, consistent with the supplied event context.
 
