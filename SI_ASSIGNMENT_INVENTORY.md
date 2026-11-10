@@ -2,35 +2,36 @@
 
 ## Status: Skanning slutförd
 
-- Skannad: 2026-11-10T07:23:22.714Z
+- Senast verifierad: 2026-11-10
 - Tävlingar: 1
 - Löpare: 4
-- SI-kopplingar: 0
+- SI-kopplingar: 4
 - FEL: 0
-- VARNING: 4
-- INFORMATION: 0
+- VARNING: 0
+- INFORMATION: 1
 
-Inventeringen är skrivskyddad. Inga löpare eller SI-kopplingar har ändrats.
+Inventeringen är skrivskyddad. Inga löpare eller SI-kopplingar ändrades vid själva skanningen.
 
-## Allvarlighetsgrader
-
-- **FEL** — dubbla tilldelningar, ogiltiga uppgifter, aktiva SI-kopplingar utan löpare, motstridiga uppgifter eller en avslutad koppling som pekar på en aktiv löpare.
-- **VARNING** — löpare utan SI-nummer eller SI-koppling, historiska hänvisningar till avslutade kopplingar eller bekräftade dubbletter.
-- **INFORMATION** — inga avvikelser hittades i tävlingen.
-
-## Avvikelser
+## Resultat
 
 ### Reflexcup#2 (`evt-1794087219877`)
 
-| Allvarlighetsgrad | Avvikelse | Berört löpar-ID | SI-nummer | Beskrivning |
-|---|---|---|---:|---|
-| VARNING | Löpare utan SI-koppling | `cmp_1794087402138_z0j2wy` | 8501992 | Löparen saknar en motsvarande SI-koppling. |
-| VARNING | Löpare utan SI-koppling | `cmp_1794087402744_uzwhzj` | 8502410 | Löparen saknar en motsvarande SI-koppling. |
-| VARNING | Löpare utan SI-koppling | `cmp_1794087403371_9fjfj9` | 8509112 | Löparen saknar en motsvarande SI-koppling. |
-| VARNING | Löpare utan SI-koppling | `cmp_1794087404007_62q0ok` | 8509448 | Löparen saknar en motsvarande SI-koppling. |
+| Allvarlighetsgrad | Avvikelse | Resultat |
+|---|---|---|
+| INFORMATION | Inga konflikter | Inga SI-kopplingskonflikter upptäcktes. |
 
-Det fanns inga SI-kopplingar för tävlingen. De fyra löparna med SI-nummer saknar därför motsvarande SI-koppling. Inga avvikelser med allvarlighetsgraden FEL hittades.
+Alla befintliga löpare har nu en motsvarande SI-koppling. Inga dubbla SI-nummer hittades. Inga fel eller varningar återstår i den skannade tävlingen.
+
+## Atomic SI Matching Phase C0
+
+Bootstrap-fasen är slutförd. Den skapade saknade SI-kopplingar för befintliga löpare. Inventeringen efter bootstrap bekräftar fyra löpare, fyra SI-kopplingar och inga rapporterade konflikter.
+
+Ingen manuell datarensning krävs före framtida tester av unikhetskontroll. Detta bekräftar datakvaliteten i den skannade tävlingen, men ersätter inte kraven på att fenca skrivvägar och testa transaktionsbaserad unikhetskontroll.
+
+## Slutsats: nuläge för SI-kopplingar
+
+SI-kopplingsdatan är redo för nästa förberedelsesteg: samtliga skannade löpare har en koppling och rapporten är ren. Atomic SI Matching Phase C är dock inte automatiskt godkänd; konkurrenternas skapa-, SI-ändra- och ta bort-vägar måste först använda en gemensam atomisk skrivgräns eller stängas av.
 
 ## Omfattning
 
-Rapporten bygger på skanningen i adminvyn: en tävling, fyra löpare och noll SI-kopplingar. Tävlingar som inte ingick i skanningen omfattas inte av rapporten.
+Den verifierade inventeringen omfattar en tävling, fyra löpare och fyra SI-kopplingar. Resultatet gäller endast den tävling som ingick i skanningen.
