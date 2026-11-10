@@ -4760,6 +4760,21 @@ async function startServer() {
   });
 
   // 6. Competitors & Direct Entry CRUD
+  const rejectLegacyCompetitorMutation = (
+    req: express.Request,
+    res: express.Response
+  ) => {
+    console.warn(`[legacy-competitor-route-disabled] ${req.method} ${req.path}`);
+    res.status(410).json({
+      code: 'LEGACY_COMPETITOR_ROUTE_DISABLED',
+      error: 'Legacy competitor mutation routes are disabled. Use the Firestore-authoritative application.',
+    });
+  };
+  // Keep these terminal handlers before the legacy route bodies so they cannot fall through.
+  app.post('/api/competitors', rejectLegacyCompetitorMutation);
+  app.put('/api/competitors/:id', rejectLegacyCompetitorMutation);
+  app.delete('/api/competitors/:id', rejectLegacyCompetitorMutation);
+
   app.post('/api/competitors', (req, res) => {
     const db = getActiveEvent();
     const body = req.body as Partial<Competitor> & {

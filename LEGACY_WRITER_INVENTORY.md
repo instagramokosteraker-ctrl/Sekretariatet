@@ -6,7 +6,7 @@ The canonical active blocker list and overall verdict are maintained in [COMPETI
 
 ## Summary
 
-Competitor identity ownership is not yet fully cut over. Legacy Express CRUD/direct-entry, import, reset/restore, competition lifecycle, and snapshot/import paths remain to be redirected, disabled, or safely constrained. The Firestore assignment transaction and rules work protects the paths covered by the implementation, but diagnostics and client rules do not provide a trusted all-writer boundary or global uniqueness by themselves.
+Competitor identity ownership is not yet fully cut over. Legacy Express competitor CRUD routes are disabled and their first-party UI callers use Firestore transaction helpers. Import, reset/restore, competition lifecycle, and snapshot/import paths remain to be redirected, disabled, or safely constrained. The Firestore assignment transaction and rules work protects the paths covered by the implementation, but diagnostics and client rules do not provide a trusted all-writer boundary or global uniqueness by themselves.
 
 The former readout auto-create bypass has been removed. See [READOUT_AUTO_CREATE_MIGRATION_PLAN.md](./READOUT_AUTO_CREATE_MIGRATION_PLAN.md) for the historical rationale and migrated behavior.
 
@@ -14,10 +14,10 @@ The former readout auto-create bypass has been removed. See [READOUT_AUTO_CREATE
 
 | # | Path / file | Write target | Current classification | Current status |
 |---|---|---|---|---|
-| 1 | `server.ts` `POST /api/competitors` | `seasonDb.eventsMap[*].competitors` | Legacy identity writer | Active blocker; redirect or disable |
-| 2 | `server.ts` `PUT /api/competitors/:id` | `seasonDb.eventsMap[active].competitors[id]` | Legacy identity/SI writer | Active blocker; redirect or disable |
-| 3 | `server.ts` `DELETE /api/competitors/:id` | Active competition competitors | Legacy deletion writer | Active blocker; use assignment-aware retirement/deletion |
-| 4 | `server.ts` direct-entry and related UI fallbacks in `src/App.tsx` | Express season state and/or Firestore | Mixed-authority | Active blocker; enforce one canonical write path |
+| 1 | `server.ts` `POST /api/competitors` | None; terminal HTTP 410 response | Disabled legacy route | Migrated; direct-entry UI writes through the Firestore transaction helper |
+| 2 | `server.ts` `PUT /api/competitors/:id` | None; terminal HTTP 410 response | Disabled legacy route | Migrated; UI updates use Firestore transaction helpers |
+| 3 | `server.ts` `DELETE /api/competitors/:id` | None; terminal HTTP 410 response | Disabled legacy route | Migrated; UI deletion retires the SI assignment and deletes the competitor atomically |
+| 4 | Direct-entry and update/delete UI flows in `src/App.tsx` | Firestore competitor and assignment documents | Firestore transaction paths | Migrated for these CRUD flows; imports and lifecycle paths remain open |
 | 5 | Eventor import and IOF/import-batch paths | Imported competitors and related season data | Legacy/import writer | Active blocker; route all identity changes through the canonical transaction |
 | 6 | `server.ts` `DELETE /api/competitions/:id` | Competition and competitor tree | Legacy lifecycle writer | Active blocker; define assignment retirement/retention behavior |
 | 7 | `server.ts` `/api/system/reset-seed`, restore, and clear-demo paths | Season and competition state | Legacy seed/restore/removal writer | Active blocker until identity and assignment mutations are blocked or canonical |

@@ -16,6 +16,8 @@ The existing Firestore transaction paths for create, SI change, retirement, and 
 - Atomic SI Matching Phases A, B, and C0; assignment create, delete/retire, and reassign paths.
 - Cloud-hydrate competitor identity fence.
 - Readout auto-create moved to the Firestore transaction flow; Express readout identity creation removed.
+- Legacy `POST /api/competitors`, `PUT /api/competitors/:id`, and `DELETE /api/competitors/:id` are disabled with HTTP 410 responses. First-party direct-entry, competitor update, and delete UI flows now call Firestore mutation helpers directly; they no longer use Express CRUD as a prerequisite or fallback.
+- Direct-entry competitor creation now rejects existing SI assignment/competitor conflicts and duplicate-scan failures before writing. SI reassignment rejects assignment conflicts and duplicate-scan failures in the transaction path.
 - Legacy snapshot updates to existing competitor documents and snapshot-driven deletions are blocked by `syncFullSeasonToFirestore`; snapshot seeding of missing records and other imports still require review.
 - Firestore client rules require paired assignment writes for covered competitor create/SI-change/delete operations. This is not a trusted backend boundary and does not constrain Admin SDK writers.
 
@@ -23,11 +25,12 @@ The existing Firestore transaction paths for create, SI change, retirement, and 
 
 This is the single source of truth for active competitor-ownership cutover blockers. The [legacy writer inventory](./LEGACY_WRITER_INVENTORY.md) and [readout auto-create migration record](./READOUT_AUTO_CREATE_MIGRATION_PLAN.md) refer here rather than maintaining separate blocker lists.
 
-1. **Legacy Express competitor CRUD and direct-entry paths:** `POST /api/competitors`, `PUT /api/competitors/:id`, `DELETE /api/competitors/:id`, and related UI/fallback writers can still mutate identity outside the canonical Firestore assignment transaction.
-2. **Eventor, IOF, and batch imports:** identity creation or updates from import paths are not all routed through the canonical transaction and assignment ownership boundary.
-3. **Restore, reset/seed, clear-demo, and competition deletion:** these paths can still rehydrate, remove, or seed competitor state without a complete assignment-aware lifecycle operation.
-4. **Remaining snapshot/import writer paths:** full-season snapshot seeding of missing documents and bulk import writes need a controlled, assignment-aware policy; the guard for updates/deletions of existing competitor documents does not close these create/import paths.
-5. **Single-writer enforcement and validation:** diagnostics are not enforcement. Establish and verify the production authority boundary for every remaining writer, reconcile existing duplicate/conflicting SI data, and validate uniqueness, retries, rollback, and concurrent mutations. Firestore emulator/integration and deployed-rule evidence is still required.
+1. **Eventor, IOF, and batch imports:** identity creation or updates from import paths are not all routed through the canonical transaction and assignment ownership boundary.
+2. **Restore, reset/seed, clear-demo, and competition deletion:** these paths can still rehydrate, remove, or seed competitor state without a complete assignment-aware lifecycle operation.
+3. **Remaining snapshot/import writer paths:** full-season snapshot seeding of missing documents and bulk import writes need a controlled, assignment-aware policy; the guard for updates/deletions of existing competitor documents does not close these create/import paths.
+4. **Single-writer enforcement and validation:** diagnostics are not enforcement. Establish and verify the production authority boundary for every remaining writer, reconcile existing duplicate/conflicting SI data, and validate uniqueness, retries, rollback, and concurrent mutations. Firestore emulator/integration and deployed-rule evidence is still required.
+
+The three legacy competitor CRUD routes and their first-party UI callers are no longer active blockers. This closes only those Express endpoints and associated application call paths; import, restore, reset, snapshot, and competition lifecycle writers remain open.
 
 The Express `/api/readout` compatibility path remains a readout/result-mirror concern: it does not create competitor identity, but it does not replace the canonical Firestore receipt/result flow. It is not the former readout auto-create identity blocker; complete readout/result ownership remains a separate cutover concern.
 
@@ -36,6 +39,8 @@ The Express `/api/readout` compatibility path remains a readout/result-mirror co
 - **Design:** sufficiently documented.
 - **Implementation:** partial; atomic assignment transactions exist for covered paths, but legacy writers remain.
 - **Operational/safety validation:** incomplete; repository notes do not establish deployed trusted-server enforcement, all-writer coverage, historical conflict reconciliation, or successful concurrency/rollback validation.
+
+Verification for the CRUD-route migration: `npm run lint`, `npm run build`, and the focused SI-assignment unit tests passed (16 tests). These checks do not substitute for Firestore emulator/deployed-rule validation or establish that the remaining legacy writers are fenced.
 
 Therefore, do not enable global uniqueness enforcement or declare competitor ownership fully cut over until every item in the canonical list is closed and verified.
 

@@ -4419,8 +4419,6 @@ export async function updateCompetitorInFirestore(
   competitorId: string,
   patch: Partial<Competitor>
 ): Promise<void> {
-  const context = await getCompetitionMutationContext(competitionId);
-  const id = sanitizeFirestoreId(competitorId, 'cmp');
   const mutable: Record<string, unknown> = {};
   const fields: Array<keyof Competitor> = [
     'bib',
@@ -4465,6 +4463,106 @@ export async function updateCompetitorInFirestore(
   }
   if (Object.keys(mutable).length === 0) return;
 
+  const authorization = await getCurrentFirebaseRoles();
+  const officialRoleFields: Record<OfficialRole, string[]> = {
+    READOUT: [
+      'status',
+      'checkTimeSec',
+      'startTimeSec',
+      'finishTimeSec',
+      'runningTimeSec',
+      'readoutAtIso',
+      'punchCodes',
+      'punchTimes',
+    ],
+    SPEAKER: [
+      'status',
+      'checkTimeSec',
+      'startTimeSec',
+      'finishTimeSec',
+      'runningTimeSec',
+      'readoutAtIso',
+      'punchCodes',
+      'punchTimes',
+    ],
+    FOREST: [
+      'status',
+      'checkTimeSec',
+      'startTimeSec',
+      'finishTimeSec',
+      'runningTimeSec',
+      'readoutAtIso',
+      'punchCodes',
+      'punchTimes',
+    ],
+    START: ['status', 'checkTimeSec', 'startTimeSec'],
+  };
+  const mutableFields = Object.keys(mutable);
+  if (!authorization.adminTier) {
+    const allowedFields = authorization.officialRole
+      ? officialRoleFields[authorization.officialRole]
+      : [];
+    if (
+      allowedFields.length === 0 ||
+      mutableFields.some((field) => !allowedFields.includes(field))
+    ) {
+      throw new Error('Ditt konto saknar behörighet att uppdatera deltagaren.');
+    }
+
+    const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
+    const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
+    const competitionRef = doc(db, 'competitions', safeCompetitionId);
+    const competitorRef = doc(
+      db,
+      'competitions',
+      safeCompetitionId,
+      'competitors',
+      safeCompetitorId
+    );
+    await runTransaction(db, async (transaction) => {
+      const [competitionSnap, competitorSnap] = await Promise.all([
+        transaction.get(competitionRef),
+        transaction.get(competitorRef),
+      ]);
+      if (!competitionSnap.exists() || !competitorSnap.exists()) {
+        throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+      }
+      const competition = competitionSnap.data();
+      const competitor = competitorSnap.data();
+      if (competition.status === 'COMPLETED') {
+        throw new Error('Deltagaren kan inte uppdateras i en avslutad tävling.');
+      }
+      if (typeof mutable.status === 'string') {
+        const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
+        const previouslyFinished = finishedStatuses.has(String(competitor.status));
+        const willBeFinished = finishedStatuses.has(mutable.status);
+        if (previouslyFinished && !willBeFinished) {
+          throw new Error(
+            'En administratör måste återställa statusen för en färdig deltagare.'
+          );
+        }
+        if (!previouslyFinished && willBeFinished) {
+          if (authorization.officialRole === 'START') {
+            throw new Error('Din roll har inte behörighet att markera deltagaren som färdig.');
+          }
+          transaction.update(competitionRef, {
+            finishedCount: clampInt(
+              Number(competition.finishedCount || 0) + 1,
+              0,
+              Number(competition.competitorCount || 0),
+              0
+            ),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+      transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
+    });
+    return;
+  }
+
+  const context = await getCompetitionMutationContext(competitionId);
+  const id = sanitizeFirestoreId(competitorId, 'cmp');
   const competitionRef = doc(db, 'competitions', context.competitionId);
   const competitorRef = doc(
     db,
@@ -4543,14 +4641,24 @@ export async function updateCompetitorInFirestore(
           currentAssignmentSnapshot?.exists() && currentAssignment === null;
         const targetMalformed =
           targetAssignmentSnapshot?.exists() && targetAssignment === null;
-        const oldAction = currentMalformed ? 'SKIP_CONFLICT' : plan.oldAssignment;
-        const targetAction = targetMalformed ? 'SKIP_CONFLICT' : plan.targetAssignment;
-        const now = Timestamp.now();
-        let reassignmentPartial =
-          plan.conflict ||
+        if (
           currentMalformed ||
           targetMalformed ||
-          (oldAction === 'MISSING' && currentSiNumber !== null);
+          plan.conflict ||
+          transactionResult.duplicateCandidateDetected ||
+          transactionResult.duplicateCandidateQueryError
+        ) {
+          throw new Error(
+            transactionResult.duplicateCandidateDetected
+              ? `SI-bricka ${nextSiNumber} används redan av en annan deltagare.`
+              : transactionResult.duplicateCandidateQueryError
+                ? 'SI-brickans unika ägare kunde inte verifieras. Försök igen.'
+                : 'SI-brickans befintliga ägarskap är oförenligt med omfördelningen.'
+          );
+        }
+        const oldAction = plan.oldAssignment;
+        const targetAction = plan.targetAssignment;
+        const now = Timestamp.now();
 
         if (oldAction === 'RETIRE' && currentAssignment) {
           if (currentSiNumber !== null) {
@@ -4566,8 +4674,19 @@ export async function updateCompetitorInFirestore(
               }
             );
           }
-        } else if (oldAction === 'SKIP_CONFLICT' || oldAction === 'SKIP_VERSION_LIMIT') {
-          reassignmentPartial = true;
+        } else if (oldAction === 'MISSING' && currentSiNumber !== null) {
+          const retirementOutcome = retireSIAssignmentInTransaction({
+            transaction,
+            competitionId: context.competitionId,
+            competitorId: id,
+            competitorData: existing,
+            assignmentSnapshot: currentAssignmentSnapshot,
+            ownerUid: context.ownerUid,
+            retirementReason: 'si_reassigned',
+          });
+          if (retirementOutcome !== 'RETIRED') {
+            throw new Error('Deltagarens nuvarande SI-ägarskap kunde inte avslutas.');
+          }
         }
 
         if (targetAction === 'CREATE') {
@@ -4579,27 +4698,26 @@ export async function updateCompetitorInFirestore(
               : typeof existing.cardSeries === 'string'
                 ? existing.cardSeries
                 : '';
-          if (cardSeries.length > 0 && cardSeries.length <= 24) {
-            transaction.set(
-              getCompetitionSICardAssignmentRef(context.competitionId, nextSiNumber),
-              {
-                competitionId: context.competitionId,
-                siNumber: nextSiNumber,
-                cardSeries,
-                competitorId: id,
-                competitorDocumentId: id,
-                state: 'ACTIVE',
-                assignmentVersion: 1,
-                source: 'MANUAL',
-                ownerUid: context.ownerUid,
-                schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
-                createdAt: now,
-                updatedAt: now,
-              }
-            );
-          } else {
-            reassignmentPartial = true;
+          if (cardSeries.length === 0 || cardSeries.length > 24) {
+            throw new Error('Deltagarens kortserie är ogiltig.');
           }
+          transaction.set(
+            getCompetitionSICardAssignmentRef(context.competitionId, nextSiNumber),
+            {
+              competitionId: context.competitionId,
+              siNumber: nextSiNumber,
+              cardSeries,
+              competitorId: id,
+              competitorDocumentId: id,
+              state: 'ACTIVE',
+              assignmentVersion: 1,
+              source: 'MANUAL',
+              ownerUid: context.ownerUid,
+              schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+              createdAt: now,
+              updatedAt: now,
+            }
+          );
         } else if (targetAction === 'ACTIVATE' && targetAssignment) {
           const cardSeries =
             typeof mutable.cardSeries === 'string' &&
@@ -4622,18 +4740,9 @@ export async function updateCompetitorInFirestore(
                 targetAssignment.competitorId ?? targetAssignment.previousCompetitorId ?? null,
             }
           );
-        } else if (
-          targetAction === 'COLLISION' ||
-          targetAction === 'SKIP_CONFLICT'
-        ) {
-          reassignmentPartial = true;
         }
 
-        assignmentWriteOutcome = reassignmentPartial
-          ? plan.conflict && targetAction === 'COLLISION'
-            ? 'REASSIGNMENT_CONFLICT'
-            : 'REASSIGNMENT_PARTIAL'
-          : 'REASSIGNED';
+        assignmentWriteOutcome = 'REASSIGNED';
         console.info(
           `[si-assignment-reassignment] ${JSON.stringify({
             competitionId: context.competitionId,
@@ -4642,9 +4751,9 @@ export async function updateCompetitorInFirestore(
             toSiNumber: nextSiNumber,
             oldAssignmentAction: oldAction,
             targetAssignmentAction: targetAction,
-            conflict: reassignmentPartial || transactionResult.reassignmentConflict,
+            conflict: false,
             assignmentWriteOutcome,
-            enforcementActive: false,
+            coveredPathEnforcement: true,
             writesContinue: true,
           })}`
         );
@@ -4660,7 +4769,7 @@ export async function updateCompetitorInFirestore(
           currentSiNumber: Number(existing.siNumber),
           requestedSiNumber: nextSiNumber,
           action: 'validate_assignment_and_update_competitor_atomically',
-          enforcementActive: false,
+          coveredPathEnforcement: true,
         })}`
       );
       transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
@@ -6291,7 +6400,19 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         competitor: { competitionId, competitorId },
         assignment: { requestedSiNumber: siNumber },
       },
-      async ({ transaction, competitionData: currentCompetition, assignmentSnapshots }) => {
+      async ({
+        transaction,
+        competitionData: currentCompetition,
+        assignmentSnapshots,
+        result,
+      }) => {
+        if (result.duplicateCandidateDetected || result.duplicateCandidateQueryError) {
+          throw new Error(
+            result.duplicateCandidateDetected
+              ? `SI-bricka ${siNumber} används redan av en deltagare i tävlingen.`
+              : 'SI-brickans unika ägare kunde inte verifieras. Försök igen.'
+          );
+        }
         const runnerId = String(siNumber);
         const runnerRef = doc(db, 'runnerDb', runnerId);
         const runnerSnap =
@@ -6335,16 +6456,8 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
           competitorId,
           requestedSiNumber: siNumber,
           action: 'validate_assignment_and_create_competitor_atomically',
-          enforcementActive: false,
+          coveredPathEnforcement: true,
         })}`);
-        transaction.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
-          competitorId,
-          competitionId,
-          ...mutableCompetitor,
-          ownerUid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
         const assignmentSnapshot = assignmentSnapshots.get(siNumber);
         const existingAssignment =
           assignmentSnapshot?.exists()
@@ -6366,6 +6479,16 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
             : assignmentSnapshot?.exists() && !existingAssignment
               ? 'SKIPPED_CONFLICT'
               : planCreateSIAssignmentWrite(existingAssignment, competitorId);
+        if (assignmentAction !== 'CREATE') {
+          throw new Error(
+              assignmentAction === 'SKIP_CONFLICT' ||
+                assignmentAction === 'SKIPPED_CONFLICT'
+                ? `SI-bricka ${siNumber} ägs redan av en annan deltagare.`
+                : assignmentAction === 'SKIPPED_INVALID_DATA'
+                  ? 'Deltagarens SI-bricka eller kortserie är ogiltig.'
+                  : 'SI-brickan är redan kopplad till deltagaren.'
+          );
+        }
         if (assignmentAction === 'CREATE') {
           transaction.set(getCompetitionSICardAssignmentRef(competitionId, siNumber), {
             competitionId,
@@ -6382,6 +6505,14 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
             updatedAt: serverTimestamp(),
           });
         }
+        transaction.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
+          competitorId,
+          competitionId,
+          ...mutableCompetitor,
+          ownerUid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
         transaction.update(competitionRef, {
           competitorCount: nextCompetitorCount,
           finishedCount: Math.min(
@@ -6417,13 +6548,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
             updatedAt: nowIso,
           };
         }
-        return assignmentAction === 'CREATE'
-          ? 'CREATED'
-          : assignmentAction === 'ALREADY_MATCHED'
-            ? 'ALREADY_MATCHED'
-            : assignmentAction === 'SKIP_CONFLICT'
-              ? 'SKIPPED_CONFLICT'
-              : assignmentAction;
+        return 'CREATED' as const;
       }
     );
     if (mutationResult.status !== 'COMMITTED') {

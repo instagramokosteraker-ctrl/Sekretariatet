@@ -1543,22 +1543,8 @@ export default function App() {
     setCompetitors((current) =>
       current.map((competitor) =>
         competitor.id === competitorId ? { ...competitor, ...patch } : competitor
-      )
+        )
     );
-    try {
-      const response = await apiFetch(`/api/competitors/${encodeURIComponent(competitorId)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      if (!response.ok && response.status !== 404 && response.status !== 405) {
-        console.warn(
-          `Betalnings- eller hyrstatus sparades i Firestore men Express-spegeln svarade HTTP ${response.status}.`
-        );
-      }
-    } catch (error) {
-      console.warn('Betalnings- eller hyrstatus sparades i Firestore men Express-spegeln kunde inte uppdateras:', error);
-    }
   };
 
   const updateRentalReturnedFromOverview = async (
@@ -1596,113 +1582,21 @@ export default function App() {
   const saveDirectEntryToFirestore = async (
     payload: Parameters<typeof saveDirectCompetitionEntryToFirestore>[0]['payload']
   ) => {
-    try {
-      return await saveDirectCompetitionEntryToFirestore({
-        competitionId: activeEventId,
-        payload,
-        competitors,
-        classes,
-        courses,
-        emergency,
-      });
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        error.message !== 'Tävlingen hittades inte i Firestore.' ||
-        !activeEventId ||
-        competition.id !== activeEventId
-      ) {
-        throw error;
-      }
-
-      await createCompetitionInFirestore({
-        competitionId: activeEventId,
-        shortCode: competition.shortCode,
-        name: competition.name,
-        organizer: competition.organizer,
-        date: competition.date,
-        status: competition.status,
-        zeroTimeStr: competition.zeroTimeStr,
-        zeroTimeSec: competition.zeroTimeSec,
-        arenaInfo: competition.arenaInfo,
-        seriesName: competition.seriesName,
-        feeTrackingEnabled: competition.feeTrackingEnabled,
-        courses,
-        classes,
-      });
-      if (competitors.length > 0) {
-        await saveCompetitionImportToFirestore({
-          competitionId: activeEventId,
-          courses,
-          classes,
-          competitors,
-          runnerDbEntries: [],
-          competitorCount: competitors.length,
-        });
-      }
-      return saveDirectCompetitionEntryToFirestore({
-        competitionId: activeEventId,
-        payload,
-        competitors,
-        classes,
-        courses,
-        emergency,
-      });
-    }
+    return saveDirectCompetitionEntryToFirestore({
+      competitionId: activeEventId,
+      payload,
+      competitors,
+      classes,
+      courses,
+      emergency,
+    });
   };
 
   const handleCreateDirectEntry = async (
     payload: Parameters<typeof saveDirectCompetitionEntryToFirestore>[0]['payload']
   ): Promise<string | null> => {
-    const hasFirestoreIdentity = Boolean(firebaseUserPresent || auth.currentUser);
-    let firestoreSaved: Awaited<ReturnType<typeof saveDirectEntryToFirestore>> | null = null;
-    let response: Response | null = null;
-
-    if (hasFirestoreIdentity) {
-      try {
-        firestoreSaved = await saveDirectEntryToFirestore(payload);
-      } catch (error) {
-        console.error('Kunde inte spara direktanmälan till Firestore:', error);
-        return error instanceof Error ? error.message : 'Kunde inte spara anmälan i Firestore.';
-      }
-    }
-
     try {
-      response = await apiFetch('/api/competitors', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...payload,
-          ...(firestoreSaved ? { id: firestoreSaved.competitor.id } : {}),
-        }),
-      });
-    } catch (error) {
-      if (firestoreSaved) {
-        console.warn('Direktanmälan sparades i Firestore men Express-spegeln kunde inte uppdateras:', error);
-      } else if (!(error instanceof TypeError)) {
-        throw error;
-      }
-    }
-
-    if (firestoreSaved && response && !response.ok && response.status !== 404 && response.status !== 405) {
-      console.warn(
-        `Direktanmälan sparades i Firestore men Express-spegeln svarade HTTP ${response.status}.`
-      );
-    }
-
-    if (response?.ok && !firestoreSaved) {
-      return null;
-    }
-
-    if (response && response.status !== 404 && response.status !== 405) {
-      if (!firestoreSaved) {
-        const err = (await response.json().catch(() => ({}))) as { error?: string };
-        return err.error ?? 'Kunde inte spara anmälan.';
-      }
-    }
-
-    try {
-      const saved = firestoreSaved ?? (await saveDirectEntryToFirestore(payload));
+      const saved = await saveDirectEntryToFirestore(payload);
       setCompetitors((current) => [saved.competitor, ...current]);
       const savedIsFinished =
         saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
@@ -3523,16 +3417,6 @@ export default function App() {
                   }}
                   onCreateCompetitor={async (payload) => {
                     try {
-                      const useFirestore = await apiRequestUnavailable(
-                        '/api/competitors',
-                        {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify(payload),
-                        },
-                        'Kunde inte spara deltagare.'
-                      );
-                      if (!useFirestore) return null;
                       const saved = await saveDirectEntryToFirestore(payload);
                       setCompetitors((current) => [saved.competitor, ...current]);
                       const savedIsFinished =
@@ -3578,16 +3462,6 @@ export default function App() {
                       await updateActiveCompetitorBillingFields(id, patch);
                       return;
                     }
-                    const useFirestore = await apiRequestUnavailable(
-                      `/api/competitors/${id}`,
-                      {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(patch),
-                      },
-                      'Kunde inte uppdatera deltagaren.'
-                    );
-                    if (!useFirestore) return;
                     await updateCompetitorInFirestore(activeEventId, id, patch);
                     setCompetitors((current) =>
                       current.map((competitor) =>
@@ -3605,16 +3479,6 @@ export default function App() {
                   zeroTimeSec={competition.zeroTimeSec}
                   onUpdateRunnerStatus={async (id, status: RunnerStatus) => {
                     const patch = { status };
-                    const useFirestore = await apiRequestUnavailable(
-                      `/api/competitors/${id}`,
-                      {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(patch),
-                      },
-                      'Kunde inte uppdatera löparstatus.'
-                    );
-                    if (!useFirestore) return;
                     await updateCompetitorInFirestore(activeEventId, id, patch);
                     setCompetitors((current) =>
                       current.map((competitor) =>
@@ -3700,16 +3564,6 @@ export default function App() {
                       await updateActiveCompetitorBillingFields(id, patch);
                       return;
                     }
-                    const useFirestore = await apiRequestUnavailable(
-                      `/api/competitors/${id}`,
-                      {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(patch),
-                      },
-                      'Kunde inte uppdatera deltagaren.'
-                    );
-                    if (!useFirestore) return;
                     await updateCompetitorInFirestore(activeEventId, id, patch);
                     setCompetitors((current) =>
                       current.map((competitor) =>
@@ -3718,12 +3572,6 @@ export default function App() {
                     );
                   }}
                   onDeleteCompetitor={async (id) => {
-                    const useFirestore = await apiRequestUnavailable(
-                      `/api/competitors/${id}`,
-                      { method: 'DELETE' },
-                      'Kunde inte ta bort deltagaren.'
-                    );
-                    if (!useFirestore) return;
                     await deleteCompetitorFromFirestore(activeEventId, id);
                     setCompetitors((current) =>
                       current.filter((competitor) => competitor.id !== id)
