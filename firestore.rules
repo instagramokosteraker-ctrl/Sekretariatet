@@ -647,24 +647,42 @@ service cloud.firestore {
         (!('lastValidatedAt' in data) || data.lastValidatedAt == null || data.lastValidatedAt is timestamp);
     }
 
+    function activeSIAssignmentMatchesCompetitor(
+      competitionId,
+      siNumber,
+      competitorId,
+      ownerUid,
+      assignment,
+      competitor
+    ) {
+      return assignment.state == 'ACTIVE' &&
+        assignment.competitionId == competitionId &&
+        assignment.siNumber == siNumber &&
+        assignment.competitorId == competitorId &&
+        assignment.competitorDocumentId == competitorId &&
+        assignment.ownerUid == ownerUid &&
+        competitor.competitorId == competitorId &&
+        competitor.competitionId == competitionId &&
+        competitor.siNumber == siNumber &&
+        competitor.cardSeries == assignment.cardSeries &&
+        competitor.ownerUid == ownerUid;
+    }
+
     function hasActiveSIAssignmentAfter(competitionId, siNumber, competitorId, ownerUid) {
       let assignmentPath =
         /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber));
       let competitorPath =
         /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
       return existsAfter(assignmentPath) &&
-        getAfter(assignmentPath).data.state == 'ACTIVE' &&
-        getAfter(assignmentPath).data.competitionId == competitionId &&
-        getAfter(assignmentPath).data.siNumber == siNumber &&
-        getAfter(assignmentPath).data.competitorId == competitorId &&
-        getAfter(assignmentPath).data.competitorDocumentId == competitorId &&
-        getAfter(assignmentPath).data.ownerUid == ownerUid &&
         existsAfter(competitorPath) &&
-        getAfter(competitorPath).data.competitorId == competitorId &&
-        getAfter(competitorPath).data.competitionId == competitionId &&
-        getAfter(competitorPath).data.siNumber == siNumber &&
-        getAfter(competitorPath).data.cardSeries == getAfter(assignmentPath).data.cardSeries &&
-        getAfter(competitorPath).data.ownerUid == ownerUid;
+        activeSIAssignmentMatchesCompetitor(
+          competitionId,
+          siNumber,
+          competitorId,
+          ownerUid,
+          getAfter(assignmentPath).data,
+          getAfter(competitorPath).data
+        );
     }
 
     function hasRetiredSIAssignmentAfter(competitionId, siNumber, competitorId) {
@@ -695,6 +713,33 @@ service cloud.firestore {
         );
     }
 
+    function activeAssignmentMatchesCompetitor(competitionId, assignment, competitor) {
+      return competitor.siNumber == assignment.siNumber &&
+        competitor.competitorId == assignment.competitorId &&
+        competitor.competitionId == competitionId &&
+        competitor.cardSeries == assignment.cardSeries &&
+        competitor.ownerUid == assignment.ownerUid;
+    }
+
+    function retiredAssignmentMatchesCompetitorBefore(competitionId, assignment, competitor) {
+      return competitor.competitorId == assignment.competitorId &&
+        competitor.competitionId == competitionId &&
+        competitor.siNumber == assignment.siNumber &&
+        competitor.cardSeries == assignment.cardSeries &&
+        competitor.ownerUid == assignment.ownerUid;
+    }
+
+    function retiredAssignmentMatchesCompetitorAfter(competitionId, assignment, competitor) {
+      return competitor.competitorId == assignment.competitorId &&
+        competitor.competitionId == competitionId &&
+        competitor.ownerUid == assignment.ownerUid &&
+        (
+          competitor.siNumber != assignment.siNumber ||
+          competitor.status == 'DNS' ||
+          competitor.status == 'DNF'
+        );
+    }
+
     function assignmentMatchesCompetitorAfter(competitionId, assignment) {
       let competitorPath =
         /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId);
@@ -702,29 +747,24 @@ service cloud.firestore {
         (
           assignment.state == 'ACTIVE'
             ? existsAfter(competitorPath) &&
-              getAfter(competitorPath).data.siNumber == assignment.siNumber &&
-              getAfter(competitorPath).data.competitorId == assignment.competitorId &&
-              getAfter(competitorPath).data.competitionId == competitionId &&
-              getAfter(competitorPath).data.cardSeries == assignment.cardSeries &&
-              getAfter(competitorPath).data.ownerUid == assignment.ownerUid
+              activeAssignmentMatchesCompetitor(
+                competitionId,
+                assignment,
+                getAfter(competitorPath).data
+              )
             : assignment.state == 'RETIRED' &&
               exists(competitorPath) &&
-              get(competitorPath).data.competitorId == assignment.competitorId &&
-              get(competitorPath).data.competitionId == competitionId &&
-              get(competitorPath).data.siNumber == assignment.siNumber &&
-              get(competitorPath).data.cardSeries == assignment.cardSeries &&
-              get(competitorPath).data.ownerUid == assignment.ownerUid &&
+              retiredAssignmentMatchesCompetitorBefore(
+                competitionId,
+                assignment,
+                get(competitorPath).data
+              ) &&
               (
                 !existsAfter(competitorPath) ||
-                (
-                  getAfter(competitorPath).data.competitorId == assignment.competitorId &&
-                  getAfter(competitorPath).data.competitionId == competitionId &&
-                  getAfter(competitorPath).data.ownerUid == assignment.ownerUid &&
-                  (
-                    getAfter(competitorPath).data.siNumber != assignment.siNumber ||
-                    getAfter(competitorPath).data.status == 'DNS' ||
-                    getAfter(competitorPath).data.status == 'DNF'
-                  )
+                retiredAssignmentMatchesCompetitorAfter(
+                  competitionId,
+                  assignment,
+                  getAfter(competitorPath).data
                 )
               )
         );
@@ -736,16 +776,47 @@ service cloud.firestore {
         hasOfficialRole('SPEAKER');
     }
 
+    function processedReadoutReceiptMatchesCompetitor(competitor, receipt) {
+      return receipt.status == 'PROCESSED' &&
+        receipt.competitorId == competitor.competitorId &&
+        receipt.siNumber == competitor.siNumber &&
+        receipt.cardSeries == competitor.cardSeries &&
+        receipt.ownerUid == request.auth.uid;
+    }
+
     function hasProcessedReadoutReceiptAfter(competitionId, competitor) {
       let receiptPath =
         /databases/$(database)/documents/competitions/$(competitionId)/readoutReceipts/$(competitor.readoutReceiptId);
       return isValidId(competitor.readoutReceiptId) &&
         existsAfter(receiptPath) &&
-        getAfter(receiptPath).data.status == 'PROCESSED' &&
-        getAfter(receiptPath).data.competitorId == competitor.competitorId &&
-        getAfter(receiptPath).data.siNumber == competitor.siNumber &&
-        getAfter(receiptPath).data.cardSeries == competitor.cardSeries &&
-        getAfter(receiptPath).data.ownerUid == request.auth.uid;
+        processedReadoutReceiptMatchesCompetitor(
+          competitor,
+          getAfter(receiptPath).data
+        );
+    }
+
+    function runnerDbMatchesReadoutCompetitor(competitor, runnerDbEntry) {
+      return competitor.fullName == runnerDbEntry.fullName &&
+        (
+          competitor.club == runnerDbEntry.club ||
+          (
+            runnerDbEntry.club == '' &&
+            competitor.club == 'Klubblös'
+          )
+        ) &&
+        competitor.cardSeries == runnerDbEntry.cardSeries;
+    }
+
+    function readoutCompetitorMatchesRunnerDbData(competitionId, competitor) {
+      let runnerDbPath =
+        /databases/$(database)/documents/runnerDb/$(string(competitor.siNumber));
+      return competitor.competitionId == competitionId &&
+        hasProcessedReadoutReceiptAfter(competitionId, competitor) &&
+        exists(runnerDbPath) &&
+        runnerDbMatchesReadoutCompetitor(
+          competitor,
+          get(runnerDbPath).data
+        );
     }
 
     function readoutCompetitorMatchesRunnerDb(competitionId, competitorId) {
@@ -754,50 +825,32 @@ service cloud.firestore {
       return canCreateReadoutCompetitor() &&
         isValidId(competitorId) &&
         existsAfter(competitorPath) &&
-        getAfter(competitorPath).data.competitionId == competitionId &&
-        hasProcessedReadoutReceiptAfter(
+        readoutCompetitorMatchesRunnerDbData(
           competitionId,
           getAfter(competitorPath).data
-        ) &&
-        exists(
-          /databases/$(database)/documents/runnerDb/$(string(getAfter(competitorPath).data.siNumber))
-        ) &&
-        getAfter(competitorPath).data.fullName ==
-          get(
-            /databases/$(database)/documents/runnerDb/$(string(getAfter(competitorPath).data.siNumber))
-          ).data.fullName &&
-        (
-          getAfter(competitorPath).data.club ==
-            get(
-              /databases/$(database)/documents/runnerDb/$(string(getAfter(competitorPath).data.siNumber))
-            ).data.club ||
-          (
-            get(
-              /databases/$(database)/documents/runnerDb/$(string(getAfter(competitorPath).data.siNumber))
-            ).data.club == '' &&
-            getAfter(competitorPath).data.club == 'Klubblös'
-          )
-        ) &&
-        getAfter(competitorPath).data.cardSeries ==
-          get(
-            /databases/$(database)/documents/runnerDb/$(string(getAfter(competitorPath).data.siNumber))
-          ).data.cardSeries;
+        );
+    }
+
+    function readoutAssignmentMatchesRunnerDbData(competitionId, assignment, competitor) {
+      return readoutCompetitorMatchesRunnerDbData(competitionId, competitor) &&
+        competitor.siNumber == assignment.siNumber &&
+        competitor.cardSeries == assignment.cardSeries &&
+        competitor.ownerUid == assignment.ownerUid;
     }
 
     function readoutAssignmentMatchesRunnerDb(competitionId, assignment) {
+      let competitorPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId);
       return canCreateReadoutCompetitor() &&
         assignment.source == 'READOUT' &&
         assignment.state == 'ACTIVE' &&
-        readoutCompetitorMatchesRunnerDb(competitionId, assignment.competitorId) &&
-        getAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-        ).data.siNumber == assignment.siNumber &&
-        getAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-        ).data.cardSeries == assignment.cardSeries &&
-        getAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId)
-        ).data.ownerUid == assignment.ownerUid;
+        isValidId(assignment.competitorId) &&
+        existsAfter(competitorPath) &&
+        readoutAssignmentMatchesRunnerDbData(
+          competitionId,
+          assignment,
+          getAfter(competitorPath).data
+        );
     }
 
     // =========================================================================
