@@ -13,8 +13,9 @@ In [firestore.rules](./firestore.rules):
 - `hasProcessedReadoutReceiptAfter` now fetches the post-write receipt once and compares its status, competitor ID, SI number, card series, and owner against the competitor.
 - The readout identity check now fetches the competitor once and the RunnerDb entry once, then compares full name, club (including the existing `Klubblös` exception), and card series from those maps.
 - The assignment readout check performs its READOUT-role check once and uses the same competitor map for RunnerDb identity and assignment SI/card-series/owner parity.
+- `hasCompetitorSIOrLifecycleMutationAfter` now caches the before/after existence results once each, while retaining the same create, delete, and protected-field-diff outcomes.
 
-`hasCompetitorSIOrLifecycleMutationAfter` was left unchanged and remains required by the assignment write rules.
+The relevant-competitor-mutation condition remains required by the assignment write rules; no paired-write predicate was removed.
 
 ## Preserved guarantees
 
@@ -33,11 +34,11 @@ The readout role check remains on each allow-rule path. No deployment was perfor
 
 The emulator reports the expression ceiling on the batch's rule statements:
 
-- `/competitions/{competitionId}/siCardAssignments/{siNumber}` — `allow create` at current [firestore.rules](./firestore.rules#L1420). The remaining source-level candidates are `hasCompetitorSIOrLifecycleMutationAfter`, assignment schema validation, and assignment/competitor parity.
-- `/competitions/{competitionId}/competitors/{competitorId}` — `allow create` at current [firestore.rules](./firestore.rules#L1664). The remaining chain includes full competitor schema validation, active assignment parity, and readout receipt/RunnerDb validation.
-- `/competitions/{competitionId}` — `allow update` at current [firestore.rules](./firestore.rules#L1294). The incoming competition schema validation and role-specific update branches remain substantial.
+- `/competitions/{competitionId}/siCardAssignments/{siNumber}` — `allow create` at current [firestore.rules](./firestore.rules#L1427). The remaining source-level candidates are assignment schema validation, assignment/competitor parity, and readout checks.
+- `/competitions/{competitionId}/competitors/{competitorId}` — `allow create` at current [firestore.rules](./firestore.rules#L1671). The remaining chain includes full competitor schema validation, active assignment parity, and readout receipt/RunnerDb validation.
+- `/competitions/{competitionId}` — `allow update` at current [firestore.rules](./firestore.rules#L1301). The incoming competition schema validation and role-specific update branches remain substantial.
 
-The emulator identifies the rule statements, not individual helper expression counts. These helper-level candidates are therefore source-traced, not independently measured. The next narrow optimization should begin with the SI assignment create path, especially its required `hasCompetitorSIOrLifecycleMutationAfter` and parity checks, then rerun the suite before changing the other paths.
+The emulator identifies the rule statements, not individual helper expression counts. These helper-level candidates are therefore source-traced, not independently measured. The suite still fails after the follow-up existence caching; see [FIRESTORE_RULES_COMPLEXITY_STEP2.md](./FIRESTORE_RULES_COMPLEXITY_STEP2.md) for the call counts and the next source-traced hotspot. The create case in `hasCompetitorSIOrLifecycleMutationAfter` takes only one `exists` and one `existsAfter`, so further work should focus on the remaining rule paths rather than weakening that paired-write guard.
 
 ## Verification
 

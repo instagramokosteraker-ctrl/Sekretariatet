@@ -701,12 +701,19 @@ service cloud.firestore {
       let competitorPath =
         /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
       return isValidId(competitorId) &&
+        competitorSIOrLifecycleMutationExistsAfter(competitorPath);
+    }
+
+    function competitorSIOrLifecycleMutationExistsAfter(competitorPath) {
+      let competitorExistsBefore = exists(competitorPath);
+      let competitorExistsAfter = existsAfter(competitorPath);
+      return
         (
-          (!exists(competitorPath) && existsAfter(competitorPath)) ||
-          (exists(competitorPath) && !existsAfter(competitorPath)) ||
+          (!competitorExistsBefore && competitorExistsAfter) ||
+          (competitorExistsBefore && !competitorExistsAfter) ||
           (
-            exists(competitorPath) &&
-            existsAfter(competitorPath) &&
+            competitorExistsBefore &&
+            competitorExistsAfter &&
             getAfter(competitorPath).data.diff(get(competitorPath).data)
               .affectedKeys().hasAny(['siNumber', 'cardSeries', 'status', 'updatedAt'])
           )
