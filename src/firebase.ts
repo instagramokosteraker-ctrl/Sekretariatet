@@ -6407,7 +6407,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     isRentalCard: competitor.isRentalCard,
     rentalReturned: false,
     feePaid: competitor.feePaid ?? false,
-    billingFieldsUpdatedAt: serverTimestamp(),
     status: competitor.status,
     allocatedStartSec: encodeNullableSec(allocatedStartSec),
     checkTimeSec: encodeNullableSec(competitor.checkTimeSec),
@@ -6420,188 +6419,42 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     punchTimes: rawPunches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
   };
   let runnerDbEntry: RunnerDbEntry | null = null;
-  try {
-    const mutationResult = await runAtomicSIAssignmentMutation(
-      {
-        intent: 'CREATE_COMPETITOR',
-        competitor: { competitionId, competitorId },
-        assignment: { requestedSiNumber: siNumber },
+  const runnerCandidate =
+    !competitor.isRentalCard && !competitor.isBorrowedCard
+      ? {
+          fullName: competitor.fullName,
+          club: competitor.club,
+          cardSeries: competitor.cardSeries,
+          defaultClassName: targetClass?.name || '',
+        }
+      : null;
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Direktanmäla kräver ett inloggat administratörskonto.');
+  }
+  const response = await fetch(
+    `/api/firestore/competitions/${encodeURIComponent(competitionId)}/competitors/${encodeURIComponent(competitorId)}/create`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await currentUser.getIdToken()}`,
+        'Content-Type': 'application/json',
       },
-      async ({
-        transaction,
-        competitionData: currentCompetition,
-        competitorData,
-        assignmentSnapshots,
-        result,
-      }) => {
-        if (competitorData) {
-          throw new Error(`Deltagar-ID:t ${competitorId} är redan upptaget.`);
-        }
-        if (result.duplicateCandidateDetected || result.duplicateCandidateQueryError) {
-          throw new Error(
-            result.duplicateCandidateDetected
-              ? `SI-bricka ${siNumber} används redan av en deltagare i tävlingen.`
-              : 'SI-brickans unika ägare kunde inte verifieras. Försök igen.'
-          );
-        }
-        const runnerId = String(siNumber);
-        const runnerRef = doc(db, 'runnerDb', runnerId);
-        const runnerSnap =
-          !competitor.isRentalCard && !competitor.isBorrowedCard
-            ? await transaction.get(runnerRef)
-            : null;
-        const existingRunner = runnerSnap?.exists() ? runnerSnap.data() : null;
-        const sameRunner =
-          existingRunner?.fullName?.trim().toLowerCase() === fullName.toLowerCase();
-        let nextRunnerData: Record<string, unknown> | null = null;
-        if (
-          !competitor.isRentalCard &&
-          !competitor.isBorrowedCard &&
-          (!existingRunner || sameRunner)
-        ) {
-          nextRunnerData = {
-            cardSeries: competitor.cardSeries,
-            fullName: fullName.slice(0, 120),
-            club: competitor.club.slice(0, 100) || 'Klubblös',
-            birthYear:
-              typeof existingRunner?.birthYear === 'number' ? existingRunner.birthYear : null,
-            defaultClassName: targetClass?.name || '',
-            eventorPersonId:
-              typeof existingRunner?.eventorPersonId === 'string'
-                ? existingRunner.eventorPersonId
-                : '',
-            eventorOrgId:
-              typeof existingRunner?.eventorOrgId === 'string'
-                ? existingRunner.eventorOrgId
-                : '',
-            source: existingRunner?.source || 'LEARNED_ENTRY',
-            updatedAtIso: nowIso,
-          };
-        }
-
-        const nextCompetitorCount =
-          Number(currentCompetition.competitorCount || 0) + 1;
-        console.info(`[atomic-si-mutation-would-enforce] ${JSON.stringify({
-          intent: 'CREATE_COMPETITOR',
-          competitionId,
-          competitorId,
-          requestedSiNumber: siNumber,
-          action: 'validate_assignment_and_create_competitor_atomically',
-          coveredPathEnforcement: true,
-        })}`);
-        const assignmentSnapshot = assignmentSnapshots.get(siNumber);
-        const existingAssignment =
-          assignmentSnapshot?.exists()
-            ? parseSICardAssignmentDocument(
-                assignmentSnapshot.id,
-                competitionId,
-                assignmentSnapshot.data()
-              )
-            : null;
-        const newIdentity = getCompetitorSIAssignmentIdentity(
-          competitionId,
-          competitorId,
-          {
-            ...mutableCompetitor,
-            competitionId,
-            competitorId,
-            ownerUid,
-          }
-        );
-        const assignmentAction =
-          !Number.isInteger(siNumber) ||
-          siNumber < 1 ||
-          siNumber > 99999999 ||
-          typeof competitor.cardSeries !== 'string' ||
-          competitor.cardSeries.length < 1 ||
-          competitor.cardSeries.length > 24 ||
-          !ownerUid
-            ? 'SKIPPED_INVALID_DATA'
-            : assignmentSnapshot?.exists() && !existingAssignment
-              ? 'SKIPPED_CONFLICT'
-              : planCreateSIAssignmentWrite(existingAssignment, competitorId);
-        if (assignmentAction !== 'CREATE') {
-          throw new Error(
-              assignmentAction === 'SKIP_CONFLICT' ||
-                assignmentAction === 'SKIPPED_CONFLICT'
-                ? `SI-bricka ${siNumber} ägs redan av en annan deltagare.`
-                : assignmentAction === 'SKIPPED_INVALID_DATA'
-                  ? 'Deltagarens SI-bricka eller kortserie är ogiltig.'
-                  : 'SI-brickan är redan kopplad till deltagaren.'
-          );
-        }
-        if (assignmentAction === 'CREATE') {
-          transaction.set(getCompetitionSICardAssignmentRef(competitionId, siNumber), {
-            competitionId,
-            siNumber,
-            cardSeries: newIdentity.cardSeries,
-            competitorId,
-            competitorDocumentId: competitorId,
-            state: 'ACTIVE',
-            assignmentVersion: 1,
-            source: 'DIRECT_ENTRY',
-            ownerUid: newIdentity.ownerUid,
-            schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
-        transaction.set(doc(db, 'competitions', competitionId, 'competitors', competitorId), {
-          competitorId,
-          competitionId,
-          ...mutableCompetitor,
-          ownerUid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        transaction.update(competitionRef, {
-          competitorCount: nextCompetitorCount,
-          finishedCount: Math.min(
-            nextCompetitorCount,
-            Number(currentCompetition.finishedCount || 0) +
-              (status === 'OK' || status === 'MP' ? 1 : 0)
-          ),
-          updatedAt: serverTimestamp(),
-        });
-
-        if (nextRunnerData) {
-          if (existingRunner) {
-            transaction.update(runnerRef, {
-              ...nextRunnerData,
-              updatedAt: serverTimestamp(),
-            });
-          } else {
-            transaction.set(runnerRef, {
-              runnerId,
-              siNumber,
-              ...nextRunnerData,
-              source: 'LEARNED_ENTRY',
-              ownerUid,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          }
-          runnerDbEntry = {
-            id: runnerId,
-            siNumber,
-            ...(nextRunnerData as Omit<RunnerDbEntry, 'id' | 'siNumber' | 'updatedAt'>),
-            source: String(nextRunnerData.source) as RunnerDbEntry['source'],
-            updatedAt: nowIso,
-          };
-        }
-        return 'CREATED' as const;
-      }
-    );
-    if (mutationResult.status !== 'COMMITTED') {
-      throw new Error('Tävlingen hittades inte i Firestore.');
+      body: JSON.stringify({ competitor: mutableCompetitor, runnerCandidate }),
     }
-  } catch (err) {
-    handleWriteOrOfflineError(
-      err,
-      OperationType.CREATE,
-      `competitions/${competitionId}/competitors/${competitorId}`
+  );
+  const result = (await response.json().catch(() => ({}))) as {
+    error?: unknown;
+    runnerDbEntry?: RunnerDbEntry | null;
+  };
+  if (!response.ok) {
+    throw new Error(
+      typeof result.error === 'string'
+        ? result.error
+        : 'Deltagaren kunde inte skapas.'
     );
   }
+  runnerDbEntry = result.runnerDbEntry ?? null;
 
   return { competitor, runnerDbEntry };
 }

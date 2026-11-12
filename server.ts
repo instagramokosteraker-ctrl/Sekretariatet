@@ -17,6 +17,10 @@ import {
   SIAssignmentRetirementError,
 } from './src/server/siAssignmentRetirement';
 import {
+  createCompetitorWithAssignment,
+  CompetitorCreationError,
+} from './src/server/competitorCreation';
+import {
   declareCompetitorMutation,
   runCompetitorMutation,
   runCompetitorMutations,
@@ -4741,6 +4745,43 @@ async function startServer() {
       error: 'Legacy competitor mutation routes are disabled. Use the Firestore-authoritative application.',
     });
   };
+
+  app.post(
+    '/api/firestore/competitions/:competitionId/competitors/:competitorId/create',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (
+        !sessionUser ||
+        sessionUser.sessionKind !== 'ADMIN' ||
+        (sessionUser.adminTier !== 'RACE_ADMIN' &&
+          sessionUser.adminTier !== 'SUPER_ADMIN')
+      ) {
+        res.status(403).json({ error: 'A club administrator is required.' });
+        return;
+      }
+
+      try {
+        const result = await createCompetitorWithAssignment(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid },
+          req.params.competitionId,
+          req.params.competitorId,
+          req.body?.competitor,
+          req.body?.runnerCandidate
+        );
+        res.status(201).json(result);
+      } catch (error) {
+        if (error instanceof CompetitorCreationError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Trusted competitor creation failed:', error);
+        res.status(500).json({ error: 'The competitor could not be created.' });
+      }
+    }
+  );
 
   app.post(
     '/api/firestore/competitions/:competitionId/competitors/:competitorId/retire',

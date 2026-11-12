@@ -662,6 +662,28 @@ service cloud.firestore {
         competitor.ownerUid == assignment.ownerUid;
     }
 
+    function hasMatchingActiveAssignmentAfter(competitionId, competitorId, competitor) {
+      let assignmentPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(competitor.siNumber);
+      let assignment = getAfter(assignmentPath).data;
+      return existsAfter(assignmentPath) &&
+        assignment.competitionId == competitionId &&
+        assignment.siNumber == competitor.siNumber &&
+        assignment.competitorId == competitorId &&
+        assignment.competitorDocumentId == competitorId &&
+        assignment.cardSeries == competitor.cardSeries &&
+        assignment.ownerUid == competitor.ownerUid &&
+        assignment.state == 'ACTIVE';
+    }
+
+    function assignmentCreateOwnerMatchesCompetitorAfter(competitionId, assignment) {
+      let competitorPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorDocumentId);
+      let competitor = getAfter(competitorPath).data;
+      return existsAfter(competitorPath) &&
+        competitor.ownerUid == assignment.ownerUid;
+    }
+
     function canCreateReadoutCompetitor() {
       return hasOfficialRole('READOUT') ||
         hasOfficialRole('FOREST') ||
@@ -1352,8 +1374,14 @@ service cloud.firestore {
           incoming().updatedAt == request.time &&
           parentCompetitionExists(competitionId) &&
           (
-            (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) ||
-            isSuperAdmin() ||
+            (
+              (
+                parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+                isAdmin() ||
+                isSuperAdmin()
+              ) &&
+              assignmentCreateOwnerMatchesCompetitorAfter(competitionId, incoming())
+            ) ||
             hasOfficialRole('READOUT')
           );
 
@@ -1598,8 +1626,14 @@ service cloud.firestore {
           incoming().updatedAt == request.time &&
           parentCompetitionExists(competitionId) &&
           (
-            (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) ||
-            isSuperAdmin() ||
+            (
+              (
+                parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+                isAdmin() ||
+                isSuperAdmin()
+              ) &&
+              hasMatchingActiveAssignmentAfter(competitionId, competitorId, incoming())
+            ) ||
             canCreateReadoutCompetitor()
           );
 
