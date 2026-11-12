@@ -27,6 +27,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
   });
 
   try {
+    await testEnv.clearFirestore();
     const now = new Date();
 
     // Seed legacy competition documents with PIN fields to verify the transition path.
