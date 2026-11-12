@@ -1692,19 +1692,7 @@ service cloud.firestore {
 
         allow update: if false;
 
-        allow delete: if isVerifiedUser() &&
-          isValidId(competitionId) &&
-          isValidId(receiptId) &&
-          resource != null &&
-          parentCompetitionExists(competitionId) &&
-          (
-            (
-              (existing().ownerUid == request.auth.uid || isAdmin()) &&
-              (parentCompetitionData(competitionId).ownerUid == request.auth.uid || isAdmin()) &&
-              isAdmin()
-            ) ||
-            isSuperAdmin()
-          );
+        allow delete: if false;
       }
 
       match /stations/{stationId} {

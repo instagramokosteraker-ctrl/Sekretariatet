@@ -934,7 +934,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     await assertSucceeds(
       raceAdminCtx.firestore().collection('competitions/evt_live/readoutReceipts').get()
     );
-    await assertSucceeds(
+    await assertFails(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/readoutReceipts/ro_test_1')
