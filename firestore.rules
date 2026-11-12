@@ -815,10 +815,14 @@ service cloud.firestore {
     }
 
     function readoutCompetitorMatchesRunnerDbData(competitionId, competitor) {
+      return competitor.competitionId == competitionId &&
+        readoutCompetitorIdentityMatchesRunnerDbData(competitionId, competitor);
+    }
+
+    function readoutCompetitorIdentityMatchesRunnerDbData(competitionId, competitor) {
       let runnerDbPath =
         /databases/$(database)/documents/runnerDb/$(string(competitor.siNumber));
-      return competitor.competitionId == competitionId &&
-        hasProcessedReadoutReceiptAfter(competitionId, competitor) &&
+      return hasProcessedReadoutReceiptAfter(competitionId, competitor) &&
         exists(runnerDbPath) &&
         runnerDbMatchesReadoutCompetitor(
           competitor,
@@ -838,25 +842,42 @@ service cloud.firestore {
         );
     }
 
-    function readoutAssignmentMatchesRunnerDbData(competitionId, assignment, competitor) {
-      return readoutCompetitorMatchesRunnerDbData(competitionId, competitor) &&
-        competitor.siNumber == assignment.siNumber &&
-        competitor.cardSeries == assignment.cardSeries &&
-        competitor.ownerUid == assignment.ownerUid;
-    }
-
-    function readoutAssignmentMatchesRunnerDb(competitionId, assignment) {
-      let competitorPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId);
-      return canCreateReadoutCompetitor() &&
-        assignment.source == 'READOUT' &&
-        assignment.state == 'ACTIVE' &&
-        isValidId(assignment.competitorId) &&
-        existsAfter(competitorPath) &&
-        readoutAssignmentMatchesRunnerDbData(
+    function activeReadoutAssignmentCreateMatchesCompetitor(
+      competitionId,
+      assignment,
+      competitor
+    ) {
+      return activeAssignmentMatchesCompetitor(
           competitionId,
           assignment,
-          getAfter(competitorPath).data
+          competitor
+        ) &&
+        (
+          isAdmin() ||
+          (
+            assignment.ownerUid == request.auth.uid &&
+            canCreateReadoutCompetitor() &&
+            assignment.source == 'READOUT' &&
+            assignment.state == 'ACTIVE' &&
+            readoutCompetitorIdentityMatchesRunnerDbData(competitionId, competitor)
+          )
+        );
+    }
+
+    function assignmentCreateMatchesCompetitorAfter(competitionId, assignment) {
+      let competitorPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId);
+      return isValidId(assignment.competitorId) &&
+        (
+          assignment.state == 'ACTIVE'
+            ? existsAfter(competitorPath) &&
+              activeReadoutAssignmentCreateMatchesCompetitor(
+                competitionId,
+                assignment,
+                getAfter(competitorPath).data
+              )
+            : assignmentMatchesCompetitorAfter(competitionId, assignment) &&
+              isAdmin()
         );
     }
 
@@ -1435,14 +1456,7 @@ service cloud.firestore {
             competitionId,
             incoming().competitorId
           ) &&
-          assignmentMatchesCompetitorAfter(competitionId, incoming()) &&
-          (
-            isAdmin() ||
-            (
-              incoming().ownerUid == request.auth.uid &&
-              readoutAssignmentMatchesRunnerDb(competitionId, incoming())
-            )
-          );
+          assignmentCreateMatchesCompetitorAfter(competitionId, incoming());
 
         allow update: if isVerifiedUser() &&
           isValidId(competitionId) &&
