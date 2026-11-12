@@ -595,6 +595,15 @@ service cloud.firestore {
     }
 
     function isValidSICardAssignment(data) {
+      return isValidSICardAssignmentFields(data) &&
+        isValidId(data.competitionId);
+    }
+
+    function isValidSICardAssignmentForCreate(data) {
+      return isValidSICardAssignmentFields(data);
+    }
+
+    function isValidSICardAssignmentFields(data) {
       return data.keys().hasAll([
           'competitionId',
           'siNumber',
@@ -628,12 +637,10 @@ service cloud.firestore {
           'conflictReason',
           'lastValidatedAt'
         ]) &&
-        isValidId(data.competitionId) &&
         data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
-        (data.competitorId == null || (data.competitorId is string && data.competitorId.size() <= 128)) &&
         data.cardSeries is string && data.cardSeries.size() >= 1 && data.cardSeries.size() <= 24 &&
         data.competitorDocumentId == data.competitorId &&
-        data.state is string && (data.state == 'ACTIVE' || data.state == 'RETIRED' || data.state == 'DUPLICATE_CONFIRMED' || data.state == 'UNKNOWN') &&
+        (data.state == 'ACTIVE' || data.state == 'RETIRED') &&
         data.assignmentVersion is int && data.assignmentVersion >= 1 && data.assignmentVersion <= 65535 &&
         data.source is string && (data.source == 'DIRECT_ENTRY' || data.source == 'IMPORT' || data.source == 'EVENTOR' || data.source == 'MANUAL' || data.source == 'READOUT' || data.source == 'SYSTEM') &&
         isValidId(data.ownerUid) &&
@@ -1448,7 +1455,7 @@ service cloud.firestore {
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
           isValidId(siNumber) &&
-          isValidSICardAssignment(incoming()) &&
+          isValidSICardAssignmentForCreate(incoming()) &&
           incoming().competitionId == competitionId &&
           incoming().siNumber == int(siNumber) &&
           parentCompetitionExists(competitionId) &&
