@@ -597,6 +597,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
           ...initialCompetitor,
           competitorId: 'cmp_wrong_assignment_owner',
           siNumber: 8500119,
+          ownerUid: 'race_admin_1',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
