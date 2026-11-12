@@ -692,6 +692,43 @@ service cloud.firestore {
         );
     }
 
+    function hasActiveSIAssignmentForCompetitorAfter(
+      competitionId,
+      siNumber,
+      competitorId,
+      ownerUid,
+      competitor
+    ) {
+      let assignmentPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber));
+      return existsAfter(assignmentPath) &&
+        activeSIAssignmentMatchesCompetitorCreate(
+          competitionId,
+          siNumber,
+          competitorId,
+          ownerUid,
+          getAfter(assignmentPath).data,
+          competitor
+        );
+    }
+
+    function activeSIAssignmentMatchesCompetitorCreate(
+      competitionId,
+      siNumber,
+      competitorId,
+      ownerUid,
+      assignment,
+      competitor
+    ) {
+      return assignment.state == 'ACTIVE' &&
+        assignment.competitionId == competitionId &&
+        assignment.siNumber == siNumber &&
+        assignment.competitorId == competitorId &&
+        assignment.competitorDocumentId == competitorId &&
+        assignment.ownerUid == ownerUid &&
+        assignment.cardSeries == competitor.cardSeries;
+    }
+
     function hasRetiredSIAssignmentAfter(competitionId, siNumber, competitorId) {
       return existsAfter(
           /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
@@ -1699,11 +1736,12 @@ service cloud.firestore {
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
           parentCompetitionExists(competitionId) &&
-          hasActiveSIAssignmentAfter(
+          hasActiveSIAssignmentForCompetitorAfter(
             competitionId,
             incoming().siNumber,
             incoming().competitorId,
-            incoming().ownerUid
+            incoming().ownerUid,
+            incoming()
           ) &&
           (
             (
@@ -1714,7 +1752,8 @@ service cloud.firestore {
             isSuperAdmin() ||
             (
               parentCompetitionData(competitionId).status != 'COMPLETED' &&
-              readoutCompetitorMatchesRunnerDb(competitionId, competitorId)
+              canCreateReadoutCompetitor() &&
+              readoutCompetitorIdentityMatchesRunnerDbData(competitionId, incoming())
             )
           );
 
