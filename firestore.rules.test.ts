@@ -691,15 +691,14 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: serverTimestamp(),
       }
     );
-    readoutAutocreateBatch.update(
-      doc(readoutCtx.firestore(), 'competitions/evt_live'),
-      {
+    await assertSucceeds(readoutAutocreateBatch.commit());
+    await assertSucceeds(
+      readoutCtx.firestore().doc('competitions/evt_live').update({
         competitorCount: 11,
         finishedCount: 6,
         updatedAt: serverTimestamp(),
-      }
+      })
     );
-    await assertSucceeds(readoutAutocreateBatch.commit());
 
     const spoofedReadoutAutocreate = writeBatch(readoutCtx.firestore());
     spoofedReadoutAutocreate.set(
@@ -727,14 +726,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         competitorId: 'cmp_readout_spoof',
         competitorDocumentId: 'cmp_readout_spoof',
         createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }
-    );
-    spoofedReadoutAutocreate.update(
-      doc(readoutCtx.firestore(), 'competitions/evt_live'),
-      {
-        competitorCount: 12,
-        finishedCount: 7,
         updatedAt: serverTimestamp(),
       }
     );
