@@ -654,171 +654,12 @@ service cloud.firestore {
         (!('lastValidatedAt' in data) || data.lastValidatedAt == null || data.lastValidatedAt is timestamp);
     }
 
-    function activeSIAssignmentMatchesCompetitor(
-      competitionId,
-      siNumber,
-      competitorId,
-      ownerUid,
-      assignment,
-      competitor
-    ) {
-      return assignment.state == 'ACTIVE' &&
-        assignment.competitionId == competitionId &&
-        assignment.siNumber == siNumber &&
-        assignment.competitorId == competitorId &&
-        assignment.competitorDocumentId == competitorId &&
-        assignment.ownerUid == ownerUid &&
-        competitor.competitorId == competitorId &&
-        competitor.competitionId == competitionId &&
-        competitor.siNumber == siNumber &&
-        competitor.cardSeries == assignment.cardSeries &&
-        competitor.ownerUid == ownerUid;
-    }
-
-    function hasActiveSIAssignmentAfter(competitionId, siNumber, competitorId, ownerUid) {
-      let assignmentPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber));
-      let competitorPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
-      return existsAfter(assignmentPath) &&
-        existsAfter(competitorPath) &&
-        activeSIAssignmentMatchesCompetitor(
-          competitionId,
-          siNumber,
-          competitorId,
-          ownerUid,
-          getAfter(assignmentPath).data,
-          getAfter(competitorPath).data
-        );
-    }
-
-    function hasActiveSIAssignmentForCompetitorAfter(
-      competitionId,
-      siNumber,
-      competitorId,
-      ownerUid,
-      competitor
-    ) {
-      let assignmentPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber));
-      return existsAfter(assignmentPath) &&
-        activeSIAssignmentMatchesCompetitorCreate(
-          competitionId,
-          siNumber,
-          competitorId,
-          ownerUid,
-          getAfter(assignmentPath).data,
-          competitor
-        );
-    }
-
-    function activeSIAssignmentMatchesCompetitorCreate(
-      competitionId,
-      siNumber,
-      competitorId,
-      ownerUid,
-      assignment,
-      competitor
-    ) {
-      return assignment.state == 'ACTIVE' &&
-        assignment.competitionId == competitionId &&
-        assignment.siNumber == siNumber &&
-        assignment.competitorId == competitorId &&
-        assignment.competitorDocumentId == competitorId &&
-        assignment.ownerUid == ownerUid &&
-        assignment.cardSeries == competitor.cardSeries;
-    }
-
-    function hasRetiredSIAssignmentAfter(competitionId, siNumber, competitorId) {
-      return existsAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
-        ) &&
-        getAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
-        ).data.state == 'RETIRED' &&
-        getAfter(
-          /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(string(siNumber))
-        ).data.competitorId == competitorId;
-    }
-
-    function hasCompetitorSIOrLifecycleMutationAfter(competitionId, competitorId) {
-      let competitorPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
-      return isValidId(competitorId) &&
-        competitorSIOrLifecycleMutationExistsAfter(competitorPath);
-    }
-
-    function competitorSIOrLifecycleMutationExistsAfter(competitorPath) {
-      let competitorExistsBefore = exists(competitorPath);
-      let competitorExistsAfter = existsAfter(competitorPath);
-      return
-        (
-          (!competitorExistsBefore && competitorExistsAfter) ||
-          (competitorExistsBefore && !competitorExistsAfter) ||
-          (
-            competitorExistsBefore &&
-            competitorExistsAfter &&
-            getAfter(competitorPath).data.diff(get(competitorPath).data)
-              .affectedKeys().hasAny(['siNumber', 'cardSeries', 'status', 'updatedAt'])
-          )
-        );
-    }
-
     function activeAssignmentMatchesCompetitor(competitionId, assignment, competitor) {
       return competitor.siNumber == assignment.siNumber &&
         competitor.competitorId == assignment.competitorId &&
         competitor.competitionId == competitionId &&
         competitor.cardSeries == assignment.cardSeries &&
         competitor.ownerUid == assignment.ownerUid;
-    }
-
-    function retiredAssignmentMatchesCompetitorBefore(competitionId, assignment, competitor) {
-      return competitor.competitorId == assignment.competitorId &&
-        competitor.competitionId == competitionId &&
-        competitor.siNumber == assignment.siNumber &&
-        competitor.cardSeries == assignment.cardSeries &&
-        competitor.ownerUid == assignment.ownerUid;
-    }
-
-    function retiredAssignmentMatchesCompetitorAfter(competitionId, assignment, competitor) {
-      return competitor.competitorId == assignment.competitorId &&
-        competitor.competitionId == competitionId &&
-        competitor.ownerUid == assignment.ownerUid &&
-        (
-          competitor.siNumber != assignment.siNumber ||
-          competitor.status == 'DNS' ||
-          competitor.status == 'DNF'
-        );
-    }
-
-    function assignmentMatchesCompetitorAfter(competitionId, assignment) {
-      let competitorPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId);
-      return isValidId(assignment.competitorId) &&
-        (
-          assignment.state == 'ACTIVE'
-            ? existsAfter(competitorPath) &&
-              activeAssignmentMatchesCompetitor(
-                competitionId,
-                assignment,
-                getAfter(competitorPath).data
-              )
-            : assignment.state == 'RETIRED' &&
-              exists(competitorPath) &&
-              retiredAssignmentMatchesCompetitorBefore(
-                competitionId,
-                assignment,
-                get(competitorPath).data
-              ) &&
-              (
-                !existsAfter(competitorPath) ||
-                retiredAssignmentMatchesCompetitorAfter(
-                  competitionId,
-                  assignment,
-                  getAfter(competitorPath).data
-                )
-              )
-        );
     }
 
     function canCreateReadoutCompetitor() {
@@ -905,23 +746,6 @@ service cloud.firestore {
             assignment.state == 'ACTIVE' &&
             readoutCompetitorIdentityMatchesRunnerDbData(competitionId, competitor)
           )
-        );
-    }
-
-    function assignmentCreateMatchesCompetitorAfter(competitionId, assignment) {
-      let competitorPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorId);
-      return isValidId(assignment.competitorId) &&
-        (
-          assignment.state == 'ACTIVE'
-            ? existsAfter(competitorPath) &&
-              activeReadoutAssignmentCreateMatchesCompetitor(
-                competitionId,
-                assignment,
-                getAfter(competitorPath).data
-              )
-            : assignmentMatchesCompetitorAfter(competitionId, assignment) &&
-              isAdmin()
         );
     }
 

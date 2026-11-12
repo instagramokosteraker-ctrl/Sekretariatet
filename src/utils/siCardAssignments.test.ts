@@ -51,6 +51,34 @@ describe('SI card assignment helpers', () => {
     ).toBe(false);
   });
 
+  it('rejects assignment parity drift that would break the server-side transaction guard', () => {
+    const parsed = parseSICardAssignmentDocument(
+      '8500111',
+      'evt_test',
+      assignment(8500111, 'cmp_1')
+    );
+
+    expect(
+      assignmentMatchesCompetitorIdentity(parsed, {
+        competitionId: 'evt_test',
+        competitorId: 'cmp_1',
+        siNumber: 8500111,
+        cardSeries: 'SI-Card 10',
+        ownerUid: 'different_admin',
+      })
+    ).toBe(false);
+
+    expect(
+      assignmentMatchesCompetitorIdentity(parsed, {
+        competitionId: 'evt_test',
+        competitorId: 'cmp_2',
+        siNumber: 8500111,
+        cardSeries: 'SI-Card 10',
+        ownerUid: 'admin_uid',
+      })
+    ).toBe(false);
+  });
+
   it('parses valid documents and rejects mismatched document IDs', () => {
     expect(
       parseSICardAssignmentDocument(
