@@ -1302,6 +1302,35 @@ service cloud.firestore {
       // Assignment mutations must share a commit with a matching competitor
       // create, deletion, or relevant update. This is not a uniqueness query.
       match /siCardAssignments/{siNumber} {
+        function hasPairedRetirementCompetitorMutation() {
+          let competitorPath =
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(existing().competitorDocumentId);
+          return isValidId(existing().competitorDocumentId) &&
+            exists(competitorPath) &&
+            get(competitorPath).data.competitionId == competitionId &&
+            get(competitorPath).data.competitorId == existing().competitorId &&
+            get(competitorPath).data.siNumber == existing().siNumber &&
+            get(competitorPath).data.ownerUid == existing().ownerUid &&
+            (
+              !existsAfter(competitorPath) ||
+              (
+                existsAfter(competitorPath) &&
+                getAfter(competitorPath).data.competitionId == competitionId &&
+                getAfter(competitorPath).data.competitorId == existing().competitorId &&
+                getAfter(competitorPath).data.ownerUid == existing().ownerUid &&
+                getAfter(competitorPath).data.updatedAt == request.time &&
+                getAfter(competitorPath).data.diff(get(competitorPath).data)
+                  .affectedKeys()
+                  .hasAny(['siNumber', 'status']) &&
+                (
+                  getAfter(competitorPath).data.siNumber != existing().siNumber ||
+                  getAfter(competitorPath).data.status == 'DNS' ||
+                  getAfter(competitorPath).data.status == 'DNF'
+                )
+              )
+            );
+        }
+
         allow get: if isVerifiedUser() &&
           isValidId(competitionId) &&
           isValidId(siNumber) &&
@@ -1335,8 +1364,15 @@ service cloud.firestore {
           resource != null &&
           incoming().competitionId == existing().competitionId &&
           incoming().siNumber == existing().siNumber &&
+          incoming().competitorId == existing().competitorId &&
+          incoming().competitorDocumentId == existing().competitorDocumentId &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
+          (
+            incoming().state != 'RETIRED' ||
+            existing().state == 'RETIRED' ||
+            hasPairedRetirementCompetitorMutation()
+          ) &&
           (
             incoming().ownerUid == existing().ownerUid ||
             (existing().state == 'RETIRED' && incoming().state == 'ACTIVE')

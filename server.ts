@@ -6,10 +6,16 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
 } from './src/services/seriesStandings';
+import {
+  retireCompetitorWithAssignment,
+  SIAssignmentRetirementError,
+} from './src/server/siAssignmentRetirement';
 import {
   declareCompetitorMutation,
   runCompetitorMutation,
@@ -476,6 +482,22 @@ function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: stri
 
 const { projectId: FIREBASE_PROJECT_ID, firestoreDatabaseId: FIRESTORE_DATABASE_ID } =
   loadFirebaseConfigIds();
+
+function getTrustedFirestore() {
+  const appName = 'passersi-retirement-writer';
+  const app =
+    getApps().find((candidate) => candidate.name === appName) ??
+    initializeApp(
+      {
+        projectId: FIREBASE_PROJECT_ID,
+        ...(process.env.FIRESTORE_EMULATOR_HOST
+          ? {}
+          : { credential: applicationDefault() }),
+      },
+      appName
+    );
+  return getFirestore(app, FIRESTORE_DATABASE_ID);
+}
 
 function getFirestoreEventorDocumentUrl(): string {
   return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
@@ -4719,6 +4741,43 @@ async function startServer() {
       error: 'Legacy competitor mutation routes are disabled. Use the Firestore-authoritative application.',
     });
   };
+
+  app.post(
+    '/api/firestore/competitions/:competitionId/competitors/:competitorId/retire',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (
+        !sessionUser ||
+        sessionUser.sessionKind !== 'ADMIN' ||
+        (sessionUser.adminTier !== 'RACE_ADMIN' &&
+          sessionUser.adminTier !== 'SUPER_ADMIN')
+      ) {
+        res.status(403).json({ error: 'A club administrator is required.' });
+        return;
+      }
+
+      try {
+        await retireCompetitorWithAssignment(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid },
+          req.params.competitionId,
+          req.params.competitorId,
+          req.body?.retirementReason
+        );
+        res.status(204).end();
+      } catch (error) {
+        if (error instanceof SIAssignmentRetirementError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Trusted SI assignment retirement failed:', error);
+        res.status(500).json({ error: 'The competitor could not be retired.' });
+      }
+    }
+  );
+
   // Keep these terminal handlers before the legacy route bodies so they cannot fall through.
   app.post('/api/competitors', rejectLegacyCompetitorMutation);
   app.put('/api/competitors/:id', rejectLegacyCompetitorMutation);

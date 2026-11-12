@@ -5004,83 +5004,35 @@ export async function retireCompetitorInFirestore(
   competitorId: string,
   retirementReason = 'competitor_retired'
 ): Promise<void> {
-  const context = await getCompetitionMutationContext(competitionId);
-  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
-  const competitionRef = doc(db, 'competitions', context.competitionId);
-  const competitorRef = doc(
-    db,
-    'competitions',
-    context.competitionId,
-    'competitors',
-    safeCompetitorId
-  );
-  const mutationResult = await runAtomicSIAssignmentMutation(
-    {
-      intent: 'RETIRE_COMPETITOR',
-      competitor: {
-        competitionId: context.competitionId,
-        competitorId: safeCompetitorId,
-      },
-      assignment: {},
-    },
-    ({ transaction, competitionData, competitorData, assignmentSnapshots }) => {
-      if (!competitorData) return;
-      if (competitionData.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
-        throw new Error('Ditt konto saknar behörighet att avanmäla deltagaren.');
-      }
-      if (competitionData.status === 'COMPLETED' && !context.isSuperAdmin) {
-        throw new Error('Deltagare kan inte avanmäls från en avslutad tävling.');
-      }
+  const current = await ensureValidFirestoreUser();
+  if (
+    !current ||
+    !current.emailVerified ||
+    !current.providerData.some((provider) => provider.providerId === 'google.com')
+  ) {
+    throw new Error('Avanmälan kräver ett inloggat, verifierat Google-administratörskonto.');
+  }
 
-      const identity = getCompetitorSIAssignmentIdentity(
-        context.competitionId,
-        safeCompetitorId,
-        competitorData
-      );
-      const assignmentWriteOutcome = retireSIAssignmentInTransaction({
-        transaction,
-        competitionId: context.competitionId,
-        competitorId: safeCompetitorId,
-        competitorData,
-        assignmentSnapshot: assignmentSnapshots.get(identity.siNumber),
-        retirementReason,
-      });
-      const currentStatus = String(competitorData.status);
-      let nextStatus: RunnerStatus;
-      switch (currentStatus) {
-        case 'IN_FOREST':
-        case 'PRELIMINARY_FIN':
-          nextStatus = 'DNF';
-          break;
-        case 'OK':
-        case 'MP':
-        case 'DNF':
-          nextStatus = currentStatus;
-          break;
-        default:
-          nextStatus = 'DNS';
-      }
-      const wasCountedAsFinished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(currentStatus);
-      const willBeCountedAsFinished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(nextStatus);
-      transaction.update(competitorRef, {
-        status: nextStatus,
-        updatedAt: serverTimestamp(),
-      });
-      if (wasCountedAsFinished !== willBeCountedAsFinished) {
-        transaction.update(competitionRef, {
-          finishedCount: Math.max(
-            0,
-            Number(competitionData.finishedCount || 0) +
-              (willBeCountedAsFinished ? 1 : -1)
-          ),
-          updatedAt: serverTimestamp(),
-        });
-      }
-      return assignmentWriteOutcome;
+  const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
+  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
+  const response = await fetch(
+    `/api/firestore/competitions/${encodeURIComponent(safeCompetitionId)}/competitors/${encodeURIComponent(safeCompetitorId)}/retire`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await current.getIdToken()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ retirementReason }),
     }
   );
-  if (mutationResult.status !== 'COMMITTED') {
-    throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
+  if (!response.ok) {
+    const result = (await response.json()) as { error?: unknown };
+    throw new Error(
+      typeof result.error === 'string'
+        ? result.error
+        : 'Tävlingen eller deltagaren kunde inte avanmäls.'
+    );
   }
 }
 

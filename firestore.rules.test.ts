@@ -543,7 +543,51 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
           competitorId: 'cmp_assignment_owner_mismatch',
           siNumber: 8500124,
         });
+      await adminDb.doc('competitions/evt_live/competitors/cmp_retire_pair').set({
+        ...initialCompetitor,
+        competitorId: 'cmp_retire_pair',
+        siNumber: 8500125,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await adminDb.doc('competitions/evt_live/siCardAssignments/8500125').set({
+        ...siCardAssignment,
+        siNumber: 8500125,
+        competitorId: 'cmp_retire_pair',
+        competitorDocumentId: 'cmp_retire_pair',
+        createdAt: now,
+        updatedAt: now,
+      });
     });
+
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/siCardAssignments/8500125')
+        .update({
+          state: 'RETIRED',
+          assignmentVersion: 2,
+          updatedAt: serverTimestamp(),
+          retiredAt: serverTimestamp(),
+          retirementReason: 'standalone-retirement-test',
+        })
+    );
+    const pairedRetirementBatch = writeBatch(raceAdminCtx.firestore());
+    pairedRetirementBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_retire_pair'),
+      { status: 'DNS', updatedAt: serverTimestamp() }
+    );
+    pairedRetirementBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500125'),
+      {
+        state: 'RETIRED',
+        assignmentVersion: 2,
+        updatedAt: serverTimestamp(),
+        retiredAt: serverTimestamp(),
+        retirementReason: 'paired-retirement-test',
+      }
+    );
+    await assertSucceeds(pairedRetirementBatch.commit());
 
     await assertFails(
       raceAdminCtx

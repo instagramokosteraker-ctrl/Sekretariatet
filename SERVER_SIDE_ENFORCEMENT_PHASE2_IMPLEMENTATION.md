@@ -1,106 +1,105 @@
 # Server-side enforcement phase 2 implementation
 
-## Outcome
+## Scope and outcome
 
-This first migration slice targeted the lowest-risk cross-document check already enforced by the repository backend: assignment parity.
+Implemented the first missing enforcement slice: SI assignment retirement.
+Retirement is now performed through a trusted transaction in the existing
+Express service. Direct client retirement is denied unless it is part of a
+paired competitor mutation in the same commit, preserving existing atomic
+reassignment and delete flows.
 
-### Changed in the backend
+No deployment was performed.
 
-The existing transaction boundary in `src/firebase.ts` is the canonical enforcement point for assignment parity and owner consistency:
+## Implementation
 
-- `runAtomicSIAssignmentMutation(...)`
-- `updateCompetitorInFirestore(...)`
-- `deleteCompetitorFromFirestore(...)`
-- `retireCompetitorInFirestore(...)`
-- `saveDirectCompetitionEntryToFirestore(...)`
-- `submitReadoutToFirestore(...)` auto-create path
+### Trusted transaction
 
-These paths already validate that:
+Added `retireCompetitorWithAssignment(...)` in
+`src/server/siAssignmentRetirement.ts`. The transaction:
 
-- assignment `competitionId`, `siNumber`, `cardSeries`, `ownerUid`, and `competitorId` match the competitor
-- the SI assignment is active or valid for the current mutation
-- reassignment and retirement transitions fail closed on mismatch
+- verifies the competition and competitor exist and the caller owns the
+  competition, unless the caller is a super admin;
+- rejects completed competitions for non-super-admins;
+- validates the competitor's path identity, SI number, card series, and owner;
+- validates an existing assignment's competition, SI, competitor document,
+  card series, owner, schema version, state, and version;
+- retires or creates the assignment and updates competitor status atomically;
+- adjusts `finishedCount` in that same transaction when retirement changes
+  finished status.
 
-This is the lowest-risk migration because it is already implemented in the server-side transaction layer and is fully aligned with the repository's Atomic SI Matching design.
+The Express endpoint
+`POST /api/firestore/competitions/:competitionId/competitors/:competitorId/retire`
+requires an authenticated administrator and executes that transaction with
+Firebase Admin SDK credentials. The transaction re-reads the caller's
+`admins/{uid}` role document, so its authorization decision is made atomically
+with the retirement rather than relying only on the role previously resolved
+for the HTTP session. `retireCompetitorInFirestore(...)` now calls this
+endpoint instead of writing from the browser SDK. The server uses Application
+Default Credentials in production and the Firestore Emulator when
+`FIRESTORE_EMULATOR_HOST` is set.
 
-### Changed in Firestore Rules
+### Direct-write fence
 
-The dead, unused assignment-parity helper chain was removed from `firestore.rules` to reduce Rules complexity without broadening permissions:
+Added a focused `get`/`getAfter` guard to the SI-assignment update rule. A
+transition to `RETIRED` now requires the existing matching competitor to be
+deleted or receive a relevant SI/status mutation in the same commit. The rule
+also keeps competitor identity fields immutable on assignment update.
 
-- removed the old assignment-parity helper functions that were no longer used by the active create/update rules
-- kept the thin auth/path/basic-schema checks in place
-- left the business-critical equality checks to the backend transaction boundary
+This prevents a standalone client retirement while preserving paired
+reassignment and deletion transactions. The trusted Admin SDK endpoint
+validates the full transaction contract independently of Rules.
 
-This reduces the rules-layer work associated with the old assignment-pairing logic and narrows the Rules layer to policy/validation rather than cross-document integrity enforcement.
+### Tests
 
-### Changed in tests
-
-A focused parity regression test was added in `src/utils/siCardAssignments.test.ts` to assert that assignment-owner and competitor-ID drift is rejected by the server-side identity guard.
+- The Rules suite checks that standalone retirement fails and that a paired
+  competitor-status plus assignment-retirement batch succeeds.
+- `src/server/siAssignmentRetirement.test.ts` verifies atomic assignment and
+  competitor retirement, finished-counter adjustment, administrator-role
+  validation, and owner authorization.
 
 ## Validation
 
-### Build
+- `npm run build`: **PASS**
+- `npm run lint`: **PASS**
+- `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 npx vitest run src/server/siAssignmentRetirement.test.ts`:
+  **PASS** — 2 tests
+- `runFirestoreRulesDirtyDozenSuite()`: **FAIL**
 
-Command run:
-
-```bash
-npm run lint
-```
-
-Result:
-
-- PASS
-
-### Firestore rules suite
-
-Command run:
-
-```bash
-$env:FIRESTORE_EMULATOR_HOST='127.0.0.1:8080'; node --import tsx --input-type=module -e "import('./firestore.rules.test.ts').then(m => m.runFirestoreRulesDirtyDozenSuite()).catch(e => { console.error(e); process.exitCode = 1; })"
-```
-
-Result:
-
-- FAIL
-- The emulator still rejects a rules write in the suite after the first server-side migration slice.
-- The latest reported failing assertion is in the write-once receipt path and is in the same area as the remaining Rules-layer enforcement work:
+The suite passes the standalone-retirement denial and paired-retirement success,
+then fails at `firestore.rules.test.ts:592`:
 
 ```ts
-await assertSucceeds(
-  raceAdminCtx
-    .firestore()
-    .doc('competitions/evt_live/readoutReceipts/ro_test_1')
-    .delete()
+await assertFails(
+  raceAdminCtx.firestore()
+    .doc('competitions/evt_live/competitors/cmp_wrong_assignment_owner')
+    .set(...)
 );
 ```
 
-The exact failure emitted by the emulator is a `PERMISSION_DENIED` on the readout receipt path, which confirms the remaining Rules-layer blockers are not yet solved by the assignment-parity migration alone.
+The competitor create unexpectedly succeeds despite the pre-seeded assignment
+having a different `ownerUid`. This is the next missing enforcement
+responsibility: competitor-create/assignment parity and owner consistency for
+direct client writes. No further migration slice was attempted.
 
-## Expression-limit impact
+## Expression-limit and readiness impact
 
-The first migration slice removed unused assignment-parity helpers from `firestore.rules`, which reduces expression count and keeps the architecture aligned with the server-side enforcement model.
+The retirement pair/standalone assertions pass, and the Rules suite now reaches
+the competitor-create owner-parity assertion above. This slice does not remove
+that remaining competitor-create validation from Rules or establish a numeric
+expression-budget reduction. The assignment update rule has a targeted
+same-commit `get`/`getAfter` guard; no separate expression-count measurement
+was collected.
 
-However, the suite still fails. This means:
+Retirement can now use a server-side transaction that validates identity,
+ownership, and assignment consistency atomically. Readiness remains blocked by
+the Rules suite failure and by unverified production Application Default
+Credentials for the new endpoint. No deployment or production change occurred.
 
-- the assignment-parity slice is successfully moved to the backend boundary
-- the remaining expression-limit burden is not fully resolved yet
-- additional migration slices are still required for the remaining readout/shared policy checks if the goal is a fully green rules suite
+## Result
 
-## Readiness impact
-
-This slice is a measured improvement, not a full readiness clearance:
-
-- reduced rule complexity on the assignment parity path
-- preserved Atomic SI Matching and ownership consistency in the backend
-- not sufficient to declare the rules suite green
-
-Current status: partial progress, not ready for full cutover or deployed-rules assurance.
-
-## Final status
-
-- Build: PASS
-- Lint: PASS
-- Rules suite: FAIL
-- Remaining blocker: readout receipt / remaining Rules-layer logic still exceeds the acceptable enforcement boundary for the current suite
-
-This is a valid first migration slice, but it does not yet resolve the overall Firestore Rules expression-limit blocker.
+- Assignment retirement enforcement: implemented
+- Build: **PASS**
+- Lint: **PASS**
+- Rules suite: **FAIL**
+- Next blocker: competitor-create assignment parity / owner consistency
+- Production deployment: not performed
