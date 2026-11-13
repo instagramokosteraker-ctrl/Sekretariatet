@@ -1316,6 +1316,10 @@ class EventorApiError extends Error {
   }
 }
 
+const EVENTOR_REQUEST_TIMEOUT_MS = 10_000;
+const EVENTOR_TIMEOUT_MESSAGE =
+  'Eventor svarade inte inom 10 sekunder. Försök igen om en stund.';
+
 function normalizeEventorBaseUrl(value: string): string {
   const rawBase = value.trim().replace(/\/+$/, '');
   const baseUrl = rawBase ? (rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`) : DEFAULT_EVENTOR_BASE_URL;
@@ -1924,20 +1928,57 @@ async function fetchFromEventorApi(
     throw new Error('Eventor API-nyckel saknas. Konfigurera integrationen under Klubbadmin & Behörighet.');
   }
   const url = `${config.baseUrl}${endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`}`;
-  const resp = await fetch(url, {
-    headers: {
-      ApiKey: config.apiKey,
-      Accept: 'application/xml, text/xml, */*',
-    },
-  });
-  const body = await resp.text();
-  if (!resp.ok || (requireStatus200 && resp.status !== 200)) {
-    throw new EventorApiError(
-      resp.status,
-      `HTTP ${resp.status}: ${getEventorErrorDetail(body, resp.statusText, config.apiKey)}`
-    );
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    EVENTOR_REQUEST_TIMEOUT_MS
+  );
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        ApiKey: config.apiKey,
+        Accept: 'application/xml, text/xml, */*',
+      },
+      signal: controller.signal,
+    });
+    const body = await resp.text();
+    const contentType = (resp.headers.get('content-type') ?? '').toLowerCase();
+    const isHtml =
+      contentType.includes('text/html') ||
+      /^\s*(?:<!doctype\s+html|<(?:html|head|body|title|meta|script)\b)/i.test(body);
+
+    if (!resp.ok || (requireStatus200 && resp.status !== 200)) {
+      const detail = isHtml
+        ? ''
+        : getEventorErrorDetail(body, resp.statusText, config.apiKey);
+      throw new EventorApiError(
+        resp.ok ? 502 : resp.status,
+        `Eventor svarade inte korrekt (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`
+      );
+    }
+
+    const isXml =
+      (body.trim().length > 0 && contentType.includes('xml')) ||
+      (!contentType.includes('html') &&
+        !contentType.includes('json') &&
+        body.trim().length > 0 &&
+        /^\s*(?:<\?xml\b|<[A-Za-z_][\w:.-]*(?:\s|>))/i.test(body) &&
+        !isHtml);
+    if (!isXml) {
+      throw new EventorApiError(
+        502,
+        `Eventor svarade inte korrekt (HTTP ${resp.status})`
+      );
+    }
+    return body;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new EventorApiError(504, EVENTOR_TIMEOUT_MESSAGE);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return body;
 }
 
 function sendEventorError(
@@ -1953,7 +1994,7 @@ function sendEventorError(
   if (error instanceof TypeError) {
     res.status(502).json({
       success: false,
-      error: `Nätverksfel: Kunde inte nå Eventor API. ${error.message}`,
+      error: `Eventor svarade inte korrekt (HTTP 502): ${error.message}`,
     });
     return;
   }
@@ -6050,29 +6091,26 @@ async function startServer() {
       return;
     }
 
-    let orgXml: string;
     try {
-      orgXml = await fetchFromEventorApi('/organisation/apiKey', config, true);
+      const orgXml = await fetchFromEventorApi('/organisation/apiKey', config, true);
+      const org = parseEventorOrgXml(orgXml);
+      if (org && org.orgId !== config.orgId) {
+        res.status(400).json({
+          success: false,
+          error: `API-nyckeln hör till organisation ${org.orgId} (${org.orgName}), inte angivet organisations-ID ${config.orgId}.`,
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        message: 'Anslutning lyckades',
+        orgId: org?.orgId ?? config.orgId,
+        ...(org ? { orgName: org.orgName } : {}),
+      });
     } catch (err: unknown) {
       sendEventorError(res, err, 'Kunde inte testa anslutningen till Eventor.');
-      return;
     }
-
-    const org = parseEventorOrgXml(orgXml);
-    if (org && org.orgId !== config.orgId) {
-      res.status(400).json({
-        success: false,
-        error: `API-nyckeln hör till organisation ${org.orgId} (${org.orgName}), inte angivet organisations-ID ${config.orgId}.`,
-      });
-      return;
-    }
-
-    res.json({
-      success: true,
-      message: 'Anslutning lyckades',
-      orgId: org?.orgId ?? config.orgId,
-      ...(org ? { orgName: org.orgName } : {}),
-    });
   });
 
   app.get('/api/eventor/status', (req, res) => {

@@ -64,6 +64,8 @@ export function EventorIntegrationSettingsView() {
   };
 
   const testConnection = async () => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
     setBusy(true);
     setNotice(null);
     try {
@@ -79,6 +81,7 @@ export function EventorIntegrationSettingsView() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
+        signal: controller.signal,
       });
       const data = await readApiResponseJson<{
         success?: boolean;
@@ -101,14 +104,16 @@ export function EventorIntegrationSettingsView() {
     } catch (error) {
       setNotice({
         ok: false,
-        message:
-          error instanceof TypeError
+        message: controller.signal.aborted
+          ? 'Eventor svarade inte inom 10 sekunder. Försök igen om en stund.'
+          : error instanceof TypeError
             ? `Nätverksfel: Backend svarar inte. ${error.message}`
             : error instanceof Error
               ? error.message
               : 'Anslutningen till Eventor misslyckades.',
       });
     } finally {
+      window.clearTimeout(timeoutId);
       setBusy(false);
     }
   };
