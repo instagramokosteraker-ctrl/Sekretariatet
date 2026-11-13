@@ -124,7 +124,6 @@ interface CompetitionSummary {
   zeroTimeStr: string;
   arenaInfo: string;
   seriesName?: string;
-  feeTrackingEnabled: boolean;
   competitorCount: number;
   finishedCount: number;
   classCount: number;
@@ -2243,7 +2242,6 @@ function buildCompetitionsSummaryList(seasonDb: SeasonDatabase): CompetitionSumm
       arenaInfo: ev.competition.arenaInfo || '',
       seriesName: ev.competition.seriesName || '',
       allowSelfRegistration: Boolean(ev.competition.allowSelfRegistration),
-      feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       competitorCount: ev.competitors.length,
       finishedCount: ev.competitors.filter(
         (c) => c.status === 'OK' || c.status === 'MP' || c.status === 'PRELIMINARY_FIN'

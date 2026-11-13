@@ -94,7 +94,6 @@ export interface CompetitionSummary {
   arenaInfo: string;
   seriesName?: string;
   allowSelfRegistration?: boolean;
-  feeTrackingEnabled: boolean;
   competitorCount: number;
   finishedCount: number;
   classCount: number;
@@ -554,21 +553,6 @@ export interface AuthManagePayload {
   admins: ClubAdminAccount[];
   clubSettings?: ClubSettings;
   demoCleared?: boolean;
-}
-
-export interface CloudCompetitionRecord {
-  competitionId: string;
-  shortCode: string;
-  name: string;
-  organizer: string;
-  date: string;
-  status: EventLifecycleStatus;
-  seriesName?: string;
-  feeTrackingEnabled?: boolean;
-  competitorCount: number;
-  finishedCount: number;
-  ownerUid: string;
-  updatedAtIso: string | null;
 }
 
 export interface CloudEventExportItem {

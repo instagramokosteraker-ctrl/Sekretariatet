@@ -446,7 +446,6 @@ export default function App() {
   const [newEvtArena, setNewEvtArena] = useState('');
   const [newEvtSeriesName, setNewEvtSeriesName] = useState('');
   const [newEvtSelfReg, setNewEvtSelfReg] = useState(true);
-  const [newEvtFeeTracking, setNewEvtFeeTracking] = useState(false);
   const [newEvtCopyCourses, setNewEvtCopyCourses] = useState(true);
   const [newEvtCourseParsed, setNewEvtCourseParsed] = useState<ParsedIofDocument | null>(null);
   const [newEvtCourseFileName, setNewEvtCourseFileName] = useState('');
@@ -1199,7 +1198,6 @@ export default function App() {
               zeroTimeStr: e.competition.zeroTimeStr || '18:00:00',
               arenaInfo: e.competition.arenaInfo || '',
               seriesName: e.competition.seriesName,
-              feeTrackingEnabled: Boolean(e.competition.feeTrackingEnabled),
               competitorCount: e.competitors.length,
               finishedCount: e.competitors.filter((c) => c.status === 'OK' || c.status === 'MP').length,
               classCount: e.classes.length,
@@ -1393,7 +1391,7 @@ export default function App() {
       competitionsList
         .map(
           (c) =>
-            `${c.id}:${c.name}:${c.status}:${c.date}:${c.seriesName || ''}:${String(c.feeTrackingEnabled)}:${c.competitorCount}:${c.finishedCount}`
+            `${c.id}:${c.name}:${c.status}:${c.date}:${c.seriesName || ''}:${c.competitorCount}:${c.finishedCount}`
         )
         .join('|'),
       `${competition.id}:${competition.zeroTimeStr}:${competition.arenaInfo || ''}:${String(competition.feeTrackingEnabled)}`,
@@ -1576,7 +1574,6 @@ export default function App() {
       date?: string;
       zeroTimeStr?: string;
       seriesName?: string;
-      feeTrackingEnabled?: boolean;
     }
   ) => {
     await updateCompetitionMetadataInFirestore(eventId, patch);
@@ -1858,7 +1855,6 @@ export default function App() {
         arenaInfo: newEvtArena.trim(),
         seriesName: newEvtSeriesName.trim(),
         allowSelfRegistration: newEvtSelfReg,
-        feeTrackingEnabled: newEvtFeeTracking,
       };
 
       await createCompetitionInFirestore({
@@ -1873,7 +1869,6 @@ export default function App() {
         arenaInfo: newComp.arenaInfo,
         seriesName: newComp.seriesName,
         allowSelfRegistration: newComp.allowSelfRegistration,
-        feeTrackingEnabled: newComp.feeTrackingEnabled,
         courses: newCourses,
         classes: newClasses,
       });
@@ -1894,7 +1889,6 @@ export default function App() {
           zeroTimeStr: newComp.zeroTimeStr,
           arenaInfo: newComp.arenaInfo || '',
           seriesName: newComp.seriesName,
-          feeTrackingEnabled: Boolean(newComp.feeTrackingEnabled),
           competitorCount: 0,
           finishedCount: 0,
           classCount: newClasses.length,
@@ -1911,7 +1905,6 @@ export default function App() {
       setPendingUnknownReadout(null);
       setNewEvtName('');
       setNewEvtSeriesName('');
-      setNewEvtFeeTracking(false);
       setNewEvtCourseParsed(null);
       setNewEvtCourseFileName('');
       setNewEvtAutoClasses(true);
@@ -2858,15 +2851,6 @@ export default function App() {
                       />
                       <span>Mobil självregistrering</span>
                     </label>
-                    <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={newEvtFeeTracking}
-                        onChange={(e) => setNewEvtFeeTracking(e.target.checked)}
-                        className="rounded border-slate-300 dark:border-slate-700"
-                      />
-                      <span>Avgiftsuppföljning</span>
-                    </label>
                     {!isEmptySeason && !newEvtCourseParsed && (
                       <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                         <input
@@ -2931,10 +2915,7 @@ export default function App() {
                   <>
                     <button
                       type="button"
-                      onClick={() => {
-                        setNewEvtFeeTracking(false);
-                        setCreateEventModalOpen(true);
-                      }}
+                      onClick={() => setCreateEventModalOpen(true)}
                       className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
                     >
                       <Plus className="w-3.5 h-3.5" />
@@ -4421,7 +4402,6 @@ export default function App() {
                   onUpdateCompetitionMeta={handleUpdateCompetitionMetadata}
                   onUpdateRentalReturned={updateRentalReturnedFromOverview}
                   onOpenCreateCompetition={() => {
-                    setNewEvtFeeTracking(false);
                     setCreateEventModalOpen(true);
                   }}
                   onOpenPublicEvent={(code) => navigatePublicPortal(code)}

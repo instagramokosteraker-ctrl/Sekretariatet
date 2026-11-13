@@ -39,7 +39,6 @@ import firebaseConfig from '../firebase-applet-config.json';
 import type {
   CardPunch,
   ClassCompetitionFormat,
-  CloudCompetitionRecord,
   CloudEventExportItem,
   CloudSeasonSnapshot,
   ClubAdminTier,
@@ -211,8 +210,6 @@ export interface FirestoreErrorInfo {
 }
 
 const TOKEN_SERVICE_STORAGE_KEY = 'passersi_token_service_disabled_v1';
-const TOKEN_SERVICE_PROJECT_REF = firebaseConfig.messagingSenderId || firebaseConfig.projectId;
-export const TOKEN_SERVICE_ACTIVATION_URL = `https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=${TOKEN_SERVICE_PROJECT_REF}`;
 
 let tokenServiceDisabledFlag = (() => {
   if (typeof window === 'undefined') return false;
@@ -222,18 +219,8 @@ let tokenServiceDisabledFlag = (() => {
     return false;
   }
 })();
-const tokenServiceListeners = new Set<(disabled: boolean) => void>();
-
 export function isTokenServiceApiDisabled(): boolean {
   return tokenServiceDisabledFlag;
-}
-
-export function subscribeTokenServiceStatus(cb: (disabled: boolean) => void): () => void {
-  tokenServiceListeners.add(cb);
-  cb(tokenServiceDisabledFlag);
-  return () => {
-    tokenServiceListeners.delete(cb);
-  };
 }
 
 function setTokenServiceDisabled(disabled: boolean): void {
@@ -248,10 +235,7 @@ function setTokenServiceDisabled(disabled: boolean): void {
       // ignore storage restrictions
     }
   }
-  if (tokenServiceDisabledFlag !== disabled) {
-    tokenServiceDisabledFlag = disabled;
-    tokenServiceListeners.forEach((fn) => fn(disabled));
-  }
+  tokenServiceDisabledFlag = disabled;
 }
 
 export function isTokenServiceError(error: unknown): boolean {
@@ -6387,7 +6371,6 @@ export async function loadPublicRaceFromFirestore(
       zeroTimeStr: event.competition.zeroTimeStr,
       arenaInfo: event.competition.arenaInfo,
       seriesName: event.competition.seriesName,
-      feeTrackingEnabled: Boolean(event.competition.feeTrackingEnabled),
       competitorCount: event.competitors.length,
       finishedCount: event.competitors.filter(
         (competitor) => competitor.status === 'OK' || competitor.status === 'MP'
@@ -6437,130 +6420,6 @@ export async function loadPublicRaceFromFirestore(
   };
 }
 
-export async function listClubCloudCompetitionsFromFirestore(): Promise<
-  CloudCompetitionRecord[]
-> {
-  const current = await ensureValidFirestoreUser();
-  if (!current) return [];
-  const path = 'clubSettings/default';
-  try {
-    const clubSnap = await getDoc(doc(db, 'clubSettings', 'default'));
-    const clubData = clubSnap.exists()
-      ? (clubSnap.data() as { competitionIds?: unknown })
-      : null;
-    const competitionIds = Array.isArray(clubData?.competitionIds)
-      ? Array.from(
-          new Set(
-            clubData.competitionIds.filter(
-              (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
-            )
-          )
-        )
-      : [];
-
-    const toRecord = (
-      id: string,
-      data: {
-        competitionId: string;
-        shortCode: string;
-        name: string;
-        organizer: string;
-        date: string;
-        status: EventLifecycleStatus;
-        seriesName?: string;
-        feeTrackingEnabled?: boolean;
-        enableFeesAndSwish?: boolean;
-        competitorCount: number;
-        finishedCount: number;
-        ownerUid: string;
-        updatedAt?: Timestamp;
-      }
-    ): CloudCompetitionRecord => ({
-      competitionId: data.competitionId || id,
-      shortCode: data.shortCode,
-      name: data.name,
-      organizer: data.organizer,
-      date: data.date,
-      status: data.status,
-      seriesName: data.seriesName || '',
-      feeTrackingEnabled: Boolean(data.feeTrackingEnabled ?? data.enableFeesAndSwish),
-      competitorCount: data.competitorCount,
-      finishedCount: data.finishedCount,
-      ownerUid: data.ownerUid,
-      updatedAtIso:
-        data.updatedAt && typeof data.updatedAt.toDate === 'function'
-          ? data.updatedAt.toDate().toISOString()
-          : null,
-    });
-
-    if (competitionIds.length > 0) {
-      const competitionSnapshots = await Promise.all(
-        competitionIds.map((competitionId) =>
-          getDoc(doc(db, 'competitions', competitionId))
-        )
-      );
-      return competitionSnapshots
-        .filter((snapshot) => snapshot.exists())
-        .map((snapshot) =>
-          toRecord(
-            snapshot.id,
-            snapshot.data() as {
-              competitionId: string;
-              shortCode: string;
-              name: string;
-              organizer: string;
-              date: string;
-              status: EventLifecycleStatus;
-              seriesName?: string;
-              feeTrackingEnabled?: boolean;
-              enableFeesAndSwish?: boolean;
-              competitorCount: number;
-              finishedCount: number;
-              ownerUid: string;
-              updatedAt?: Timestamp;
-            }
-          )
-        )
-        .sort((a, b) => b.date.localeCompare(a.date));
-    }
-
-    const ownCompetitions = await getDocs(
-      query(collection(db, 'competitions'), where('ownerUid', '==', current.uid))
-    );
-    return ownCompetitions.docs
-      .map((snapshot) =>
-        toRecord(
-          snapshot.id,
-          snapshot.data() as {
-            competitionId: string;
-            shortCode: string;
-            name: string;
-            organizer: string;
-            date: string;
-            status: EventLifecycleStatus;
-            seriesName?: string;
-            feeTrackingEnabled?: boolean;
-            enableFeesAndSwish?: boolean;
-            competitorCount: number;
-            finishedCount: number;
-            ownerUid: string;
-            updatedAt?: Timestamp;
-          }
-        )
-      )
-      .sort((a, b) => b.date.localeCompare(a.date));
-  } catch (err) {
-    if (isTransientOfflineFirestoreError(err)) {
-      if (isTokenServiceError(err)) {
-        setTokenServiceDisabled(true);
-        void signOut(auth).catch(() => {});
-      }
-      return [];
-    }
-    handleFirestoreError(err, OperationType.LIST, path);
-  }
-}
-
 export function subscribePublicCompetitionSummaries(
   onUpdate: (competitions: CompetitionSummary[]) => void,
   onError: (error: Error) => void
@@ -6595,10 +6454,6 @@ export function subscribePublicCompetitionSummaries(
       arenaInfo: data.arenaInfo ?? '',
       seriesName: data.seriesName,
       allowSelfRegistration: Boolean((data as { allowSelfRegistration?: boolean }).allowSelfRegistration),
-      feeTrackingEnabled: Boolean(
-        data.feeTrackingEnabled ??
-          (data as { enableFeesAndSwish?: boolean }).enableFeesAndSwish
-      ),
       competitorCount: data.competitorCount ?? 0,
       finishedCount: data.finishedCount ?? 0,
       classCount: data.classCount ?? 0,
