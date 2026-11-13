@@ -1304,6 +1304,8 @@ interface EventorConfig {
   baseUrl: string;
 }
 
+type EventorApiConfig = Pick<EventorConfig, 'apiKey' | 'baseUrl'>;
+
 class EventorApiError extends Error {
   constructor(
     readonly statusCode: number,
@@ -1335,25 +1337,36 @@ function normalizeEventorBaseUrl(value: string): string {
   return parsed.toString().replace(/\/+$/, '');
 }
 
-function getEventorConfigFromRequest(body: unknown): EventorConfig {
+function getEventorApiConfigFromRequest(body: unknown): EventorApiConfig {
   const values =
     typeof body === 'object' && body !== null && !Array.isArray(body)
       ? (body as Record<string, unknown>)
       : {};
   const apiKey = typeof values.apiKey === 'string' ? values.apiKey.trim() : '';
-  const orgId = typeof values.orgId === 'string' ? values.orgId.trim() : '';
   if (!apiKey) throw new Error('Eventor API-nyckel saknas.');
   if (apiKey.length > 512) throw new Error('API-nyckeln är för lång.');
-  if (!orgId) throw new Error('Eventor Organisations-ID saknas.');
-  if (!/^\d{1,32}$/.test(orgId)) {
-    throw new Error('Organisations-ID måste bestå av 1–32 siffror.');
-  }
   const baseUrl =
     typeof values.baseUrl === 'string' ? values.baseUrl : DEFAULT_EVENTOR_BASE_URL;
   return {
     apiKey,
-    orgId,
     baseUrl: normalizeEventorBaseUrl(baseUrl),
+  };
+}
+
+function getEventorConfigFromRequest(body: unknown): EventorConfig {
+  const values =
+    typeof body === 'object' && body !== null && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {};
+  const apiConfig = getEventorApiConfigFromRequest(body);
+  const orgId = typeof values.orgId === 'string' ? values.orgId.trim() : '';
+  if (!orgId) throw new Error('Eventor Organisations-ID saknas.');
+  if (!/^\d{1,32}$/.test(orgId)) {
+    throw new Error('Organisations-ID måste bestå av 1–32 siffror.');
+  }
+  return {
+    ...apiConfig,
+    orgId,
   };
 }
 
@@ -1686,6 +1699,40 @@ function parseEventorOrgXml(xml: string): { orgId: string; orgName: string } | n
   return { orgId, orgName };
 }
 
+function parseEventorEventXml(
+  xml: string,
+  requestedEventId: string
+): { eventId: string; name: string; organizer: string | null; date: string | null } | null {
+  const eventBlock = extractFirstTag(xml, 'Event') ?? xml;
+  const name = extractFirstTag(eventBlock, 'Name') ?? extractFirstTag(eventBlock, 'EventName');
+  if (!name?.trim()) return null;
+
+  const organizerBlock =
+    extractFirstTag(eventBlock, 'Organiser') ??
+    extractFirstTag(eventBlock, 'Organizer') ??
+    extractFirstTag(eventBlock, 'Organisation');
+  const organizer =
+    (organizerBlock
+      ? extractFirstTag(organizerBlock, 'Name') ?? extractFirstTag(organizerBlock, 'ShortName')
+      : null) ??
+    extractFirstTag(eventBlock, 'OrganiserName') ??
+    extractFirstTag(eventBlock, 'OrganizerName') ??
+    null;
+  const dateValue =
+    extractFirstTag(eventBlock, 'StartDate') ??
+    extractFirstTag(eventBlock, 'EventDate') ??
+    extractFirstTag(eventBlock, 'Date') ??
+    '';
+  const dateMatch = dateValue.match(/^(\d{4}-\d{2}-\d{2})/);
+
+  return {
+    eventId: requestedEventId,
+    name: name.trim().slice(0, 140),
+    organizer: organizer?.trim().slice(0, 100) || null,
+    date: dateMatch?.[1] ?? null,
+  };
+}
+
 function parseEventorCompetitorsXml(
   xml: string,
   fallbackClubName: string,
@@ -1765,8 +1812,8 @@ function parseEventorClassesXml(xml: string): Map<string, string> {
   for (const b of blocks) {
     const id = extractFirstTag(b, 'EventClassId') ?? extractFirstTag(b, 'Id');
     const name = extractFirstTag(b, 'Name') ?? extractFirstTag(b, 'ClassShortName');
-    if (id && name) {
-      classMap.set(id, name);
+    if (id?.trim() && name?.trim()) {
+      classMap.set(id.trim().slice(0, 128), name.trim().slice(0, 80));
     }
   }
   return classMap;
@@ -1793,7 +1840,7 @@ function parseEventorEntriesXml(
     const nameBlock = extractFirstTag(personBlock, 'Name') ?? personBlock;
     const given = extractFirstTag(nameBlock, 'Given') ?? '';
     const family = extractFirstTag(nameBlock, 'Family') ?? '';
-    const fullName = `${given} ${family}`.trim();
+    const fullName = `${given} ${family}`.trim().slice(0, 120);
     if (!fullName) continue;
 
     const personId =
@@ -1803,7 +1850,10 @@ function parseEventorEntriesXml(
 
     const orgBlock =
       extractFirstTag(b, 'Organisation') ?? extractFirstTag(personBlock, 'Organisation');
-    const club = (orgBlock ? extractFirstTag(orgBlock, 'Name') : null) || 'Klubblös';
+    const club = ((orgBlock ? extractFirstTag(orgBlock, 'Name') : null) || 'Klubblös').slice(
+      0,
+      100
+    );
 
     const entryClassBlock = extractFirstTag(b, 'EntryClass') ?? extractFirstTag(b, 'Class') ?? b;
     const evClsId =
@@ -1812,8 +1862,11 @@ function parseEventorEntriesXml(
       extractFirstTag(entryClassBlock, 'Id') ??
       '';
     const directClsName = extractFirstTag(entryClassBlock, 'Name');
-    const className =
-      (evClsId && classIdToName.get(evClsId)) || directClsName || 'Öppen Motion';
+    const className = (
+      (evClsId && classIdToName.get(evClsId)) ||
+      directClsName ||
+      'Öppen Motion'
+    ).slice(0, 80);
 
     const cardTexts = [
       ...extractAllBlocks(b, 'CCardId'),
@@ -1823,13 +1876,19 @@ function parseEventorEntriesXml(
     let siNumber = 0;
     for (const ct of cardTexts) {
       const candidate = Number(decodeXmlEntities(ct).replace(/\D/g, ''));
-      if (Number.isFinite(candidate) && candidate > 0) {
+      if (Number.isInteger(candidate) && candidate > 0 && candidate <= 99999999) {
         siNumber = candidate;
         break;
       }
     }
 
-    entries.push({ fullName, club, className, siNumber, personId });
+    entries.push({
+      fullName,
+      club,
+      className,
+      siNumber,
+      personId: personId?.slice(0, 128) ?? null,
+    });
   }
   return entries;
 }
@@ -1858,7 +1917,7 @@ function getEventorErrorDetail(body: string, statusText: string, apiKey: string)
 
 async function fetchFromEventorApi(
   endpointPath: string,
-  config: EventorConfig,
+  config: EventorApiConfig,
   requireStatus200 = false
 ): Promise<string> {
   if (!config.apiKey) {
@@ -4853,7 +4912,10 @@ async function startServer() {
         req as express.Request & { authUser?: AuthSessionUser }
       ).authUser;
       if (!sessionUser) {
-        res.status(401).json({ error: 'Authentication is required.' });
+        res.status(401).json({
+          success: false,
+          error: 'Authentication is required.',
+        });
         return;
       }
 
@@ -4883,14 +4945,25 @@ async function startServer() {
           }
         }
 
-        res.json({ ...result, ...(warning ? { warning } : {}) });
+        res.json({
+          success: true,
+          message: 'Tävling raderad',
+          ...result,
+          ...(warning ? { warning } : {}),
+        });
       } catch (error) {
         if (error instanceof CompetitionDeletionError) {
-          res.status(error.statusCode).json({ error: error.message });
+          res.status(error.statusCode).json({
+            success: false,
+            error: error.message,
+          });
           return;
         }
         console.error('Trusted competition deletion failed:', error);
-        res.status(500).json({ error: 'The competition could not be deleted.' });
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   );
@@ -6093,11 +6166,61 @@ async function startServer() {
     }
   });
 
-  app.post('/api/eventor/import-event', (_req, res) => {
-    res.status(410).json({
-      error:
-        'Eventor-import av tävling och deltagare är avstängd. Använd en autentiserad IOF-import som sparar deltagarna via Firestore.',
-    });
+  app.post('/api/eventor/import-event', async (req, res) => {
+    if (!requireEventorAdminRequest(req, res)) return;
+    const body =
+      typeof req.body === 'object' && req.body !== null && !Array.isArray(req.body)
+        ? (req.body as Record<string, unknown>)
+        : {};
+    const eventId =
+      typeof body.eventId === 'string' || typeof body.eventId === 'number'
+        ? String(body.eventId).trim()
+        : '';
+    if (!/^\d{1,32}$/.test(eventId)) {
+      res.status(400).json({
+        success: false,
+        error: 'Ange ett giltigt Eventor-tävlings-ID.',
+      });
+      return;
+    }
+
+    let config: EventorApiConfig;
+    try {
+      config = getEventorApiConfigFromRequest(body);
+    } catch (error: unknown) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Ogiltiga Eventor-inställningar.',
+      });
+      return;
+    }
+
+    try {
+      const encodedEventId = encodeURIComponent(eventId);
+      const [eventXml, classesXml, entriesXml] = await Promise.all([
+        fetchFromEventorApi(`/event/${encodedEventId}`, config),
+        fetchFromEventorApi(`/eventclasses?eventId=${encodedEventId}`, config),
+        fetchFromEventorApi(`/entries?eventId=${encodedEventId}`, config),
+      ]);
+      const event = parseEventorEventXml(eventXml, eventId);
+      if (!event) {
+        res.status(502).json({
+          success: false,
+          error: 'Eventor returnerade inte läsbara tävlingsuppgifter.',
+        });
+        return;
+      }
+      const classIdToName = parseEventorClassesXml(classesXml);
+      const entries = parseEventorEntriesXml(entriesXml, classIdToName);
+      res.json({
+        success: true,
+        event,
+        classes: Array.from(classIdToName, ([id, name]) => ({ id, name })),
+        entries,
+      });
+    } catch (error: unknown) {
+      sendEventorError(res, error, 'Kunde inte hämta tävlingen från Eventor.');
+    }
   });
 
   app.put('/api/competition', (req, res) => {

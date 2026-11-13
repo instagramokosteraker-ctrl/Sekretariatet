@@ -45,6 +45,24 @@ interface CompetitionSettingsViewProps {
   onImportEventorEvent: (eventId: string) => Promise<{
     ok: boolean;
     message: string;
+    event?: {
+      name: string;
+      organizer: string | null;
+      date: string | null;
+    };
+    importBatch?: {
+      courses: ParsedIofCourse[];
+      classes: ParsedIofClassAssignment[];
+      entries: { fullName: string; club: string; className: string; siNumber: number }[];
+      runnerDbEntries: {
+        siNumber: number;
+        fullName: string;
+        club: string;
+        birthYear?: number | null;
+        defaultClassName?: string | null;
+        eventorPersonId?: string | null;
+      }[];
+    };
   }>;
   onImportIofBatch: (batch: {
     courses: ParsedIofCourse[];
@@ -171,7 +189,30 @@ export function CompetitionSettingsView({
     setEventorFeedback(null);
     try {
       const res = await onImportEventorEvent(eventorEventId.trim());
-      setEventorFeedback({ ok: res.ok, msg: res.message });
+      if (!res.ok) {
+        setEventorFeedback({ ok: false, msg: res.message });
+        return;
+      }
+      if (res.event && res.importBatch) {
+        const importResult = await onImportIofBatch(res.importBatch);
+        const metadataPatch: Partial<CompetitionMeta> = { name: res.event.name };
+        if (res.event.organizer) metadataPatch.organizer = res.event.organizer;
+        if (res.event.date && /^\d{4}-\d{2}-\d{2}$/.test(res.event.date)) {
+          metadataPatch.date = res.event.date;
+        }
+        await onUpdateCompetition(metadataPatch);
+        setEventorFeedback({
+          ok: true,
+          msg: `Hämtade "${res.event.name}" från Eventor: +${importResult.addedClasses} klasser och +${importResult.addedEntries} anmälda deltagare.`,
+        });
+        return;
+      }
+      setEventorFeedback({ ok: true, msg: res.message });
+    } catch (error) {
+      setEventorFeedback({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte importera tävlingen från Eventor.',
+      });
     } finally {
       setEventorBusy(false);
     }

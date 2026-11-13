@@ -1517,10 +1517,20 @@ export default function App() {
       `/api/firestore/competitions/${encodeURIComponent(eventId)}/delete`,
       { method: 'POST' }
     );
-    const result = await readApiResponseJson<{ warning?: string }>(
-      response,
-      'Kunde inte radera tävlingen.'
-    );
+    let result: { warning?: string };
+    try {
+      result = await readApiResponseJson<{ warning?: string }>(
+        response,
+        'Kunde inte radera tävlingen.'
+      );
+    } catch (error) {
+      if (!response.ok) {
+        const detail =
+          error instanceof Error ? error.message : 'Kunde inte radera tävlingen.';
+        throw new Error(`HTTP ${response.status}: ${detail}`);
+      }
+      throw error;
+    }
 
     const remainingCompetitions = competitionsList.filter(
       (item) => item.id !== eventId
@@ -3010,34 +3020,103 @@ export default function App() {
                   }}
                   onImportEventorEvent={async (eventId) => {
                     try {
+                      const eventorConfig = readEventorLocalConfig();
+                      if (!eventorConfig.apiKey.trim()) {
+                        throw new Error('Spara en Eventor API-nyckel lokalt innan du hämtar en tävling.');
+                      }
                       const res = await apiFetch('/api/eventor/import-event', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                          ...readEventorLocalConfig(),
+                          ...eventorConfig,
                           eventId,
                         }),
                       });
                       const data = await readApiResponseJson<{
-                        eventName?: string;
-                        addedClasses?: number;
-                        addedEntries?: number;
-                        runnerDbEntries?: RunnerDbEntry[];
+                        success?: boolean;
+                        event?: {
+                          eventId: string;
+                          name: string;
+                          organizer: string | null;
+                          date: string | null;
+                        };
+                        classes?: Array<{ id: string; name: string }>;
+                        entries?: Array<{
+                          fullName: string;
+                          club: string;
+                          className: string;
+                          siNumber: number;
+                          personId: string | null;
+                        }>;
                       }>(
                         res,
                         'Kunde inte hämta tävling från Eventor. Kontrollera serveranslutningen och försök igen.'
                       );
-                      if (data.runnerDbEntries?.length) {
-                        await saveRunnerDbEntriesToFirestore(data.runnerDbEntries);
+                      if (
+                        !data.success ||
+                        !data.event ||
+                        !Array.isArray(data.classes) ||
+                        !Array.isArray(data.entries)
+                      ) {
+                        throw new Error('Eventor returnerade ofullständiga tävlingsuppgifter.');
+                      }
+
+                      const importEntries = data.entries.map((entry) => ({
+                        fullName: entry.fullName,
+                        club: entry.club,
+                        className: entry.className,
+                        siNumber: entry.siNumber,
+                      }));
+                      const runnerDbEntriesBySi = new Map<
+                        number,
+                        {
+                          siNumber: number;
+                          fullName: string;
+                          club: string;
+                          birthYear: null;
+                          defaultClassName: string;
+                          eventorPersonId: string | null;
+                        }
+                      >();
+                      for (const entry of data.entries) {
+                        if (
+                          Number.isInteger(entry.siNumber) &&
+                          entry.siNumber > 0 &&
+                          entry.siNumber <= 99999999
+                        ) {
+                          runnerDbEntriesBySi.set(entry.siNumber, {
+                            siNumber: entry.siNumber,
+                            fullName: entry.fullName,
+                            club: entry.club,
+                            birthYear: null,
+                            defaultClassName: entry.className,
+                            eventorPersonId: entry.personId,
+                          });
+                        }
                       }
                       return {
                         ok: true,
-                        message: `Hämtade "${data.eventName ?? eventId}" från Eventor: +${data.addedClasses ?? 0} klasser och +${data.addedEntries ?? 0} anmälda deltagare.`,
+                        message: 'Tävlingen hämtades från Eventor.',
+                        event: data.event,
+                        importBatch: {
+                          courses: [],
+                          classes: data.classes.map((eventClass) => ({
+                            name: eventClass.name,
+                            classFormat: 'STANDARD' as const,
+                          })),
+                          entries: importEntries,
+                          runnerDbEntries: Array.from(runnerDbEntriesBySi.values()),
+                        },
                       };
                     } catch (error) {
                       return {
                         ok: false,
-                        message: error instanceof Error ? error.message : 'Kunde inte hämta tävling från Eventor.',
+                        message:
+                          error instanceof TypeError
+                            ? `Nätverksfel: Backend svarar inte. ${error.message}`
+                            : error instanceof Error
+                              ? error.message
+                              : 'Kunde inte hämta tävling från Eventor.',
                       };
                     }
                   }}
@@ -3167,7 +3246,9 @@ export default function App() {
                         name: parsed.name.trim(),
                         courseId: isForked
                           ? forkCourseIds[0]
-                          : linkedCourse?.id || previous?.courseId || nextCourses[0]?.id || null,
+                          : linkedCourse?.id ||
+                            previous?.courseId ||
+                            (batch.courses.length > 0 ? nextCourses[0]?.id : null),
                         classFormat: isForked ? 'FORKED' : 'STANDARD',
                         forkCourseIds: isForked ? forkCourseIds : [],
                         allowDirectEntry: previous?.allowDirectEntry ?? true,
