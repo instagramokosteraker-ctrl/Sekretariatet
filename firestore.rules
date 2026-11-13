@@ -668,12 +668,65 @@ service cloud.firestore {
         assignment.state == 'ACTIVE';
     }
 
-    function assignmentCreateOwnerMatchesCompetitorAfter(competitionId, assignment) {
+    function hasMatchingRetiredAssignmentAfter(competitionId, competitor) {
+      let assignmentPath =
+        /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(competitor.siNumber);
+      let assignment = getAfter(assignmentPath).data;
+      return existsAfter(assignmentPath) &&
+        assignment.competitionId == competitionId &&
+        assignment.siNumber == competitor.siNumber &&
+        assignment.competitorId == competitor.competitorId &&
+        assignment.competitorDocumentId == competitor.competitorId &&
+        assignment.cardSeries == competitor.cardSeries &&
+        assignment.ownerUid == competitor.ownerUid &&
+        assignment.state == 'RETIRED';
+    }
+
+    function hasMatchingAssignmentTransitionAfter(
+      competitionId,
+      competitorId,
+      existingCompetitor,
+      incomingCompetitor
+    ) {
+      return hasMatchingActiveAssignmentAfter(
+          competitionId,
+          competitorId,
+          incomingCompetitor
+        ) &&
+        (
+          incomingCompetitor.siNumber == existingCompetitor.siNumber ||
+          hasMatchingRetiredAssignmentAfter(competitionId, existingCompetitor)
+        );
+    }
+
+    function assignmentCreateMatchesCompetitorAfter(competitionId, assignment) {
       let competitorPath =
         /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(assignment.competitorDocumentId);
       let competitor = getAfter(competitorPath).data;
-      return existsAfter(competitorPath) &&
-        competitor.ownerUid == assignment.ownerUid;
+      let existingCompetitor = get(competitorPath).data;
+      return assignment.competitionId == competitionId &&
+        assignment.competitorDocumentId == assignment.competitorId &&
+        (
+          (
+            assignment.state == 'ACTIVE' &&
+            existsAfter(competitorPath) &&
+            competitor.competitionId == competitionId &&
+            competitor.competitorId == assignment.competitorId &&
+            competitor.siNumber == assignment.siNumber &&
+            competitor.cardSeries == assignment.cardSeries &&
+            competitor.ownerUid == assignment.ownerUid
+          ) ||
+          (
+            assignment.state == 'RETIRED' &&
+            exists(competitorPath) &&
+            existingCompetitor.competitionId == competitionId &&
+            existingCompetitor.competitorId == assignment.competitorId &&
+            existingCompetitor.siNumber == assignment.siNumber &&
+            existingCompetitor.cardSeries == assignment.cardSeries &&
+            existingCompetitor.ownerUid == assignment.ownerUid &&
+            !existsAfter(competitorPath)
+          )
+        );
     }
 
     function canCreateReadoutCompetitor() {
@@ -1228,6 +1281,37 @@ service cloud.firestore {
       // Assignment mutations must share a commit with a matching competitor
       // create, deletion, or relevant update. This is not a uniqueness query.
       match /siCardAssignments/{siNumber} {
+        function hasPairedActiveCompetitorMutation() {
+          let competitorPath =
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(existing().competitorDocumentId);
+          let currentCompetitor = get(competitorPath).data;
+          let nextCompetitor = getAfter(competitorPath).data;
+          return isValidId(existing().competitorDocumentId) &&
+            (
+              existing().state == 'RETIRED' ||
+              (
+                exists(competitorPath) &&
+                currentCompetitor.competitionId == competitionId &&
+                currentCompetitor.competitorId == existing().competitorId &&
+                currentCompetitor.siNumber == existing().siNumber &&
+                currentCompetitor.cardSeries == existing().cardSeries &&
+                currentCompetitor.ownerUid == existing().ownerUid
+              )
+            ) &&
+            existsAfter(competitorPath) &&
+            nextCompetitor.competitionId == competitionId &&
+            nextCompetitor.competitorId == incoming().competitorId &&
+            nextCompetitor.siNumber == incoming().siNumber &&
+            nextCompetitor.cardSeries == incoming().cardSeries &&
+            nextCompetitor.ownerUid == incoming().ownerUid &&
+            nextCompetitor.updatedAt == request.time &&
+            (
+              !exists(competitorPath) ||
+              nextCompetitor.diff(currentCompetitor).affectedKeys()
+                .hasAny(['siNumber', 'cardSeries'])
+            );
+        }
+
         function hasPairedRetirementCompetitorMutation() {
           let competitorPath =
             /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(existing().competitorDocumentId);
@@ -1278,7 +1362,7 @@ service cloud.firestore {
               isAdmin() ||
               isSuperAdmin()
             ) &&
-            assignmentCreateOwnerMatchesCompetitorAfter(competitionId, incoming())
+            assignmentCreateMatchesCompetitorAfter(competitionId, incoming())
           ) &&
           isValidSICardAssignmentForCreate(incoming()) &&
           incoming().competitionId == competitionId &&
@@ -1289,7 +1373,6 @@ service cloud.firestore {
         allow update: if isVerifiedUser() &&
           isValidId(competitionId) &&
           isValidId(siNumber) &&
-          isValidSICardAssignment(incoming()) &&
           resource != null &&
           incoming().competitionId == existing().competitionId &&
           incoming().siNumber == existing().siNumber &&
@@ -1298,10 +1381,16 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
           (
-            incoming().state != 'RETIRED' ||
-            existing().state == 'RETIRED' ||
-            hasPairedRetirementCompetitorMutation()
+            (
+              incoming().state == 'ACTIVE' &&
+              hasPairedActiveCompetitorMutation()
+            ) ||
+            (
+              incoming().state == 'RETIRED' &&
+              hasPairedRetirementCompetitorMutation()
+            )
           ) &&
+          isValidSICardAssignment(incoming()) &&
           (
             incoming().ownerUid == existing().ownerUid ||
             (existing().state == 'RETIRED' && incoming().state == 'ACTIVE')
@@ -1565,7 +1654,6 @@ service cloud.firestore {
 
         allow update: if (
           isVerifiedUser() &&
-          isValidCloudCompetitor(incoming()) &&
           isValidId(competitionId) &&
           isValidId(competitorId) &&
           resource != null &&
@@ -1575,6 +1663,23 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
           parentCompetitionExists(competitionId) &&
+          (
+            (
+              incoming().siNumber == existing().siNumber &&
+              incoming().cardSeries == existing().cardSeries
+            )
+              ? isValidCloudCompetitor(incoming())
+              : (
+                  hasMatchingAssignmentTransitionAfter(
+                    competitionId,
+                    competitorId,
+                    existing(),
+                    incoming()
+                  )
+                    ? isValidCloudCompetitor(incoming())
+                    : false
+                )
+          ) &&
           (
             (existing().ownerUid == request.auth.uid || isAdmin()) ||
             isSuperAdmin() ||

@@ -23,6 +23,33 @@ import path from 'path';
 
 const PROJECT_ID = 'demo-passersi-rules-test';
 
+async function assertPermissionDeniedWithoutExpressionLimit(
+  operation: Promise<unknown>,
+  label: string
+): Promise<void> {
+  try {
+    await operation;
+  } catch (error: unknown) {
+    const code =
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      typeof error.code === 'string'
+        ? error.code
+        : undefined;
+    if (code !== 'permission-denied') throw error;
+    if (
+      error instanceof Error &&
+      error.message.includes('maximum of 1000 expressions')
+    ) {
+      throw new Error(`${label} was denied by the Rules expression limit.`);
+    }
+    return;
+  }
+
+  throw new Error(`${label} unexpectedly succeeded.`);
+}
+
 export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
   const rules = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
   const testEnv: RulesTestEnvironment = await initializeTestEnvironment({
@@ -1313,11 +1340,28 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         })
     );
 
-    await assertFails(
+    const reassignmentWithoutRetirementBatch = writeBatch(raceAdminCtx.firestore());
+    reassignmentWithoutRetirementBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid'),
+      { siNumber: 8500113, updatedAt: serverTimestamp() }
+    );
+    reassignmentWithoutRetirementBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500113'),
+      {
+        ...siCardAssignment,
+        siNumber: 8500113,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    await assertFails(reassignmentWithoutRetirementBatch.commit());
+
+    await assertPermissionDeniedWithoutExpressionLimit(
       raceAdminCtx
         .firestore()
         .doc('competitions/evt_live/competitors/cmp_valid')
-        .update({ siNumber: 8500113, updatedAt: serverTimestamp() })
+        .update({ siNumber: 8500113, updatedAt: serverTimestamp() }),
+      'Unpaired direct SI-number update'
     );
     await assertFails(
       raceAdminCtx
@@ -1385,9 +1429,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     const retirementBatch = writeBatch(raceAdminCtx.firestore());
     retirementBatch.delete(
       doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid')
-    );
-    retirementBatch.delete(
-      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_duplicate')
     );
     retirementBatch.update(
       doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500112'),
