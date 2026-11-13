@@ -147,6 +147,8 @@ import { AuthGateView } from './components/AuthGateView';
 import { AccessControlView } from './components/AccessControlView';
 import { applyClubThemeToDocument } from './utils/clubTheme';
 import { readEventorLocalConfig } from './utils/eventorLocalConfig';
+import { EventorNetworkError, fetchEventorXml } from './utils/eventorClient';
+import { parseEventorXml } from './utils/eventorXml';
 import {
   buildEffectiveCourseImportBatch,
   parseIofXmlDocument,
@@ -2953,9 +2955,11 @@ export default function App() {
                   availableSeriesNames={availableSeriesNames}
                   eventor={eventor}
                   runnerDbCount={runnerDb.length}
-                  onUpdateCompetition={async (patch) => {
+                  onUpdateCompetition={async (patch, options) => {
                     await updateCompetitionMetadataInFirestore(activeEventId, patch);
-                    await mirrorCompetitionMetadataToExpress(activeEventId, patch);
+                    if (!options?.firestoreOnly) {
+                      await mirrorCompetitionMetadataToExpress(activeEventId, patch);
+                    }
                     const savedPatch = {
                       ...patch,
                       ...('status' in patch ? { statusOverride: true } : {}),
@@ -2986,36 +2990,63 @@ export default function App() {
                   }}
                   onSyncEventorClub={async () => {
                     try {
-                      const res = await apiFetch('/api/eventor/sync-club', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(readEventorLocalConfig()),
-                      });
-                      const data = await readApiResponseJson<{
-                        orgName?: string;
-                        syncedRunners?: number;
-                        totalRunnerDb?: number;
-                        runnerDbEntries?: RunnerDbEntry[];
-                      }>(
-                        res,
-                        'Kunde inte synka mot Eventor. Kontrollera serveranslutningen och försök igen.'
-                      );
-                      if (data.runnerDbEntries?.length) {
-                        await saveRunnerDbEntriesToFirestore(data.runnerDbEntries);
+                      const config = readEventorLocalConfig();
+                      if (!config.orgId.trim()) {
+                        throw new Error('Spara ett Eventor Organisations-ID lokalt innan du synkar.');
                       }
+                      const encodedOrgId = encodeURIComponent(config.orgId.trim());
+                      const [organizationXml, competitorsXml] = await fetchEventorXml(
+                        [
+                          '/organisation/apiKey',
+                          `/competitors?organisationId=${encodedOrgId}&includeContactDetails=false`,
+                        ],
+                        config
+                      );
+                      const parsed = parseEventorXml({
+                        organizationXml,
+                        competitorsXml,
+                        fallbackOrgId: config.orgId.trim(),
+                      });
+                      const organization = parsed.organization;
+                      if (!organization) {
+                        throw new Error('Eventor returnerade inte läsbara organisationsuppgifter.');
+                      }
+                      if (organization.orgId !== config.orgId.trim()) {
+                        throw new Error('Eventor API-nyckeln och organisations-ID:t matchar inte.');
+                      }
+                      const updatedAt = new Date().toISOString();
+                      const runnerDbEntries: RunnerDbEntry[] = parsed.runnerDbEntries.map(
+                        (runner) => ({
+                          id: String(runner.siNumber),
+                          siNumber: runner.siNumber,
+                          cardSeries: inferCardSeries(runner.siNumber),
+                          fullName: runner.fullName,
+                          club: runner.club,
+                          birthYear: runner.birthYear,
+                          defaultClassName: runner.defaultClassName,
+                          eventorPersonId: runner.eventorPersonId,
+                          eventorOrgId: organization.orgId,
+                          source: 'EVENTOR_API',
+                          updatedAt,
+                        })
+                      );
+                      await saveRunnerDbEntriesToFirestore(runnerDbEntries);
+                      setEventor((current) => ({
+                        ...current,
+                        apiKeyConfigured: true,
+                        connectedOrgId: organization.orgId,
+                        connectedOrgName: organization.orgName,
+                        lastSyncedAt: updatedAt,
+                      }));
                       return {
                         ok: true,
-                        message: `Synkade ${data.syncedRunners ?? 0} klubbmedlemmar med SI-brickor från ${data.orgName ?? 'Eventor'} (totalt ${data.totalRunnerDb ?? 0} i Löpardatabasen).`,
+                        message: `Synkade ${runnerDbEntries.length} klubbmedlemmar med SI-brickor från ${organization.orgName}.`,
                       };
                     } catch (error) {
                       return {
                         ok: false,
-                        message:
-                          error instanceof TypeError
-                            ? `Nätverksfel: Backend svarar inte. ${error.message}`
-                            : error instanceof Error
-                              ? error.message
-                              : 'Kunde inte synka mot Eventor API.',
+                        message: error instanceof Error ? error.message : 'Kunde inte synka mot Eventor API.',
+                        fallbackAvailable: error instanceof EventorNetworkError,
                       };
                     }
                   }}
@@ -3025,80 +3056,26 @@ export default function App() {
                       if (!eventorConfig.apiKey.trim()) {
                         throw new Error('Spara en Eventor API-nyckel lokalt innan du hämtar en tävling.');
                       }
-                      const eventorEndpoint = import.meta.env.DEV
-                        ? '/api/eventor/import-event'
-                        : '/api/eventor';
-                      const res = await apiFetch(eventorEndpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          ...eventorConfig,
-                          eventId,
-                          action: 'import',
-                        }),
-                      });
-                      const data = await readApiResponseJson<{
-                        success?: boolean;
-                        event?: {
-                          eventId: string;
-                          name: string;
-                          organizer: string | null;
-                          date: string | null;
-                        };
-                        classes?: Array<{ id: string; name: string }>;
-                        entries?: Array<{
-                          fullName: string;
-                          club: string;
-                          className: string;
-                          siNumber: number;
-                          personId: string | null;
-                        }>;
-                      }>(
-                        res,
-                        'Kunde inte hämta tävling från Eventor. Kontrollera serveranslutningen och försök igen.',
-                        true
-                      );
-                      if (
-                        !data.success ||
-                        !data.event ||
-                        !Array.isArray(data.classes) ||
-                        !Array.isArray(data.entries)
-                      ) {
-                        throw new Error('Eventor returnerade ofullständiga tävlingsuppgifter.');
+                      if (!/^\d{1,32}$/.test(eventId)) {
+                        throw new Error('Ange ett giltigt Eventor-tävlings-ID.');
                       }
-
-                      const importEntries = data.entries.map((entry) => ({
-                        fullName: entry.fullName,
-                        club: entry.club,
-                        className: entry.className,
-                        siNumber: entry.siNumber,
-                      }));
-                      const runnerDbEntriesBySi = new Map<
-                        number,
-                        {
-                          siNumber: number;
-                          fullName: string;
-                          club: string;
-                          birthYear: null;
-                          defaultClassName: string;
-                          eventorPersonId: string | null;
-                        }
-                      >();
-                      for (const entry of data.entries) {
-                        if (
-                          Number.isInteger(entry.siNumber) &&
-                          entry.siNumber > 0 &&
-                          entry.siNumber <= 99999999
-                        ) {
-                          runnerDbEntriesBySi.set(entry.siNumber, {
-                            siNumber: entry.siNumber,
-                            fullName: entry.fullName,
-                            club: entry.club,
-                            birthYear: null,
-                            defaultClassName: entry.className,
-                            eventorPersonId: entry.personId,
-                          });
-                        }
+                      const encodedEventId = encodeURIComponent(eventId);
+                      const [eventXml, classesXml, entriesXml] = await fetchEventorXml(
+                        [
+                          `/event/${encodedEventId}`,
+                          `/eventclasses?eventId=${encodedEventId}`,
+                          `/entries?eventId=${encodedEventId}`,
+                        ],
+                        eventorConfig
+                      );
+                      const data = parseEventorXml({
+                        eventId,
+                        eventXml,
+                        classesXml,
+                        entriesXml,
+                      });
+                      if (!data.event) {
+                        throw new Error('Eventor returnerade ofullständiga tävlingsuppgifter.');
                       }
                       return {
                         ok: true,
@@ -3110,24 +3087,51 @@ export default function App() {
                             name: eventClass.name,
                             classFormat: 'STANDARD' as const,
                           })),
-                          entries: importEntries,
-                          runnerDbEntries: Array.from(runnerDbEntriesBySi.values()),
+                          entries: data.entries.map((entry) => ({
+                            fullName: entry.fullName,
+                            club: entry.club,
+                            className: entry.className,
+                            siNumber: entry.siNumber,
+                          })),
+                          runnerDbEntries: data.runnerDbEntries.map((runner) => ({
+                            siNumber: runner.siNumber,
+                            fullName: runner.fullName,
+                            club: runner.club,
+                            birthYear: runner.birthYear,
+                            defaultClassName: runner.defaultClassName,
+                            eventorPersonId: runner.eventorPersonId,
+                          })),
                         },
                       };
                     } catch (error) {
                       return {
                         ok: false,
-                        message:
-                          error instanceof TypeError
-                            ? `Nätverksfel: Backend svarar inte. ${error.message}`
-                            : error instanceof Error
-                              ? error.message
-                              : 'Kunde inte hämta tävling från Eventor.',
+                        message: error instanceof Error ? error.message : 'Kunde inte hämta tävling från Eventor.',
+                        fallbackAvailable: error instanceof EventorNetworkError,
                       };
                     }
                   }}
-                  onImportIofBatch={async (batch) => {
-                    if (!auth.currentUser) {
+                  onImportEventorRunnerDb={async (parsedRunners) => {
+                    const eventorConfig = readEventorLocalConfig();
+                    const updatedAt = new Date().toISOString();
+                    const runners: RunnerDbEntry[] = parsedRunners.map((runner) => ({
+                      id: String(runner.siNumber),
+                      siNumber: runner.siNumber,
+                      cardSeries: inferCardSeries(runner.siNumber),
+                      fullName: runner.fullName,
+                      club: runner.club,
+                      birthYear: runner.birthYear,
+                      defaultClassName: runner.defaultClassName,
+                      eventorPersonId: runner.eventorPersonId,
+                      eventorOrgId: runner.eventorOrgId || eventorConfig.orgId || '',
+                      source: 'EVENTOR_XML',
+                      updatedAt,
+                    }));
+                    await saveRunnerDbEntriesToFirestore(runners);
+                    return runners.length;
+                  }}
+                  onImportIofBatch={async (batch, options) => {
+                    if (!auth.currentUser && !options?.firestoreOnly) {
                       const res = await apiFetch('/api/import/batch', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -3401,27 +3405,29 @@ export default function App() {
                       runnerDbEntries: importedRunnerDbEntries,
                       competitorCount: nextCompetitors.length,
                     });
-                    try {
-                      const mirrorResponse = await apiFetch('/api/import/batch', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          courses: nextCourses,
-                          classes: nextClasses,
-                          entries: [],
-                          runnerDbEntries: importedRunnerDbEntries,
-                        }),
-                      });
-                      if (!mirrorResponse.ok) {
+                    if (!options?.firestoreOnly) {
+                      try {
+                        const mirrorResponse = await apiFetch('/api/import/batch', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            courses: nextCourses,
+                            classes: nextClasses,
+                            entries: [],
+                            runnerDbEntries: importedRunnerDbEntries,
+                          }),
+                        });
+                        if (!mirrorResponse.ok) {
+                          console.warn(
+                            `Firestore-importen sparades, men Express-spegeln svarade HTTP ${mirrorResponse.status}: ${(await mirrorResponse.text()).slice(0, 240)}`
+                          );
+                        }
+                      } catch (error) {
                         console.warn(
-                          `Firestore-importen sparades, men Express-spegeln svarade HTTP ${mirrorResponse.status}: ${(await mirrorResponse.text()).slice(0, 240)}`
+                          'Firestore-importen sparades, men Express-spegeln kunde inte uppdateras:',
+                          error
                         );
                       }
-                    } catch (error) {
-                      console.warn(
-                        'Firestore-importen sparades, men Express-spegeln kunde inte uppdateras:',
-                        error
-                      );
                     }
                     setCourses(nextCourses);
                     setClasses(nextClasses);

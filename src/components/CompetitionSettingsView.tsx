@@ -28,6 +28,7 @@ import {
   type ParsedIofClassAssignment,
   type ParsedIofCourse,
 } from '../utils/iofXml';
+import { parseEventorXml, type ParsedEventorRunner } from '../utils/eventorXml';
 
 interface CompetitionSettingsViewProps {
   isAdmin?: boolean;
@@ -35,16 +36,21 @@ interface CompetitionSettingsViewProps {
   availableSeriesNames: string[];
   eventor: EventorIntegrationStatus;
   runnerDbCount: number;
-  onUpdateCompetition: (patch: Partial<CompetitionMeta>) => Promise<void>;
+  onUpdateCompetition: (
+    patch: Partial<CompetitionMeta>,
+    options?: { firestoreOnly?: boolean }
+  ) => Promise<void>;
   onOpenPublicPortal: () => void;
   onUpdateEventorSettings: (patch: { autoCreateFromRunnerDbOnReadout: boolean }) => Promise<void>;
   onSyncEventorClub: () => Promise<{
     ok: boolean;
     message: string;
+    fallbackAvailable?: boolean;
   }>;
   onImportEventorEvent: (eventId: string) => Promise<{
     ok: boolean;
     message: string;
+    fallbackAvailable?: boolean;
     event?: {
       name: string;
       organizer: string | null;
@@ -76,12 +82,13 @@ interface CompetitionSettingsViewProps {
       defaultClassName?: string | null;
       eventorPersonId?: string | null;
     }[];
-  }) => Promise<{
+  }, options?: { firestoreOnly?: boolean }) => Promise<{
     addedCourses: number;
     addedClasses: number;
     addedEntries: number;
     syncedRunnerDb?: number;
   }>;
+  onImportEventorRunnerDb: (runners: ParsedEventorRunner[]) => Promise<number>;
 }
 
 export function CompetitionSettingsView({
@@ -96,6 +103,7 @@ export function CompetitionSettingsView({
   onSyncEventorClub,
   onImportEventorEvent,
   onImportIofBatch,
+  onImportEventorRunnerDb,
 }: CompetitionSettingsViewProps) {
   // Competition form state
   const [compName, setCompName] = useState(competition.name);
@@ -115,6 +123,10 @@ export function CompetitionSettingsView({
   const [eventorFeedback, setEventorFeedback] = useState<{ ok: boolean; msg: string } | null>(
     null
   );
+  const [eventorFileFallbackMode, setEventorFileFallbackMode] = useState<
+    'event' | 'club' | null
+  >(null);
+  const [eventorFileDragging, setEventorFileDragging] = useState(false);
 
   // IOF XML Import state
   const [xmlBusy, setXmlBusy] = useState(false);
@@ -174,9 +186,11 @@ export function CompetitionSettingsView({
   const handleSyncClubClick = async () => {
     setEventorBusy(true);
     setEventorFeedback(null);
+    setEventorFileFallbackMode(null);
     try {
       const res = await onSyncEventorClub();
       setEventorFeedback({ ok: res.ok, msg: res.message });
+      setEventorFileFallbackMode(res.fallbackAvailable ? 'club' : null);
     } finally {
       setEventorBusy(false);
     }
@@ -187,20 +201,24 @@ export function CompetitionSettingsView({
     if (!eventorEventId.trim()) return;
     setEventorBusy(true);
     setEventorFeedback(null);
+    setEventorFileFallbackMode(null);
     try {
       const res = await onImportEventorEvent(eventorEventId.trim());
       if (!res.ok) {
         setEventorFeedback({ ok: false, msg: res.message });
+        setEventorFileFallbackMode(res.fallbackAvailable ? 'event' : null);
         return;
       }
       if (res.event && res.importBatch) {
-        const importResult = await onImportIofBatch(res.importBatch);
+        const importResult = await onImportIofBatch(res.importBatch, {
+          firestoreOnly: true,
+        });
         const metadataPatch: Partial<CompetitionMeta> = { name: res.event.name };
         if (res.event.organizer) metadataPatch.organizer = res.event.organizer;
         if (res.event.date && /^\d{4}-\d{2}-\d{2}$/.test(res.event.date)) {
           metadataPatch.date = res.event.date;
         }
-        await onUpdateCompetition(metadataPatch);
+        await onUpdateCompetition(metadataPatch, { firestoreOnly: true });
         setEventorFeedback({
           ok: true,
           msg: `Hämtade "${res.event.name}" från Eventor: +${importResult.addedClasses} klasser och +${importResult.addedEntries} anmälda deltagare.`,
@@ -212,6 +230,75 @@ export function CompetitionSettingsView({
       setEventorFeedback({
         ok: false,
         msg: error instanceof Error ? error.message : 'Kunde inte importera tävlingen från Eventor.',
+      });
+    } finally {
+      setEventorBusy(false);
+    }
+  };
+
+  const handleImportEventorXmlFile = async (file: File) => {
+    setEventorBusy(true);
+    setEventorFeedback(null);
+    try {
+      if (!file.name.toLowerCase().endsWith('.xml')) {
+        throw new Error('Välj en XML-fil som har hämtats från Eventor.');
+      }
+      const parsed = parseEventorXml(await file.text());
+      if (eventorFileFallbackMode === 'club') {
+        if (parsed.runnerDbEntries.length === 0) {
+          throw new Error('XML-filen innehåller inga löpare med SI-brickor.');
+        }
+        const syncedCount = await onImportEventorRunnerDb(parsed.runnerDbEntries);
+        setEventorFeedback({
+          ok: true,
+          msg: `Importerade ${syncedCount} löpare från "${file.name}" till Löpardatabasen.`,
+        });
+      } else {
+        if (parsed.entries.length === 0) {
+          throw new Error('XML-filen innehåller ingen Eventor-anmälningslista.');
+        }
+        const importResult = await onImportIofBatch(
+          {
+            courses: [],
+            classes: parsed.classes.map((eventClass) => ({
+              name: eventClass.name,
+              classFormat: 'STANDARD',
+            })),
+            entries: parsed.entries.map((entry) => ({
+              fullName: entry.fullName,
+              club: entry.club,
+              className: entry.className,
+              siNumber: entry.siNumber,
+            })),
+            runnerDbEntries: parsed.runnerDbEntries.map((runner) => ({
+              siNumber: runner.siNumber,
+              fullName: runner.fullName,
+              club: runner.club,
+              birthYear: runner.birthYear,
+              defaultClassName: runner.defaultClassName,
+              eventorPersonId: runner.eventorPersonId,
+            })),
+          },
+          { firestoreOnly: true }
+        );
+        if (parsed.event?.name) {
+          const metadataPatch: Partial<CompetitionMeta> = { name: parsed.event.name };
+          if (parsed.event.organizer) metadataPatch.organizer = parsed.event.organizer;
+          if (parsed.event.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.event.date)) {
+            metadataPatch.date = parsed.event.date;
+          }
+          await onUpdateCompetition(metadataPatch, { firestoreOnly: true });
+        }
+        setEventorFeedback({
+          ok: true,
+          msg: `Importerade "${parsed.event?.name || file.name}" till Firestore: +${importResult.addedClasses} klasser och +${importResult.addedEntries} deltagare.`,
+        });
+      }
+      setEventorFileFallbackMode(null);
+    } catch (error) {
+      setEventorFeedback({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte importera Eventor XML-filen.',
       });
     } finally {
       setEventorBusy(false);
@@ -582,6 +669,46 @@ export function CompetitionSettingsView({
             }`}
           >
             {eventorFeedback.msg}
+          </div>
+        )}
+
+        {eventorFileFallbackMode && (
+          <div
+            onDragOver={(event) => {
+              event.preventDefault();
+              setEventorFileDragging(true);
+            }}
+            onDragLeave={() => setEventorFileDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setEventorFileDragging(false);
+              const file = event.dataTransfer.files[0];
+              if (!eventorBusy && file) void handleImportEventorXmlFile(file);
+            }}
+            className={`rounded-lg border border-dashed p-3 space-y-2 ${
+              eventorFileDragging
+                ? 'border-red-500 bg-red-50 dark:bg-red-950/30'
+                : 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60'
+            }`}
+          >
+            <p className="text-xs text-slate-700 dark:text-slate-300">
+              Kunde inte nå Eventor direkt (CORS/nätverk). Ladda upp Eventor IOF XML-fil
+            </p>
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 rounded-lg cursor-pointer">
+              <Upload className="w-3.5 h-3.5" />
+              {eventorBusy ? 'Importerar...' : 'Välj XML-fil eller släpp den här'}
+              <input
+                type="file"
+                accept=".xml,text/xml,application/xml"
+                disabled={eventorBusy}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void handleImportEventorXmlFile(file);
+                  event.target.value = '';
+                }}
+                className="hidden"
+              />
+            </label>
           </div>
         )}
 

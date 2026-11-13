@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, KeyRound, RefreshCw, Save } from 'lucide-react';
-import { apiFetch, readApiResponseJson } from '../services/authClient';
 import {
   DEFAULT_EVENTOR_BASE_URL,
   readEventorLocalConfig,
   saveEventorLocalConfig,
 } from '../utils/eventorLocalConfig';
+import { fetchEventorXml } from '../utils/eventorClient';
+import { parseEventorXml } from '../utils/eventorXml';
 
 interface Notice {
   ok: boolean;
@@ -64,8 +65,6 @@ export function EventorIntegrationSettingsView() {
   };
 
   const testConnection = async () => {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
     setBusy(true);
     setNotice(null);
     try {
@@ -77,50 +76,35 @@ export function EventorIntegrationSettingsView() {
         throw new Error('Spara ett Eventor Organisations-ID lokalt innan du testar anslutningen.');
       }
 
-      const eventorEndpoint = import.meta.env.DEV
-        ? '/api/eventor/test-connection'
-        : '/api/eventor';
-      const response = await apiFetch(eventorEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...config, action: 'test' }),
-        signal: controller.signal,
-      });
-      const data = await readApiResponseJson<{
-        success?: boolean;
-        message?: string;
-        error?: string;
-        orgId?: string;
-        orgName?: string;
-      }>(
-        response,
-        'Anslutningen till Eventor misslyckades. Kontrollera serveranslutningen och försök igen.',
-        true
+      const [organizationXml] = await fetchEventorXml(
+        ['/organisation/apiKey'],
+        config
       );
-      if (!data.success) {
+      const { organization } = parseEventorXml({
+        organizationXml,
+        fallbackOrgId: config.orgId,
+      });
+      if (!organization) {
+        throw new Error('Eventor returnerade inte läsbara organisationsuppgifter.');
+      }
+      if (organization.orgId !== config.orgId.trim()) {
         throw new Error(
-          data.error || data.message || 'Eventor kunde inte bekräfta anslutningen.'
+          `API-nyckeln hör till organisation ${organization.orgId} (${organization.orgName}), inte angivet organisations-ID ${config.orgId.trim()}.`
         );
       }
       setNotice({
         ok: true,
-        message: data.orgName
-          ? `${data.message || 'Anslutning lyckades'}\nKlubb: ${data.orgName}\nOrganisation-ID: ${data.orgId || config.orgId}`
-          : data.message || 'Anslutning lyckades',
+        message: `Anslutning lyckades!\nKlubb: ${organization.orgName}\nOrganisation-ID: ${organization.orgId}`,
       });
     } catch (error) {
       setNotice({
         ok: false,
-        message: controller.signal.aborted
-          ? 'Eventor svarade inte inom 10 sekunder. Försök igen om en stund.'
-          : error instanceof TypeError
-            ? `Nätverksfel: Backend svarar inte. ${error.message}`
-            : error instanceof Error
-              ? error.message
-              : 'Anslutningen till Eventor misslyckades.',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Anslutningen till Eventor misslyckades.',
       });
     } finally {
-      window.clearTimeout(timeoutId);
       setBusy(false);
     }
   };
