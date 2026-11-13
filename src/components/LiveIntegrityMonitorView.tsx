@@ -16,15 +16,34 @@ import {
 import type { SIAssignmentInventoryReport } from '../utils/siAssignmentInventory';
 
 const SCAN_INTERVAL_MS = 5 * 60 * 1000;
+const DISMISSED_FINDING_KEYS_STORAGE_KEY = 'passersi_live_integrity_dismissed_keys';
+
+function readDismissedFindingKeys(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+
+  try {
+    const storedKeys = window.localStorage.getItem(
+      DISMISSED_FINDING_KEYS_STORAGE_KEY
+    );
+    if (!storedKeys) return new Set();
+
+    const parsed: unknown = JSON.parse(storedKeys);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((key): key is string => typeof key === 'string'))
+      : new Set();
+  } catch (error) {
+    console.warn('Could not read dismissed integrity alerts from local storage.', error);
+    return new Set();
+  }
+}
 
 export function LiveIntegrityMonitorView() {
   const [report, setReport] = useState<SIAssignmentInventoryReport | null>(null);
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dismissedFindingKeys, setDismissedFindingKeys] = useState<Set<string>>(
-    () => new Set()
-  );
+  const [dismissedFindingKeys, setDismissedFindingKeys] =
+    useState<Set<string>>(readDismissedFindingKeys);
   const [showDismissedFindings, setShowDismissedFindings] = useState(false);
   const mountedRef = useRef(true);
   const scanInFlightRef = useRef(false);
@@ -78,6 +97,9 @@ export function LiveIntegrityMonitorView() {
   const visibleActiveFindings = findings?.activeFindings.filter(
     (finding) => !dismissedFindingKeys.has(getLiveIntegrityFindingKey(finding))
   ) ?? [];
+  const visibleActiveFindingKeys = visibleActiveFindings.map(
+    getLiveIntegrityFindingKey
+  );
   const dismissedFindings = findings?.activeFindings.filter(
     (finding) => dismissedFindingKeys.has(getLiveIntegrityFindingKey(finding))
   ) ?? [];
@@ -119,12 +141,21 @@ export function LiveIntegrityMonitorView() {
   const dismissAllVisibleFindings = () => {
     setDismissedFindingKeys((previous) => {
       const next = new Set(previous);
-      visibleActiveFindings.forEach((finding) =>
-        next.add(getLiveIntegrityFindingKey(finding))
-      );
+      visibleActiveFindingKeys.forEach((key) => next.add(key));
       return next;
     });
   };
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DISMISSED_FINDING_KEYS_STORAGE_KEY,
+        JSON.stringify([...dismissedFindingKeys])
+      );
+    } catch (error) {
+      console.warn('Could not save dismissed integrity alerts to local storage.', error);
+    }
+  }, [dismissedFindingKeys]);
 
   return (
     <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -150,7 +181,7 @@ export function LiveIntegrityMonitorView() {
           </label>
           <button
             type="button"
-            disabled={visibleActiveFindings.length === 0}
+            disabled={visibleActiveFindingKeys.length === 0}
             onClick={dismissAllVisibleFindings}
             className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 disabled:opacity-50 dark:border-amber-800 dark:text-amber-200"
           >
