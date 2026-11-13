@@ -473,6 +473,28 @@ function isBootstrapAdminEmail(email?: string | null): boolean {
   return BOOTSTRAP_ADMIN_EMAILS.includes(clean);
 }
 
+let initError: Error | null = null;
+
+function recordInitializationError(error: unknown): Error {
+  const normalizedError =
+    error instanceof Error ? error : new Error(String(error));
+  initError = normalizedError;
+  return normalizedError;
+}
+
+function hasHealthDiagnosticAccess(req: express.Request): boolean {
+  const expectedToken = process.env.HEALTH_DIAGNOSTIC_TOKEN;
+  const providedToken = req.header('x-health-diagnostic-token');
+  if (!expectedToken || !providedToken) return false;
+
+  const expected = Buffer.from(expectedToken, 'utf8');
+  const provided = Buffer.from(providedToken, 'utf8');
+  return (
+    expected.length === provided.length &&
+    crypto.timingSafeEqual(expected, provided)
+  );
+}
+
 function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: string } {
   try {
     const cfgPath = path.join(__dirname, 'firebase-applet-config.json');
@@ -488,8 +510,9 @@ function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: stri
           'ai-studio-kopiaavoksekreta-4d24d0cc-1fd7-4b98-ba1a-8c6f95c187df',
       };
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    recordInitializationError(error);
+    console.error('Firebase config initialization error:', error);
   }
   return {
     projectId: 'ai-studio-applet-webapp-72c01',
@@ -538,6 +561,7 @@ try {
   }
   isAdminInitialized = getApps().length > 0;
 } catch (err) {
+  recordInitializationError(err);
   console.error('Firebase Admin initialization error:', err);
 }
 
@@ -2525,8 +2549,26 @@ export const app = express();
 
 async function startServer() {
   app.use(express.json({ limit: '5mb' }));
-  app.get('/api/health', (_req, res) => {
-    res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+  app.get('/api/health', (req, res) => {
+    if (!initError) {
+      res.status(200).json({
+        success: true,
+        status: 'ok',
+        time: new Date().toISOString(),
+      });
+      return;
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'API server initialization failed.',
+      ...(hasHealthDiagnosticAccess(req)
+        ? {
+            details: initError.message,
+            stack: initError.stack ?? '',
+          }
+        : {}),
+    });
   });
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
@@ -6623,5 +6665,6 @@ async function startServer() {
 }
 
 void startServer().catch((error: unknown) => {
+  recordInitializationError(error);
   console.error('Server initialization error:', error);
 });
