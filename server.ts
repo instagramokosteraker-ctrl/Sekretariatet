@@ -6,7 +6,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { applicationDefault, cert, getApps, initializeApp } from 'firebase-admin/app';
+import {
+  applicationDefault,
+  cert,
+  getApps,
+  initializeApp,
+  type Credential,
+  type ServiceAccount,
+} from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import {
   calculateSeriesStandings,
@@ -501,16 +508,24 @@ const hasAdminCredentials = Boolean(
     process.env.FIRESTORE_EMULATOR_HOST
 );
 
-if (!getApps().some((app) => app.name === FIREBASE_ADMIN_APP_NAME)) {
-  if (!hasAdminCredentials) {
-    console.warn('Firebase Admin SDK not initialized: missing credentials');
-  } else {
-    try {
-      const credential = process.env.FIREBASE_SERVICE_ACCOUNT
-        ? cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
-        : process.env.GOOGLE_APPLICATION_CREDENTIALS
-          ? applicationDefault()
-          : undefined;
+if (!getApps().length) {
+  try {
+    let credential: Credential | undefined;
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      const serviceAccount = JSON.parse(
+        process.env.FIREBASE_SERVICE_ACCOUNT
+      ) as ServiceAccount & { private_key?: string };
+      if (typeof serviceAccount.private_key === 'string') {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+      }
+      credential = cert(serviceAccount);
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      credential = applicationDefault();
+    } else if (!process.env.FIRESTORE_EMULATOR_HOST) {
+      console.warn('Firebase Admin SDK not initialized: missing credentials');
+    }
+
+    if (hasAdminCredentials) {
       initializeApp(
         {
           projectId: FIREBASE_PROJECT_ID,
@@ -518,9 +533,9 @@ if (!getApps().some((app) => app.name === FIREBASE_ADMIN_APP_NAME)) {
         },
         FIREBASE_ADMIN_APP_NAME
       );
-    } catch {
-      console.warn('Firebase Admin SDK not initialized: missing credentials');
     }
+  } catch (err) {
+    console.error('Firebase Admin initialization error:', err);
   }
 }
 
@@ -4992,7 +5007,7 @@ async function startServer() {
         res.status(500).json({
           success: false,
           error:
-            'Firebase Admin SDK saknar miljövariabler i Vercel (FIREBASE_SERVICE_ACCOUNT).',
+            'Firebase Admin SDK inte initierat. Kontrollera FIREBASE_SERVICE_ACCOUNT i Vercel.',
         });
         return;
       }
