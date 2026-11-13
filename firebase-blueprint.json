@@ -377,7 +377,7 @@
     },
     "ClubSettings": {
       "title": "ClubSettings",
-      "description": "Public club configuration including Eventor organisation ID, payment settings, rental card fees, and active season state. Eventor API credentials are stored separately in the admin-only EventorPrivateSettings subdocument.",
+      "description": "Public club configuration including Eventor organisation ID, payment settings, rental card fees, and active season state. Eventor API credentials are not stored in Firestore.",
       "type": "object",
       "properties": {
         "settingId": {
@@ -523,17 +523,17 @@
     },
     "EventorPrivateSettings": {
       "title": "EventorPrivateSettings",
-      "description": "Admin-only configuration and connection metadata stored at /clubSettings/default/private/eventor. Never include API credentials in public club settings or client state.",
+      "description": "Legacy admin-only configuration and connection metadata at /clubSettings/default/private/eventor. The application no longer reads or writes this document; Eventor request settings are stored per-device in browser localStorage.",
       "type": "object",
       "properties": {
         "apiKey": {
           "type": "string",
-          "description": "Eventor API key; readable and writable only by SUPER_ADMIN and RACE_ADMIN.",
+          "description": "Legacy Eventor API key field; the application no longer reads or writes it.",
           "maxLength": 512
         },
         "orgId": {
           "type": "string",
-          "description": "Configured Eventor organisation ID.",
+          "description": "Legacy Eventor organisation ID field; the application no longer reads or writes it.",
           "maxLength": 32
         },
         "baseUrl": {
@@ -1132,7 +1132,7 @@
     },
     "/clubSettings/default/private/eventor": {
       "schema": { "$ref": "#/entities/EventorPrivateSettings" },
-      "description": "Private Eventor credentials and connection metadata; only SUPER_ADMIN and RACE_ADMIN may read or write."
+      "description": "Legacy private Eventor settings document, no longer read or written by the application; access remains restricted to SUPER_ADMIN and RACE_ADMIN."
     },
     "/competitions/{competitionId}": {
       "schema": { "$ref": "#/entities/CloudCompetition" },

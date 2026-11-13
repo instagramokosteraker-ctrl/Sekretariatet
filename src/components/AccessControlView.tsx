@@ -2544,23 +2544,7 @@ export function AccessControlView({
 
       {view === 'admin' && subTab === 'drift_monitor' && <LiveIntegrityMonitorView />}
 
-      {view === 'admin' && subTab === 'eventor' && (
-        <EventorIntegrationSettingsView
-          onSaveOrgId={async (orgId) => {
-            await saveClubSettingsToFirestore({ eventorOrgId: orgId }, isSuperAdmin);
-            const response = await apiFetch('/api/club-settings', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ eventorOrgId: orgId }),
-            });
-            await ensureApiResponseOk(
-              response,
-              'Kunde inte uppdatera klubbens organisations-ID.'
-            );
-            onUpdateClubSettings?.({ ...clubSettings, eventorOrgId: orgId });
-          }}
-        />
-      )}
+      {view === 'admin' && subTab === 'eventor' && <EventorIntegrationSettingsView />}
 
       {/* =====================================================================
           TAB 3: KLUBBPROFIL, LOGOTYP, GRUNDUTSEENDE & SWISH

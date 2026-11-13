@@ -9,7 +9,7 @@ Last updated: 2026-11-10
 - **Cloud data:** Firestore is used for role data, club settings, runner database records, competition metadata, courses, classes, and cloud season synchronization. `clubSettings/default.activeEventId`, `clubName`, branding settings (`portalTitle`, `logoDataUrl`, `customBgColor`, `customTextColor`, `customAccentColor`), `eventorOrgId`, fee defaults (`defaultDirectEntryFeeSek`, `rentalCardFeeSek`, `missingRentalFeeSek`), `runnerDb/{siNumber}`, and competition metadata, courses, and classes are canonical in Firestore. Express `seasonDb` values remain temporary compatibility mirrors for existing routes. Competition organizers are competition-owned data.
 - **Fees:** Swish configuration and Swish-specific UI have been removed. Generic fee tracking remains available under `feeTrackingEnabled`; older competition documents are read compatibly and new documents use only the renamed field.
 - **Backend:** The Express application in `server.ts` still exists and serves API routes, serves the production frontend when configured to do so, and hosts the `/api/ws` WebSocket endpoint. It also retains server-side integration and persistence responsibilities.
-- **Eventor:** Eventor settings are managed in the administration UI and stored privately in Firestore. Eventor calls have **not** been migrated to Firebase Functions and still depend on the Express backend.
+- **Eventor:** API key, organization ID, and base URL are stored in browser `localStorage`. The authenticated Express backend receives them only for explicit Eventor test/sync requests and does not persist them in Firestore. Eventor calls have **not** been migrated to Firebase Functions.
 - **ROC:** ROC polling remains in the Express backend.
 - **Realtime state:** WebSocket state distribution remains in place; Firestore listeners have not replaced it.
 
@@ -90,7 +90,7 @@ Move or disable the remaining writers behind the trusted atomic path. Run the Fi
 ### Phase 5 — Move Eventor calls to Firebase Functions
 
 **Status:** Not started  
-**Purpose:** Route Eventor operations through authenticated, role-checked Firebase Functions. Keep the API key server-side and read the private Eventor settings from Firestore. Retire the corresponding Express routes after the Functions are validated.
+**Purpose:** Route Eventor operations through authenticated, role-checked Firebase Functions. Preserve the current device-local credential model without persisting the API key in Firestore. Retire the corresponding Express routes after the Functions are validated.
 
 ### Phase 5 — Move ROC polling to Firebase Functions
 
@@ -121,7 +121,7 @@ The target is **Vercel + Firestore + Firebase Functions**, with no separately ho
 - PIN authentication is deprecated and its legacy backend routes have been removed.
 - Google Login through Firebase Auth is the only supported login mechanism.
 - Authorization is based on Firestore role assignments; the existing roles remain in use: `SUPER_ADMIN`, `RACE_ADMIN`, `START`, `READOUT`, `FOREST`, and `SPEAKER`.
-- Eventor API credentials must remain private and must not be exposed to ordinary users or sent to the frontend.
+- Eventor API credentials are stored per-device in browser `localStorage`, not Firestore. Only administrators can invoke the backend Eventor test/sync routes, which receive credentials for those requests and do not persist them.
 - Eventor migration to Firebase Functions has **not** started.
 - ROC migration to Firebase Functions has **not** started.
 - WebSocket replacement with Firestore listeners has **not** started.

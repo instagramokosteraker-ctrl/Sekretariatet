@@ -145,6 +145,7 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthGateView } from './components/AuthGateView';
 import { AccessControlView } from './components/AccessControlView';
 import { applyClubThemeToDocument } from './utils/clubTheme';
+import { readEventorLocalConfig } from './utils/eventorLocalConfig';
 import {
   buildEffectiveCourseImportBatch,
   parseIofXmlDocument,
@@ -2933,7 +2934,11 @@ export default function App() {
                   }}
                   onSyncEventorClub={async () => {
                     try {
-                      const res = await apiFetch('/api/eventor/sync-club', { method: 'POST' });
+                      const res = await apiFetch('/api/eventor/sync-club', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(readEventorLocalConfig()),
+                      });
                       const data = await readApiResponseJson<{
                         orgName?: string;
                         syncedRunners?: number;

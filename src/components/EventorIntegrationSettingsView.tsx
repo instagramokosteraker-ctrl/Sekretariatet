@@ -1,85 +1,62 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, KeyRound, RefreshCw, Save } from 'lucide-react';
 import { apiFetch, readApiResponseJson } from '../services/authClient';
-
-interface EventorAdminConfig {
-  apiKeyConfigured: boolean;
-  orgId: string;
-  baseUrl: string;
-  connectedOrgId: string | null;
-  connectedOrgName: string | null;
-  lastSyncedAt: string | null;
-  migrationAvailable: boolean;
-}
+import {
+  DEFAULT_EVENTOR_BASE_URL,
+  readEventorLocalConfig,
+  saveEventorLocalConfig,
+} from '../utils/eventorLocalConfig';
 
 interface Notice {
   ok: boolean;
   message: string;
 }
 
-interface EventorIntegrationSettingsViewProps {
-  onSaveOrgId?: (orgId: string) => Promise<void>;
-}
-
-const DEFAULT_BASE_URL = 'https://eventor.orientering.se/api';
-
-export function EventorIntegrationSettingsView({
-  onSaveOrgId,
-}: EventorIntegrationSettingsViewProps) {
-  const [config, setConfig] = useState<EventorAdminConfig | null>(null);
+export function EventorIntegrationSettingsView() {
   const [apiKey, setApiKey] = useState('');
   const [orgId, setOrgId] = useState('');
-  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_EVENTOR_BASE_URL);
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<Notice | null>(null);
 
-  const loadConfig = async () => {
-    setLoading(true);
+  useEffect(() => {
     try {
-      const response = await apiFetch('/api/eventor/config');
-      const data = await readApiResponseJson<EventorAdminConfig>(
-        response,
-        'Kunde inte läsa Eventor-inställningarna. Kontrollera serveranslutningen och försök igen.'
-      );
-      setConfig(data);
-      setOrgId(data.orgId);
-      setBaseUrl(data.baseUrl || DEFAULT_BASE_URL);
+      const config = readEventorLocalConfig();
+      setApiKey(config.apiKey);
+      setApiKeyConfigured(Boolean(config.apiKey.trim()));
+      setOrgId(config.orgId);
+      setBaseUrl(config.baseUrl || DEFAULT_EVENTOR_BASE_URL);
     } catch (error) {
       setNotice({
         ok: false,
-        message: error instanceof Error ? error.message : 'Kunde inte läsa Eventor-inställningarna.',
+        message: error instanceof Error ? error.message : 'Kunde inte läsa lokala Eventor-inställningar.',
       });
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    void loadConfig();
   }, []);
 
-  const saveConfig = async () => {
+  const saveConfig = () => {
     setBusy(true);
     setNotice(null);
     try {
-      const response = await apiFetch('/api/eventor/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey, orgId, baseUrl }),
-      });
-      await readApiResponseJson<{ saved: boolean }>(
-        response,
-        'Kunde inte spara Eventor-inställningarna. Kontrollera serveranslutningen och försök igen.'
-      );
-      setApiKey('');
-      await onSaveOrgId?.(orgId);
-      setNotice({ ok: true, message: 'Eventor-inställningarna har sparats i Firestore.' });
-      await loadConfig();
+      const config = {
+        apiKey: apiKey.trim(),
+        orgId: orgId.trim(),
+        baseUrl: baseUrl.trim(),
+      };
+      saveEventorLocalConfig(config);
+      setApiKey(config.apiKey);
+      setOrgId(config.orgId);
+      setBaseUrl(config.baseUrl || DEFAULT_EVENTOR_BASE_URL);
+      setApiKeyConfigured(Boolean(config.apiKey));
+      setNotice({ ok: true, message: 'Inställningarna sparades lokalt på denna enhet.' });
     } catch (error) {
       setNotice({
         ok: false,
-        message: error instanceof Error ? error.message : 'Kunde inte spara Eventor-inställningarna.',
+        message: error instanceof Error ? error.message : 'Kunde inte spara lokala Eventor-inställningar.',
       });
     } finally {
       setBusy(false);
@@ -90,7 +67,11 @@ export function EventorIntegrationSettingsView({
     setBusy(true);
     setNotice(null);
     try {
-      const response = await apiFetch('/api/eventor/test', { method: 'POST' });
+      const response = await apiFetch('/api/eventor/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, orgId, baseUrl }),
+      });
       const data = await readApiResponseJson<{
         connected?: boolean;
         orgId?: string;
@@ -103,38 +84,10 @@ export function EventorIntegrationSettingsView({
         ok: true,
         message: `Ansluten till Eventor\nKlubb: ${data.orgName}\nOrganisation-ID: ${data.orgId}`,
       });
-      await loadConfig();
     } catch (error) {
       setNotice({
         ok: false,
         message: error instanceof Error ? error.message : 'Anslutningen till Eventor misslyckades.',
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const migrateLegacy = async () => {
-    setBusy(true);
-    setNotice(null);
-    try {
-      const response = await apiFetch('/api/eventor/migrate-legacy', { method: 'POST' });
-      const data = await readApiResponseJson<{
-        orgName?: string;
-        orgId?: string;
-      }>(
-        response,
-        'Migreringen misslyckades. Kontrollera serveranslutningen och försök igen.'
-      );
-      setNotice({
-        ok: true,
-        message: `Migrerade den befintliga nyckeln till Firestore.\nKlubb: ${data.orgName}\nOrganisation-ID: ${data.orgId}`,
-      });
-      await loadConfig();
-    } catch (error) {
-      setNotice({
-        ok: false,
-        message: error instanceof Error ? error.message : 'Migreringen misslyckades.',
       });
     } finally {
       setBusy(false);
@@ -150,7 +103,7 @@ export function EventorIntegrationSettingsView({
             Eventor-integration
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Inställningarna sparas i ett privat Firestore-dokument. API-nyckeln visas aldrig i appen.
+            API-nyckeln lagras lokalt i din webbläsare och skickas endast med vid Eventor-förfrågningar.
           </p>
         </div>
       </div>
@@ -181,7 +134,7 @@ export function EventorIntegrationSettingsView({
             autoComplete="new-password"
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            placeholder={config?.apiKeyConfigured ? 'Nyckel sparad — lämna tomt för oförändrad' : 'Ange API-nyckel'}
+            placeholder="Ange API-nyckel"
             className="mt-1 w-full px-2.5 py-2 text-xs font-normal bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
           />
         </label>
@@ -203,7 +156,7 @@ export function EventorIntegrationSettingsView({
             type="url"
             value={baseUrl}
             onChange={(event) => setBaseUrl(event.target.value)}
-            placeholder={DEFAULT_BASE_URL}
+            placeholder={DEFAULT_EVENTOR_BASE_URL}
             className="mt-1 w-full px-2.5 py-2 text-xs font-normal font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
           />
         </label>
@@ -213,7 +166,7 @@ export function EventorIntegrationSettingsView({
         <button
           type="button"
           disabled={loading || busy}
-          onClick={() => void saveConfig()}
+          onClick={saveConfig}
           className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 rounded-lg disabled:opacity-50"
         >
           <Save className="w-3.5 h-3.5" />
@@ -228,29 +181,15 @@ export function EventorIntegrationSettingsView({
           <RefreshCw className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`} />
           Testa anslutning
         </button>
-        {config?.migrationAvailable && (
-          <button
-            type="button"
-            disabled={loading || busy}
-            onClick={() => void migrateLegacy()}
-            className="px-3 py-2 text-xs font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 rounded-lg disabled:opacity-50"
-          >
-            Migrera befintlig nyckel
-          </button>
-        )}
       </div>
 
       <div className="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-1 text-xs text-slate-600 dark:text-slate-400">
         <p>
-          Anslutningsstatus:{' '}
-          <strong className={config?.connectedOrgName ? 'text-emerald-700 dark:text-emerald-400' : ''}>
-            {config?.connectedOrgName ? `Ansluten till ${config.connectedOrgName}` : config?.apiKeyConfigured ? 'Inte testad' : 'Inte konfigurerad'}
+          Status:{' '}
+          <strong className={apiKeyConfigured ? 'text-emerald-700 dark:text-emerald-400' : ''}>
+            {apiKeyConfigured ? 'Konfigurerad lokalt' : 'Ej konfigurerad'}
           </strong>
         </p>
-        {config?.lastSyncedAt && (
-          <p>Senaste lyckade synkronisering: {new Date(config.lastSyncedAt).toLocaleString('sv-SE')}</p>
-        )}
-        {config?.connectedOrgId && <p>Organisations-ID: {config.connectedOrgId}</p>}
       </div>
     </section>
   );

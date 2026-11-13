@@ -48,7 +48,7 @@ These are authority migrations, not complete server removals. A Firestore-owned 
 | Emergency settings | Mixed; `ev.emergency` is read and written in Express | Competition documents contain emergency fields and Firestore recalculation exists, but Express routes and calculations remain. |
 | Idempotency state | Mixed; `processedClientIds` in Express, plus Firestore receipts | Receipt IDs provide durable idempotency for Firestore paths. The old array remains needed by legacy routes. |
 | ROC | Express-owned runtime | Express poller, cursor (`lastPunchId`), counters, last poll/error, and settings are in `ev.roc`. It uses the Express punch processor. |
-| Eventor | Split | API key and core integration configuration are private Firestore data; Express still performs Eventor API calls/imports and retains some auto-create/status fields in `seasonDb.eventor`. |
+| Eventor | Split | API key and core integration configuration are stored per-device in browser `localStorage`; authenticated Express routes receive them for explicit Eventor requests and do not persist them. Express retains some auto-create/status fields in `seasonDb.eventor`. |
 | Admin compatibility config | Legacy Express/JSON data | Firestore roles are authoritative for access checks, but the Express admin-management compatibility model still stores `authConfig.admins` in `seasonDb`. |
 | Season flags | Mixed/compatibility | `demoCleared` and legacy season state remain in JSON/snapshots; only the fields needed by current workflows should remain after the cutover. |
 
@@ -164,7 +164,7 @@ Moving ROC requires a managed scheduled/task design, atomic cursor advancement, 
 
 ## 9. Eventor dependencies
 
-The Eventor API key and core configuration are stored privately in Firestore; ordinary clients must not receive the secret. Express currently remains the integration backend for Eventor requests and XML parsing. Club sync and event import also update Express runner/competition/class/competitor mirrors, with Firestore persistence performed in adjacent client or Firestore paths.
+The Eventor API key and core configuration are stored per-device in browser `localStorage`. The authenticated Express backend receives them only for Eventor requests and does not persist them. Express remains the integration backend for Eventor requests and XML parsing. Club sync and event import also update Express runner/competition/class/competitor mirrors, with Firestore persistence performed in adjacent client or Firestore paths.
 
 Remaining work includes:
 
