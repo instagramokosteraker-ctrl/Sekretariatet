@@ -83,7 +83,7 @@ function validateBaseUrl(baseUrl: string): string {
 async function postToEventorProxy(
   request: EventorProxyRequest,
   config: EventorLocalConfig,
-  idToken: string
+  idToken: string | null
 ): Promise<string> {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
@@ -94,7 +94,7 @@ async function postToEventorProxy(
     const response = await fetch('/api/eventor', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${idToken}`,
+        ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -175,10 +175,13 @@ export async function fetchEventorXml(
   const isClubSync = paths.some((path) => path.replace(/^\/+/, '').startsWith('competitors?'));
   const requests = paths.map((path) => getProxyRequest(path, isClubSync));
   const currentUser = auth.currentUser;
-  if (!currentUser) {
+  const requiresAuthentication = requests.some(
+    (request) => request.action !== 'test'
+  );
+  if (!currentUser && requiresAuthentication) {
     throw new Error('Du behöver vara inloggad som administratör.');
   }
-  const idToken = await currentUser.getIdToken();
+  const idToken = currentUser ? await currentUser.getIdToken() : null;
   return Promise.all(
     requests.map((request) => postToEventorProxy(request, config, idToken))
   );
