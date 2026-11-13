@@ -57,6 +57,7 @@ import {
 } from './src/utils/siAssignmentDiagnostics';
 import { hasSameCompetitorIdentitySnapshot } from './src/utils/competitorIdentitySnapshot';
 import { protectCloudHydratedCompetitors } from './src/utils/cloudHydrateCompetitorFence';
+import { calculateClassStartDraw } from './src/utils/startListDraw';
 
 let initError: Error | null = null;
 
@@ -714,13 +715,13 @@ function secToClock(sec: number): string {
 }
 
 function parseClockStrToSec(clock: string): number | null {
-  const m = clock.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  const ss = m[3] ? Number(m[3]) : 0;
-  if (hh > 23 || mm > 59 || ss > 59) return null;
-  return hh * 3600 + mm * 60 + ss;
+  const match = clock.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = match[3] ? Number(match[3]) : 0;
+  if (hours > 23 || minutes > 59 || seconds > 59) return null;
+  return hours * 3600 + minutes * 60 + seconds;
 }
 
 function durToMmSs(sec: number): string {
@@ -2062,50 +2063,6 @@ function generateShortCode(existingCodes: Set<string>): string {
     if (!existingCodes.has(code)) return code;
   }
   return `ev${Date.now().toString(36).slice(-4)}`;
-}
-
-/**
- * Greedy club-separation interleaver for Orienteering Start List Draws (Minutstart):
- * Avoids consecutive runners from the same club whenever mathematically possible.
- */
-function shuffleWithClubSeparation(runners: Competitor[]): Competitor[] {
-  const pool = [...runners];
-  // Fisher-Yates shuffle first
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-
-  const result: Competitor[] = [];
-  while (pool.length > 0) {
-    const prevClub =
-      result.length > 0 ? result[result.length - 1].club.trim().toLowerCase() : null;
-
-    // Count remaining runners per club so largest clubs are placed proactively
-    const clubCounts = new Map<string, number>();
-    for (const r of pool) {
-      const k = r.club.trim().toLowerCase();
-      clubCounts.set(k, (clubCounts.get(k) ?? 0) + 1);
-    }
-
-    // Pick candidate from a different club than prevClub, preferring clubs with highest remaining count
-    let bestIdx = -1;
-    let bestCount = -1;
-    for (let i = 0; i < pool.length; i++) {
-      const cKey = pool[i].club.trim().toLowerCase();
-      if (cKey !== prevClub) {
-        const cnt = clubCounts.get(cKey) ?? 0;
-        if (cnt > bestCount) {
-          bestCount = cnt;
-          bestIdx = i;
-        }
-      }
-    }
-
-    if (bestIdx === -1) bestIdx = 0;
-    result.push(pool.splice(bestIdx, 1)[0]);
-  }
-  return result;
 }
 
 export const app = express();
@@ -4360,63 +4317,32 @@ async function startServer() {
       return;
     }
 
-    const firstSec = parseClockStrToSec(firstStartClock) ?? db.competition.zeroTimeSec;
-    const stepSec = Math.max(15, Number(intervalSec) || 120);
-    const vacCount = Math.max(0, Math.min(20, Math.floor(Number(vacancies) || 0)));
-
-    const eligible = db.competitors.filter((c) => {
-      if (c.classId !== cls.id) return false;
-      if (includeAlreadyStarted) return true;
-      return c.status === 'REGISTERED' || c.status === 'DNS' || c.status === 'CHECKED';
+    const drawPlan = calculateClassStartDraw(db.competitors, {
+      classId: cls.id,
+      mode,
+      firstStartClock,
+      intervalSec,
+      vacancies,
+      clubSeparation,
+      includeAlreadyStarted,
+      defaultFirstStartSec: db.competition.zeroTimeSec,
     });
-
-    const vacantStartTimes: string[] = [];
-
-    if (mode === 'FREE') {
-      cls.freeStart = true;
-      for (const r of eligible) {
-        r.allocatedStartSec = null;
-      }
-    } else if (mode === 'MASS') {
-      cls.freeStart = false;
-      for (const r of eligible) {
-        r.allocatedStartSec = firstSec;
-      }
-    } else {
-      cls.freeStart = false;
-      const ordered = clubSeparation
-        ? shuffleWithClubSeparation(eligible)
-        : shuffleWithClubSeparation(eligible); // Note: if !clubSeparation, pure Fisher-Yates below
-
-      let finalOrder = ordered;
-      if (!clubSeparation) {
-        finalOrder = [...eligible];
-        for (let i = finalOrder.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [finalOrder[i], finalOrder[j]] = [finalOrder[j], finalOrder[i]];
-        }
-      }
-
-      // Reserve vacant start slots first (standard Swedish Eventor/MeOS convention for late entries)
-      let cursorSec = firstSec;
-      for (let v = 0; v < vacCount; v++) {
-        vacantStartTimes.push(secToClock(cursorSec));
-        cursorSec += stepSec;
-      }
-
-      for (const r of finalOrder) {
-        r.allocatedStartSec = cursorSec;
-        cursorSec += stepSec;
-      }
+    cls.freeStart = drawPlan.freeStart;
+    const competitorsById = new Map(
+      db.competitors.map((competitor) => [competitor.id, competitor])
+    );
+    for (const allocation of drawPlan.allocations) {
+      const competitor = competitorsById.get(allocation.competitorId);
+      if (competitor) competitor.allocatedStartSec = allocation.allocatedStartSec;
     }
 
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
     res.json({
       className: cls.name,
-      drawnCount: eligible.length,
-      mode,
-      vacantStartTimes,
+      drawnCount: drawPlan.drawnCount,
+      mode: drawPlan.mode,
+      vacantStartTimes: drawPlan.vacantStartTimes,
     });
   });
 

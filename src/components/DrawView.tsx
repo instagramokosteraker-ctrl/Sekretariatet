@@ -36,6 +36,7 @@ interface DrawViewProps {
     drawnCount: number;
     mode: string;
     vacantStartTimes: string[];
+    savedToFirestore?: boolean;
   }>;
 }
 
@@ -92,9 +93,13 @@ export function DrawView({
       });
       setVacantSlotsPreview(res.vacantStartTimes);
       setDrawFeedback(
-        `Lottade ${res.drawnCount} löpare i ${res.className} (${res.mode})${
-          res.vacantStartTimes.length > 0 ? ` + ${res.vacantStartTimes.length} vakanser` : ''
-        }.`
+        res.savedToFirestore
+          ? 'Starttider lottade och sparade i Firestore'
+          : `Lottade ${res.drawnCount} löpare i ${res.className} (${res.mode})${
+              res.vacantStartTimes.length > 0
+                ? ` + ${res.vacantStartTimes.length} vakanser`
+                : ''
+            }.`
       );
     } catch (err: unknown) {
       setDrawFeedback(err instanceof Error ? err.message : 'Kunde inte slutföra lottningen.');

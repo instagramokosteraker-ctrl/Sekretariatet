@@ -98,6 +98,7 @@ import {
   createCompetitionInFirestore,
   saveCompetitionImportToFirestore,
   saveDirectCompetitionEntryToFirestore,
+  saveClassStartDrawToFirestore,
   activateCompetitionInFirestore,
   updateCompetitionMetadataInFirestore,
   saveCourseToFirestore,
@@ -3944,20 +3945,60 @@ export default function App() {
                   classes={classes}
                   competitors={competitors}
                   onDrawClass={async (params) => {
-                    const res = await apiFetch('/api/draw/class', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(params),
-                    });
-                    return await readApiResponseJson<{
-                      className: string;
-                      drawnCount: number;
-                      mode: string;
-                      vacantStartTimes: string[];
-                    }>(
-                      res,
-                      'Kunde inte genomföra lottningen. Kontrollera anslutningen och försök igen.'
-                    );
+                    try {
+                      const res = await apiFetch('/api/draw/class', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(params),
+                      });
+                      return await readApiResponseJson<{
+                        className: string;
+                        drawnCount: number;
+                        mode: string;
+                        vacantStartTimes: string[];
+                      }>(
+                        res,
+                        'Kunde inte genomföra lottningen. Kontrollera anslutningen och försök igen.',
+                        true
+                      );
+                    } catch (error) {
+                      const backendUnavailable =
+                        error instanceof TypeError ||
+                        (error instanceof Error &&
+                          (/^HTTP 5\d\d:/.test(error.message) ||
+                            error.message.includes('API server initialization failed')));
+                      if (!backendUnavailable) throw error;
+
+                      const draw = await saveClassStartDrawToFirestore({
+                        competitionId: activeEventId,
+                        ...params,
+                        defaultFirstStartSec: competition.zeroTimeSec,
+                      });
+                      const allocations = new Map(
+                        draw.allocations.map((allocation) => [
+                          allocation.competitorId,
+                          allocation.allocatedStartSec,
+                        ])
+                      );
+                      setCompetitors((current) =>
+                        current.map((competitor) =>
+                          allocations.has(competitor.id)
+                            ? {
+                                ...competitor,
+                                allocatedStartSec: allocations.get(competitor.id) ?? null,
+                              }
+                            : competitor
+                        )
+                      );
+                      setClasses((current) =>
+                        current.map((classItem) =>
+                          classItem.id === params.classId
+                            ? { ...classItem, freeStart: draw.freeStart }
+                            : classItem
+                        )
+                      );
+                      return { ...draw, savedToFirestore: true };
+                    }
                   }}
                 />
               )}

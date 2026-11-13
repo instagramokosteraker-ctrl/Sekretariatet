@@ -99,6 +99,10 @@ import {
   type CompetitorMutationDeclaration,
   type CompetitorMutationOperation,
 } from './utils/siAssignmentDiagnostics';
+import {
+  calculateClassStartDraw,
+  type StartDrawMode,
+} from './utils/startListDraw';
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -4234,6 +4238,109 @@ export async function saveClassToFirestore(
     rogainingMaxTimeSec: mutable.rogainingMaxTimeSec < 0 ? null : mutable.rogainingMaxTimeSec,
     rogainingPenaltyPerMin:
       mutable.rogainingPenaltyPerMin < 0 ? null : mutable.rogainingPenaltyPerMin,
+  };
+}
+
+export async function saveClassStartDrawToFirestore(params: {
+  competitionId: string;
+  classId: string;
+  mode: StartDrawMode;
+  firstStartClock: string;
+  intervalSec: number;
+  vacancies: number;
+  clubSeparation: boolean;
+  includeAlreadyStarted: boolean;
+  defaultFirstStartSec: number;
+}): Promise<{
+  className: string;
+  mode: StartDrawMode;
+  drawnCount: number;
+  vacantStartTimes: string[];
+  freeStart: boolean;
+  allocations: Array<{ competitorId: string; allocatedStartSec: number | null }>;
+}> {
+  const context = await getCompetitionMutationContext(params.competitionId);
+  const classId = sanitizeFirestoreId(params.classId, 'cls');
+  const classRef = doc(
+    db,
+    'competitions',
+    context.competitionId,
+    'classes',
+    classId
+  );
+  const competitorsRef = collection(
+    db,
+    'competitions',
+    context.competitionId,
+    'competitors'
+  );
+  const [classSnapshot, competitorSnapshots] = await Promise.all([
+    getDoc(classRef),
+    getDocs(competitorsRef),
+  ]);
+  if (!classSnapshot.exists()) {
+    throw new Error('Klassen hittades inte i Firestore.');
+  }
+  const classData = classSnapshot.data();
+  if (classData.ownerUid !== context.ownerUid && !context.isSuperAdmin) {
+    throw new Error('Klassen tillhör ett annat administratörskonto.');
+  }
+
+  const drawPlan = calculateClassStartDraw(
+    competitorSnapshots.docs.map((snapshot) => {
+      const data = snapshot.data();
+      return {
+        id: snapshot.id,
+        classId: typeof data.classId === 'string' ? data.classId : '',
+        club: typeof data.club === 'string' ? data.club : '',
+        status: typeof data.status === 'string' ? data.status : '',
+      };
+    }),
+    {
+      classId,
+      mode: params.mode,
+      firstStartClock: params.firstStartClock,
+      intervalSec: params.intervalSec,
+      vacancies: params.vacancies,
+      clubSeparation: params.clubSeparation,
+      includeAlreadyStarted: params.includeAlreadyStarted,
+      defaultFirstStartSec: params.defaultFirstStartSec,
+    }
+  );
+
+  let batch = writeBatch(db);
+  let batchSize = 0;
+  batch.update(classRef, {
+    freeStart: drawPlan.freeStart,
+    updatedAt: serverTimestamp(),
+  });
+  batchSize++;
+  for (const allocation of drawPlan.allocations) {
+    if (batchSize === 500) {
+      await batch.commit();
+      batch = writeBatch(db);
+      batchSize = 0;
+    }
+    batch.update(
+      doc(
+        db,
+        'competitions',
+        context.competitionId,
+        'competitors',
+        allocation.competitorId
+      ),
+      {
+        allocatedStartSec: encodeNullableSec(allocation.allocatedStartSec),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    batchSize++;
+  }
+  if (batchSize > 0) await batch.commit();
+
+  return {
+    className: typeof classData.name === 'string' ? classData.name : '',
+    ...drawPlan,
   };
 }
 
