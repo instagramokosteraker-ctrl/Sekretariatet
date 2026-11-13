@@ -85,11 +85,12 @@ function parseDocument(xml: string): Document {
     'application/xml'
   );
   if (
-    document.querySelector('parsererror') ||
-    localName(document.documentElement).toLowerCase() === 'html'
+    document.getElementsByTagName('parsererror').length > 0 ||
+    localName(document.documentElement).toLowerCase() === 'parsererror'
   ) {
     throw new Error('Eventor-filen innehåller inte giltig XML.');
   }
+  console.log('Parsed XML Root:', document.documentElement.tagName);
   return document;
 }
 
@@ -174,9 +175,12 @@ function parsePersonEntry(
 ): ParsedEventorEntry | null {
   const person =
     firstElement(element, ['Competitor', 'Person']) ?? element;
-  const given = textFrom(person, ['Given']);
-  const family = textFrom(person, ['Family']);
-  const fullName = `${given} ${family}`.trim().slice(0, 120);
+  const given = textFrom(person, ['Given', 'GivenName', 'FirstName']);
+  const family = textFrom(person, ['Family', 'FamilyName', 'LastName']);
+  const fullName = (
+    `${given} ${family}`.trim() ||
+    textFrom(person, ['PersonName', 'Name'])
+  ).slice(0, 120);
   if (!fullName) return null;
 
   const personId = textFrom(person, ['PersonId', 'Id']).slice(0, 128) || null;
@@ -191,7 +195,18 @@ function parsePersonEntry(
       ? textFrom(organization, ['OrganisationId', 'OrganizationId', 'Id'])
       : '') || fallbackOrgId
   ).slice(0, 32);
-  const entryClass = firstElement(element, ['EntryClass', 'EventClass', 'Class']);
+  let inheritedClass: Element | null = null;
+  let ancestor = element.parentElement;
+  while (ancestor && !inheritedClass) {
+    inheritedClass =
+      Array.from(ancestor.children).find((child) =>
+        ['EventClass', 'Class'].includes(localName(child))
+      ) ?? null;
+    ancestor = ancestor.parentElement;
+  }
+  const entryClass =
+    firstElement(element, ['EntryClass', 'EventClass', 'Class']) ??
+    inheritedClass;
   const classId = entryClass
     ? textFrom(entryClass, ['EventClassId', 'Id'])
     : textFrom(element, ['EventClassId']);
@@ -234,10 +249,19 @@ function parseEntries(
   isCompetitorList = false
 ): { entries: ParsedEventorEntry[]; runnerDbEntries: ParsedEventorRunner[] } {
   if (!document) return { entries: [], runnerDbEntries: [] };
-  const entryElements = elementsByName(
-    document,
-    isCompetitorList ? ['Competitor', 'PersonEntry'] : ['Entry', 'PersonEntry']
-  );
+  const recordNames = isCompetitorList
+    ? ['Competitor', 'PersonEntry']
+    : ['Entry', 'PersonEntry', 'Start', 'Competitor'];
+  const candidateElements = elementsByName(document, recordNames);
+  const candidateSet = new Set(candidateElements);
+  const entryElements = candidateElements.filter((element) => {
+    let ancestor = element.parentElement;
+    while (ancestor) {
+      if (candidateSet.has(ancestor)) return false;
+      ancestor = ancestor.parentElement;
+    }
+    return true;
+  });
   const entries: ParsedEventorEntry[] = [];
   const runners = new Map<number, ParsedEventorRunner>();
   for (const element of entryElements) {
@@ -267,33 +291,54 @@ export function parseEventorXml(
   input: string | EventorXmlDocuments
 ): ParsedEventorXml {
   let source: EventorXmlDocuments;
+  let initialDocument: Document | null = null;
   if (typeof input === 'string') {
-    const document = parseDocument(input);
-    source =
-      localName(document.documentElement) === 'CompetitorList'
-        ? { competitorsXml: input }
-        : { entriesXml: input };
+    initialDocument = parseDocument(input);
+    const rootTag = localName(initialDocument.documentElement);
+    if (rootTag === 'CompetitorList') {
+      source = { competitorsXml: input };
+    } else if (rootTag === 'ClassList') {
+      source = { classesXml: input };
+    } else if (rootTag === 'EntryList' || rootTag === 'StartList') {
+      source = { entriesXml: input, classesXml: input };
+    } else {
+      source = { eventXml: input, classesXml: input, entriesXml: input };
+    }
   } else {
     source = input;
   }
-  const eventDocument = source.eventXml
-    ? parseDocument(source.eventXml)
-    : source.entriesXml
-      ? parseDocument(source.entriesXml)
-      : null;
-  const classesDocument = source.classesXml
-    ? parseDocument(source.classesXml)
-    : source.entriesXml
-      ? parseDocument(source.entriesXml)
-      : null;
-  const entriesDocument = source.entriesXml
-    ? parseDocument(source.entriesXml)
-    : source.competitorsXml
-      ? parseDocument(source.competitorsXml)
-      : null;
-  const organizationDocument = source.organizationXml
-    ? parseDocument(source.organizationXml)
-    : null;
+  const documentCache = new Map<string, Document>();
+  if (typeof input === 'string' && initialDocument) {
+    documentCache.set(input, initialDocument);
+  }
+  const documentFor = (xml?: string): Document | null => {
+    if (!xml) return null;
+    const cached = documentCache.get(xml);
+    if (cached) return cached;
+    const document = parseDocument(xml);
+    documentCache.set(xml, document);
+    return document;
+  };
+  const eventDocument =
+    documentFor(source.eventXml) ??
+    documentFor(source.entriesXml) ??
+    documentFor(source.classesXml);
+  const classesDocument =
+    documentFor(source.classesXml) ??
+    documentFor(source.eventXml) ??
+    documentFor(source.entriesXml);
+  const entriesDocument =
+    documentFor(source.entriesXml) ??
+    documentFor(source.eventXml) ??
+    documentFor(source.classesXml);
+  const competitorsDocument = documentFor(source.competitorsXml);
+  const organizationDocument = documentFor(source.organizationXml);
+  const rootDocument =
+    competitorsDocument ??
+    entriesDocument ??
+    eventDocument ??
+    classesDocument ??
+    organizationDocument;
   const organization = parseOrganization(organizationDocument);
   const effectiveClassesDocument =
     !source.classesXml &&
@@ -312,7 +357,7 @@ export function parseEventorXml(
     classes.filter((eventClass) => eventClass.id).map((eventClass) => [eventClass.id, eventClass.name])
   );
   const parsedEntries = parseEntries(
-    effectiveEntriesDocument,
+    source.competitorsXml ? competitorsDocument : effectiveEntriesDocument,
     classNames,
     organization?.orgId ?? source.fallbackOrgId ?? '',
     organization?.orgName ?? source.fallbackOrgName ?? '',
@@ -329,11 +374,9 @@ export function parseEventorXml(
   return {
     rootTag: source.competitorsXml
       ? 'CompetitorList'
-      : entriesDocument
-        ? localName(entriesDocument.documentElement)
-        : eventDocument
-          ? localName(eventDocument.documentElement)
-          : '',
+      : rootDocument
+        ? localName(rootDocument.documentElement)
+        : '',
     organization,
     event: parseEvent(eventDocument, source.eventId ?? ''),
     classes,

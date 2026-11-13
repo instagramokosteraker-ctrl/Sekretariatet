@@ -2187,9 +2187,13 @@ export default function App() {
       );
       return `Importerade ${importedCount} löpare från "${fileName}" till Löpardatabasen.`;
     }
-    if (parsed.rootTag !== 'EventList' && parsed.rootTag !== 'EntryList') {
+    if (
+      !['Event', 'EventList', 'ClassList', 'EntryList', 'StartList'].includes(
+        parsed.rootTag
+      )
+    ) {
       throw new Error(
-        'Välj en Eventor IOF EventList, EntryList eller CompetitorList XML-fil.'
+        'Välj en Eventor IOF Event, ClassList, EntryList, StartList eller CompetitorList XML-fil.'
       );
     }
     const result = await handleCreateEventorCompetition(
@@ -2197,7 +2201,9 @@ export default function App() {
       'EVENTOR_XML',
       fileName
     );
-    return `Skapade tävlingen "${result.name}" från "${fileName}": +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`;
+    return parsed.entries.length === 0
+      ? 'Tävling och klasser importerade (inga anmälningar i filen).'
+      : `Skapade tävlingen "${result.name}" från "${fileName}": +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`;
   };
 
   // Testbench: build authentic 0xEF (SI10/SIAC), 0xE1 (SI6), or 0xB1 (SI5) binary frames, decode them, and send via offlineReadoutQueue!

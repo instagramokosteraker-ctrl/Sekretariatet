@@ -219,7 +219,10 @@ export function CompetitionSettingsView({
         );
         setEventorFeedback({
           ok: true,
-          msg: `Skapade tävlingen "${importResult.name}" från Eventor: +${importResult.addedClasses} klasser och +${importResult.addedEntries} anmälda deltagare.`,
+          msg:
+            res.parsed.entries.length === 0
+              ? 'Tävling och klasser importerade (inga anmälningar i filen).'
+              : `Skapade tävlingen "${importResult.name}" från Eventor: +${importResult.addedClasses} klasser och +${importResult.addedEntries} anmälda deltagare.`,
         });
         return;
       }
@@ -242,13 +245,12 @@ export function CompetitionSettingsView({
         throw new Error('Välj en XML-fil som har hämtats från Eventor.');
       }
       const xmlText = await file.text();
-      const parsed =
-        eventorFileFallbackMode === 'event'
-          ? parseEventorXml({
-              eventId: eventorEventId.trim(),
-              entriesXml: xmlText,
-            })
-          : parseEventorXml(xmlText);
+      const parsed = eventorFileFallbackMode === 'event'
+        ? parseEventorXml({
+            eventId: eventorEventId.trim(),
+            entriesXml: xmlText,
+          })
+        : parseEventorXml(xmlText);
       if (eventorFileFallbackMode === 'club') {
         if (parsed.runnerDbEntries.length === 0) {
           throw new Error('XML-filen innehåller inga löpare med SI-brickor.');
@@ -259,9 +261,6 @@ export function CompetitionSettingsView({
           msg: `Importerade ${syncedCount} löpare från "${file.name}" till Löpardatabasen.`,
         });
       } else {
-        if (parsed.entries.length === 0) {
-          throw new Error('XML-filen innehåller ingen Eventor-anmälningslista.');
-        }
         const importResult = await onCreateEventorCompetition(
           parsed,
           'EVENTOR_XML',
@@ -269,7 +268,10 @@ export function CompetitionSettingsView({
         );
         setEventorFeedback({
           ok: true,
-          msg: `Skapade tävlingen "${importResult.name}" från XML-filen: +${importResult.addedClasses} klasser och +${importResult.addedEntries} deltagare.`,
+          msg:
+            parsed.entries.length === 0
+              ? 'Tävling och klasser importerade (inga anmälningar i filen).'
+              : `Skapade tävlingen "${importResult.name}" från XML-filen: +${importResult.addedClasses} klasser och +${importResult.addedEntries} deltagare.`,
         });
       }
       setEventorFileFallbackMode(null);
@@ -306,7 +308,10 @@ export function CompetitionSettingsView({
     );
     setXmlFeedback({
       ok: true,
-      msg: `Skapade tävlingen "${result.name}" från "${sourceName}": +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`,
+      msg:
+        parsed.entries.length === 0
+          ? 'Tävling och klasser importerade (inga anmälningar i filen).'
+          : `Skapade tävlingen "${result.name}" från "${sourceName}": +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`,
     });
   };
 
@@ -317,11 +322,13 @@ export function CompetitionSettingsView({
     setXmlFeedback(null);
     try {
       const text = await file.text();
-      const doc = parseIofXmlDocument(text);
-      if (doc.type !== 'CourseData') {
+      const rootTag = new DOMParser().parseFromString(text, 'application/xml')
+        .documentElement.localName;
+      if (rootTag !== 'CourseData') {
         await importParsedEventorXml(parseEventorXml(text), file.name);
         return;
       }
+      const doc = parseIofXmlDocument(text);
       const effectiveBatch = buildEffectiveCourseImportBatch(doc, {
         autoCreateClassesIfMissing: true,
         freeStart: false,
@@ -351,8 +358,11 @@ export function CompetitionSettingsView({
     setXmlBusy(true);
     setXmlFeedback(null);
     try {
-      const doc = parseIofXmlDocument(sampleXml);
-      if (doc.type !== 'CourseData') {
+      const rootTag = new DOMParser().parseFromString(
+        sampleXml,
+        'application/xml'
+      ).documentElement.localName;
+      if (rootTag !== 'CourseData') {
         const parsed = parseEventorXml(sampleXml);
         if (parsed.rootTag === 'CompetitorList') {
           const importedCount = await onImportEventorRunnerDb(parsed.runnerDbEntries);
@@ -389,6 +399,7 @@ export function CompetitionSettingsView({
         });
         return;
       }
+      const doc = parseIofXmlDocument(sampleXml);
       const effectiveBatch = buildEffectiveCourseImportBatch(doc, {
         autoCreateClassesIfMissing: true,
         freeStart: false,
