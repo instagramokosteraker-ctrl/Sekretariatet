@@ -475,24 +475,8 @@ function isBootstrapAdminEmail(email?: string | null): boolean {
 
 let initError: Error | null = null;
 
-function recordInitializationError(error: unknown): Error {
-  const normalizedError =
-    error instanceof Error ? error : new Error(String(error));
-  initError = normalizedError;
-  return normalizedError;
-}
-
-function hasHealthDiagnosticAccess(req: express.Request): boolean {
-  const expectedToken = process.env.HEALTH_DIAGNOSTIC_TOKEN;
-  const providedToken = req.header('x-health-diagnostic-token');
-  if (!expectedToken || !providedToken) return false;
-
-  const expected = Buffer.from(expectedToken, 'utf8');
-  const provided = Buffer.from(providedToken, 'utf8');
-  return (
-    expected.length === provided.length &&
-    crypto.timingSafeEqual(expected, provided)
-  );
+function recordInitializationError(publicMessage: string): void {
+  initError = new Error(publicMessage);
 }
 
 function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: string } {
@@ -511,7 +495,7 @@ function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: stri
       };
     }
   } catch (error) {
-    recordInitializationError(error);
+    recordInitializationError('Firebase configuration could not be loaded.');
     console.error('Firebase config initialization error:', error);
   }
   return {
@@ -561,7 +545,9 @@ try {
   }
   isAdminInitialized = getApps().length > 0;
 } catch (err) {
-  recordInitializationError(err);
+  recordInitializationError(
+    'Firebase Admin SDK initialization failed. Check its Vercel credentials.'
+  );
   console.error('Firebase Admin initialization error:', err);
 }
 
@@ -2549,7 +2535,7 @@ export const app = express();
 
 async function startServer() {
   app.use(express.json({ limit: '5mb' }));
-  app.get('/api/health', (req, res) => {
+  app.get('/api/health', (_req, res) => {
     if (!initError) {
       res.status(200).json({
         success: true,
@@ -2562,12 +2548,7 @@ async function startServer() {
     res.status(500).json({
       success: false,
       error: 'API server initialization failed.',
-      ...(hasHealthDiagnosticAccess(req)
-        ? {
-            details: initError.message,
-            stack: initError.stack ?? '',
-          }
-        : {}),
+      message: initError.message,
     });
   });
   const server = http.createServer(app);
@@ -6665,6 +6646,6 @@ async function startServer() {
 }
 
 void startServer().catch((error: unknown) => {
-  recordInitializationError(error);
+  recordInitializationError('API server initialization failed.');
   console.error('Server initialization error:', error);
 });
