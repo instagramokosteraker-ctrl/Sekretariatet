@@ -9,8 +9,12 @@ import {
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import {
+  collection,
   doc,
+  getDocs,
+  query,
   serverTimestamp,
+  where,
   writeBatch,
   type DocumentData,
 } from 'firebase/firestore';
@@ -129,10 +133,17 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: now,
         updatedAt: now,
       });
+      await adminDb.doc('competitions/evt_owned').set({
+        ownerUid: 'competition_owner_uid',
+      });
     });
 
     const attackerCtx = testEnv.authenticatedContext('attacker_uid', {
       email: 'attacker@example.com',
+      email_verified: true,
+    });
+    const competitionOwnerCtx = testEnv.authenticatedContext('competition_owner_uid', {
+      email: 'owner@example.com',
       email_verified: true,
     });
     const unverifiedBossCtx = testEnv.authenticatedContext('spoof_uid', {
@@ -875,6 +886,24 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
 
     // 12. Blanket List Query Scraping -> DENIED
     await assertFails(attackerCtx.firestore().collection('competitions').get());
+    await assertSucceeds(raceAdminCtx.firestore().collection('competitions').get());
+    await assertSucceeds(
+      getDocs(
+          query(
+            collection(raceAdminCtx.firestore(), 'competitions'),
+            where('ownerUid', '==', 'race_admin_1')
+          )
+      )
+    );
+    await assertFails(competitionOwnerCtx.firestore().collection('competitions').get());
+    await assertSucceeds(
+      getDocs(
+        query(
+          collection(competitionOwnerCtx.firestore(), 'competitions'),
+          where('ownerUid', '==', 'competition_owner_uid')
+        )
+      )
+    );
 
     // 13. SVG XSS / Invalid Hex Color Poisoning on clubSettings/default -> DENIED
     await assertFails(

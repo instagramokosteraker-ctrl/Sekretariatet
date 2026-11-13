@@ -74,6 +74,7 @@ import {
 import { RunnerStatusIndicator } from './StatusLabels';
 import { EventorIntegrationSettingsView } from './EventorIntegrationSettingsView';
 import { SIAssignmentInventoryView } from './SIAssignmentInventoryView';
+import { LiveIntegrityMonitorView } from './LiveIntegrityMonitorView';
 import {
   CLUB_COLOR_PRESETS,
   applyClubThemeToDocument,
@@ -124,6 +125,7 @@ type AdminWorkspaceTab =
   | 'club'
   | 'eventor'
   | 'rentals_series'
+  | 'drift_monitor'
   | 'si_inventory';
 
 const OFFICIAL_ROLE_LABELS: Record<OfficialRole, string> = {
@@ -1779,6 +1781,17 @@ export function AccessControlView({
             </button>
             <button
               type="button"
+              onClick={() => setSubTab('drift_monitor')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'drift_monitor'
+                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              }`}
+            >
+              Drift-larm
+            </button>
+            <button
+              type="button"
               onClick={() => setSubTab('si_inventory')}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 subTab === 'si_inventory'
@@ -2528,6 +2541,8 @@ export function AccessControlView({
       )}
 
       {view === 'admin' && subTab === 'si_inventory' && <SIAssignmentInventoryView />}
+
+      {view === 'admin' && subTab === 'drift_monitor' && <LiveIntegrityMonitorView />}
 
       {view === 'admin' && subTab === 'eventor' && (
         <EventorIntegrationSettingsView

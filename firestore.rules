@@ -1107,7 +1107,11 @@ service cloud.firestore {
     match /competitions/{competitionId} {
       allow get: if isValidId(competitionId);
 
-      allow list: if isVerifiedUser();
+      allow list: if isVerifiedUser() &&
+        (
+          isAdmin() ||
+          resource.data.ownerUid == request.auth.uid
+        );
 
       allow create: if isVerifiedUser() &&
         isValidId(competitionId) &&
