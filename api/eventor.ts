@@ -56,8 +56,8 @@ function buildEventorUrl(
         } else if (url.pathname === '/api/entries') {
           const sanitizedEventId = sanitizeEventId(queryEventId);
           if (!/^\d{1,32}$/.test(sanitizedEventId)) return null;
+          url.search = '';
           url.searchParams.set('eventId', sanitizedEventId);
-          url.searchParams.set('includeDisqualified', 'true');
         }
         return url;
       }
