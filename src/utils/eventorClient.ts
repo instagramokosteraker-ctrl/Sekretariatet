@@ -55,7 +55,7 @@ function getProxyRequest(path: string, isClubSync: boolean): EventorProxyRequest
   if (resource === 'entries' && eventId) {
     return {
       action: 'import-event',
-      url: `entries?eventId=${encodeURIComponent(eventId)}`,
+      url: `export/entries?eventId=${encodeURIComponent(eventId)}&version=3.0`,
       eventId,
     };
   }

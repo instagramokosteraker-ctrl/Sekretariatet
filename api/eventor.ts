@@ -53,11 +53,16 @@ function buildEventorUrl(
           const sanitizedEventId = sanitizeEventId(eventPathMatch[1]);
           if (!/^\d{1,32}$/.test(sanitizedEventId)) return null;
           url.pathname = `/api/event/${sanitizedEventId}`;
-        } else if (url.pathname === '/api/entries') {
+        } else if (
+          url.pathname === '/api/entries' ||
+          url.pathname === '/api/export/entries'
+        ) {
           const sanitizedEventId = sanitizeEventId(queryEventId);
           if (!/^\d{1,32}$/.test(sanitizedEventId)) return null;
+          url.pathname = '/api/export/entries';
           url.search = '';
           url.searchParams.set('eventId', sanitizedEventId);
+          url.searchParams.set('version', '3.0');
         }
         return url;
       }
