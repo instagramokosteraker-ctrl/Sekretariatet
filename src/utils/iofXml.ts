@@ -157,7 +157,7 @@ export interface ParsedIofClassAssignment {
 }
 
 export interface ParsedIofDocument {
-  type: 'CourseData' | 'EntryList' | 'CompetitorList';
+  type: 'CourseData' | 'EntryList' | 'EventList' | 'CompetitorList';
   iofVersion?: '3.0' | '2.0.3';
   eventName?: string;
   creator?: string;
@@ -293,7 +293,7 @@ export function buildEffectiveCourseImportBatch(
 
 /**
  * Parses IOF XML 3.0 & IOF XML 2.0.3 CourseData (Purple Pen / Condes / OCAD),
- * EntryList (Eventor), and CompetitorList (Eventor Löpardatabas) in the browser via DOMParser.
+ * EntryList/EventList (Eventor), and CompetitorList (Eventor Löpardatabas) in the browser via DOMParser.
  */
 export function parseIofXmlDocument(xmlText: string): ParsedIofDocument {
   const sanitized = xmlText.replace(/^\uFEFF/, '').trim();
@@ -557,8 +557,26 @@ export function parseIofXmlDocument(xmlText: string): ParsedIofDocument {
     };
   }
 
-  if (rootTag === 'EntryList') {
+  if (rootTag === 'EntryList' || rootTag === 'EventList') {
     const personEntries = Array.from(doc.getElementsByTagNameNS('*', 'PersonEntry'));
+    const nestedPersonEntries = new Set(
+      personEntries.flatMap((personEntry) => {
+        let parent = personEntry.parentElement;
+        const ancestors: Element[] = [];
+        while (parent && parent !== rootEl) {
+          ancestors.push(parent);
+          parent = parent.parentElement;
+        }
+        return ancestors;
+      })
+    );
+    const standaloneEntries =
+      rootTag === 'EventList'
+        ? Array.from(doc.getElementsByTagNameNS('*', 'Entry')).filter(
+            (entry) => !nestedPersonEntries.has(entry)
+          )
+        : [];
+    const importEntries = [...personEntries, ...standaloneEntries];
     const entries: { fullName: string; club: string; className: string; siNumber: number }[] = [];
     const runnerDbEntries: {
       siNumber: number;
@@ -570,7 +588,19 @@ export function parseIofXmlDocument(xmlText: string): ParsedIofDocument {
     }[] = [];
     const classSet = new Set<string>();
 
-    for (const pe of personEntries) {
+    if (rootTag === 'EventList') {
+      for (const classNode of [
+        ...Array.from(doc.getElementsByTagNameNS('*', 'EventClass')),
+        ...Array.from(doc.getElementsByTagNameNS('*', 'Class')),
+      ]) {
+        const className =
+          classNode.getElementsByTagNameNS('*', 'Name')[0]?.textContent?.trim() ||
+          classNode.getElementsByTagNameNS('*', 'ClassShortName')[0]?.textContent?.trim();
+        if (className) classSet.add(className);
+      }
+    }
+
+    for (const pe of importEntries) {
       const given = pe.getElementsByTagNameNS('*', 'Given')[0]?.textContent?.trim() || '';
       const family = pe.getElementsByTagNameNS('*', 'Family')[0]?.textContent?.trim() || '';
       const fullName = `${given} ${family}`.trim() || 'Okänd anmäld';
@@ -602,7 +632,7 @@ export function parseIofXmlDocument(xmlText: string): ParsedIofDocument {
     }
 
     return {
-      type: 'EntryList',
+      type: rootTag === 'EventList' ? 'EventList' : 'EntryList',
       courses: [],
       classes: Array.from(classSet).map((name) => ({ name })),
       entries,
@@ -678,7 +708,7 @@ export function parseIofXmlDocument(xmlText: string): ParsedIofDocument {
   }
 
   throw new Error(
-    `Rot-elementet <${rootTag}> stöds ej. Importera IOF XML (3.0 eller 2.0.3) <CourseData>, <EntryList> eller <CompetitorList>.`
+    `Rot-elementet <${rootTag}> stöds ej. Importera IOF XML (3.0 eller 2.0.3) <CourseData>, <EntryList>, <EventList> eller <CompetitorList>.`
   );
 }
 

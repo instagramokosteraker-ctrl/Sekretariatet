@@ -28,7 +28,11 @@ import {
   type ParsedIofClassAssignment,
   type ParsedIofCourse,
 } from '../utils/iofXml';
-import { parseEventorXml, type ParsedEventorRunner } from '../utils/eventorXml';
+import {
+  parseEventorXml,
+  type ParsedEventorRunner,
+  type ParsedEventorXml,
+} from '../utils/eventorXml';
 
 interface CompetitionSettingsViewProps {
   isAdmin?: boolean;
@@ -243,7 +247,14 @@ export function CompetitionSettingsView({
       if (!file.name.toLowerCase().endsWith('.xml')) {
         throw new Error('Välj en XML-fil som har hämtats från Eventor.');
       }
-      const parsed = parseEventorXml(await file.text());
+      const xmlText = await file.text();
+      const parsed =
+        eventorFileFallbackMode === 'event'
+          ? parseEventorXml({
+              eventId: eventorEventId.trim(),
+              entriesXml: xmlText,
+            })
+          : parseEventorXml(xmlText);
       if (eventorFileFallbackMode === 'club') {
         if (parsed.runnerDbEntries.length === 0) {
           throw new Error('XML-filen innehåller inga löpare med SI-brickor.');
@@ -305,6 +316,60 @@ export function CompetitionSettingsView({
     }
   };
 
+  const importParsedEventorXml = async (
+    parsed: ParsedEventorXml,
+    sourceName: string
+  ) => {
+    if (parsed.rootTag === 'CompetitorList') {
+      if (parsed.runnerDbEntries.length === 0) {
+        throw new Error('XML-filen innehåller inga löpare med SI-brickor.');
+      }
+      const importedCount = await onImportEventorRunnerDb(parsed.runnerDbEntries);
+      setXmlFeedback({
+        ok: true,
+        msg: `Importerade ${importedCount} löpare från "${sourceName}" till Löpardatabasen.`,
+      });
+      return;
+    }
+
+    const result = await onImportIofBatch(
+      {
+        courses: [],
+        classes: parsed.classes.map((eventClass) => ({
+          name: eventClass.name,
+          classFormat: 'STANDARD',
+        })),
+        entries: parsed.entries.map((entry) => ({
+          fullName: entry.fullName,
+          club: entry.club,
+          className: entry.className,
+          siNumber: entry.siNumber,
+        })),
+        runnerDbEntries: parsed.runnerDbEntries.map((runner) => ({
+          siNumber: runner.siNumber,
+          fullName: runner.fullName,
+          club: runner.club,
+          birthYear: runner.birthYear,
+          defaultClassName: runner.defaultClassName,
+          eventorPersonId: runner.eventorPersonId,
+        })),
+      },
+      { firestoreOnly: true }
+    );
+    if (parsed.event?.name) {
+      const metadataPatch: Partial<CompetitionMeta> = { name: parsed.event.name };
+      if (parsed.event.organizer) metadataPatch.organizer = parsed.event.organizer;
+      if (parsed.event.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.event.date)) {
+        metadataPatch.date = parsed.event.date;
+      }
+      await onUpdateCompetition(metadataPatch, { firestoreOnly: true });
+    }
+    setXmlFeedback({
+      ok: true,
+      msg: `Importerade "${parsed.event?.name || sourceName}" till Firestore: +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`,
+    });
+  };
+
   const handleImportXmlFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -313,6 +378,10 @@ export function CompetitionSettingsView({
     try {
       const text = await file.text();
       const doc = parseIofXmlDocument(text);
+      if (doc.type !== 'CourseData') {
+        await importParsedEventorXml(parseEventorXml(text), file.name);
+        return;
+      }
       const effectiveBatch = buildEffectiveCourseImportBatch(doc, {
         autoCreateClassesIfMissing: true,
         freeStart: false,
@@ -343,6 +412,10 @@ export function CompetitionSettingsView({
     setXmlFeedback(null);
     try {
       const doc = parseIofXmlDocument(sampleXml);
+      if (doc.type !== 'CourseData') {
+        await importParsedEventorXml(parseEventorXml(sampleXml), label);
+        return;
+      }
       const effectiveBatch = buildEffectiveCourseImportBatch(doc, {
         autoCreateClassesIfMissing: true,
         freeStart: false,
