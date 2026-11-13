@@ -19,6 +19,11 @@ const FIREBASE_PROJECT_ID = 'ai-studio-applet-webapp-72c01';
 const FIRESTORE_DATABASE_ID =
   'ai-studio-kopiaavoksekreta-4d24d0cc-1fd7-4b98-ba1a-8c6f95c187df';
 
+function getHeader(req: Request, name: string): string | undefined {
+  const value = req.headers[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value;
+}
+
 function normalizeOrigin(value: string | undefined): string | null {
   if (!value) return null;
   try {
@@ -32,8 +37,10 @@ function isAllowedOrigin(origin: string, req: Request): boolean {
   const parsedOrigin = normalizeOrigin(origin);
   if (!parsedOrigin) return false;
 
-  const host = req.get('host');
-  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0].trim();
+  const host = getHeader(req, 'host');
+  const forwardedProto = getHeader(req, 'x-forwarded-proto')
+    ?.split(',')[0]
+    .trim();
   const requestOrigin = host
     ? normalizeOrigin(`${forwardedProto || (process.env.VERCEL ? 'https' : 'http')}://${host}`)
     : null;
@@ -51,7 +58,7 @@ function isAllowedOrigin(origin: string, req: Request): boolean {
 }
 
 function applyCors(req: Request, res: Response): boolean {
-  const origin = req.get('origin');
+  const origin = getHeader(req, 'origin');
   if (!origin) return true;
   if (!isAllowedOrigin(origin, req)) {
     res.status(403).json({ success: false, error: 'Origin is not allowed.' });
@@ -70,7 +77,8 @@ function applyCors(req: Request, res: Response): boolean {
 }
 
 async function requireEventorAdmin(req: Request, res: Response): Promise<boolean> {
-  const rawToken = req.get('x-passersi-token') || req.get('authorization');
+  const rawToken =
+    getHeader(req, 'x-passersi-token') || getHeader(req, 'authorization');
   const token =
     rawToken?.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken?.trim();
   if (!token) {
