@@ -23,7 +23,7 @@ Required invariants:
 
 ### Firestore owns
 
-- Competitor identity, entry data, registration and payment/rental state.
+- Competitor identity, entry data, registration and rental-return state.
 - The current competitor race-state projection.
 - Immutable readout receipts.
 - Immutable online-punch receipts.
@@ -67,7 +67,7 @@ Keep the existing document path and IDs. A competitor document represents the cu
 - `competitorId`, `competitionId`
 - `bib`, `fullName`, `club`, `classId`
 - `siNumber`, `cardSeries`
-- `isRentalCard`, `isBorrowedCard`, `rentalReturned`, `feePaid`
+- `isRentalCard`, `isBorrowedCard`, `rentalReturned`
 - `isSelfRegistered`, if the feature is confirmed and supported in the application model
 - `allocatedStartSec`
 - `manualFinishTimeSec` and other explicit official overrides, if present
@@ -139,7 +139,7 @@ The captured station function is important historical input. Recalculation must 
 | Current application field | Target treatment |
 |---|---|
 | Identity, bib, class, SI number, name, club, card series | Canonical competitor fields |
-| Rental, borrowed-card, return, payment flags | Canonical competitor fields |
+| Rental, borrowed-card, and return flags | Canonical competitor fields |
 | Allocated start time | Canonical competitor field |
 | Manual finish and explicit official overrides | Canonical competitor fields, separate from calculated values |
 | Status and effective check/start/finish/running times | Materialized current competitor projection; updated through canonical transactions and reproducible where applicable |
@@ -272,7 +272,7 @@ WebSocket may continue carrying compatibility snapshots during rollout, but auth
 
 ### Phase 1 — Non-result competitor fields
 
-- Make low-risk admin mutations such as payment and rental-return flags Firestore-first.
+- Make low-risk admin mutations such as rental-return flags Firestore-first.
 - Mirror only after successful Firestore writes.
 - Verify role rules and preserve existing IDs.
 
@@ -342,7 +342,7 @@ Rollback of the application version can be relatively contained while Express re
 
 Competitors and readouts are Firestore-authoritative only when all of the following hold:
 
-- Every competitor create, update, delete/retire, import, draw, payment/rental change, manual time, punch, and readout path writes Firestore first.
+- Every competitor create, update, delete/retire, import, draw, rental-return change, manual time, punch, and readout path writes Firestore first.
 - The competitor schema preserves all required fields, including borrowed-card semantics.
 - Readout and punch IDs are stable across offline retries and restarts.
 - Known readout receipt and competitor changes are atomic.

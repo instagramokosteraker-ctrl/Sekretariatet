@@ -55,9 +55,6 @@ export type OfficialRoleMode =
 export interface ClubSettings {
   clubName: string;
   eventorOrgId: string;
-  defaultDirectEntryFeeSek: number;
-  rentalCardFeeSek: number;
-  missingRentalFeeSek: number;
   portalTitle?: string;
   logoDataUrl?: string;
   customBgColor?: string;
@@ -79,7 +76,6 @@ export interface CompetitionMeta {
   arenaInfo?: string;
   seriesName?: string;
   allowSelfRegistration?: boolean;
-  feeTrackingEnabled?: boolean;
 }
 
 export interface CompetitionSummary {
@@ -118,7 +114,6 @@ export interface CompClass {
   allowDirectEntry: boolean;
   freeStart: boolean;
   autoMatchCourse: boolean;
-  feeSek: number;
 }
 
 export interface SIStation {
@@ -202,7 +197,6 @@ export interface Competitor {
   isRentalCard: boolean;
   isBorrowedCard?: boolean;
   rentalReturned: boolean;
-  feePaid?: boolean;
   status: RunnerStatus;
   allocatedStartSec: number | null;
   checkTimeSec: number | null;
@@ -232,8 +226,6 @@ export interface RentalCardOverviewItem {
   siNumber: number;
   cardSeries: SICardSeries;
   rentalReturned: boolean;
-  feePaid: boolean;
-  feeTrackingEnabled: boolean;
   status: RunnerStatus;
 }
 
@@ -569,7 +561,6 @@ export interface CloudEventExportItem {
     arenaInfo: string;
     seriesName: string;
     allowSelfRegistration?: boolean;
-    feeTrackingEnabled: boolean;
   };
   courses: Course[];
   classes: CompClass[];

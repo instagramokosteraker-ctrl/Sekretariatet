@@ -1,18 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import QRCode from 'qrcode';
 import {
   ArrowLeft,
   Calendar,
-  Check,
-  Copy,
   MapPin,
   Moon,
-  QrCode,
-  Share2,
   Sun,
   Trophy,
   Wrench,
-  X,
 } from 'lucide-react';
 import type {
   ClubSettings,
@@ -41,10 +35,15 @@ import {
 import { apiWebSocketUrl } from '../services/authClient';
 
 interface PublicPortalViewProps {
-  shortCode: string | null; // null means Season Overview (/publik)
+  shortCode: string | null;
+  competitionId: string | null;
+  classFilter: string | null;
   darkMode: boolean;
   onToggleDarkMode: () => void;
-  onSelectEventShortCode: (shortCode: string | null) => void;
+  onNavigatePublicUrl: (
+    competitionId: string | null,
+    classFilter?: string | null
+  ) => void;
   onSwitchToSecretariat: () => void;
 }
 
@@ -52,9 +51,11 @@ type PublicEventTab = 'RESULTS' | 'STARTLIST';
 
 export function PublicPortalView({
   shortCode,
+  competitionId,
+  classFilter,
   darkMode,
   onToggleDarkMode,
-  onSelectEventShortCode,
+  onNavigatePublicUrl,
   onSwitchToSecretariat,
 }: PublicPortalViewProps) {
   const [apiCompetitionsList, setApiCompetitionsList] = useState<CompetitionSummary[]>([]);
@@ -79,10 +80,7 @@ export function PublicPortalView({
   // Runner detail inline panel
   const [inspectedRunner, setInspectedRunner] = useState<Competitor | null>(null);
 
-  // QR & Share inline footer panel
-  const [qrModalOpen, setQrModalOpen] = useState<boolean>(false);
-  const [qrSvgMarkup, setQrSvgMarkup] = useState<string>('');
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const isRacePage = Boolean(shortCode || competitionId);
 
   const competitionsList = useMemo(() => {
     const firestoreById = new Map(
@@ -107,7 +105,7 @@ export function PublicPortalView({
   const loadData = useCallback(async () => {
     try {
       let firestoreSeason: Awaited<ReturnType<typeof loadFullSeasonFromFirestore>> = null;
-      if (!shortCode) {
+      if (!isRacePage) {
         let overview: PublicSeasonOverviewPayload | null = null;
         try {
           const res = await fetch('/api/public/season');
@@ -151,7 +149,7 @@ export function PublicPortalView({
                   zeroTimeStr: event.competition.zeroTimeStr,
                   arenaInfo: event.competition.arenaInfo,
                   seriesName: event.competition.seriesName,
-                  feeTrackingEnabled: event.competition.feeTrackingEnabled,
+
                   competitorCount: event.competitors.length,
                   finishedCount: event.competitors.filter(
                     (competitor) =>
@@ -168,8 +166,12 @@ export function PublicPortalView({
         }
       } else {
         let payload: PublicRacePayload | null = null;
+        const eventKey = competitionId || shortCode;
+        if (!eventKey) return;
         try {
-          const res = await fetch(`/api/public/events/${encodeURIComponent(shortCode)}`);
+          const res = await fetch(
+            `/api/public/events/${encodeURIComponent(eventKey)}`
+          );
           if (res.ok) {
             payload = (await res.json()) as PublicRacePayload;
           }
@@ -178,7 +180,7 @@ export function PublicPortalView({
         }
 
         if (!payload) {
-          payload = await loadPublicRaceFromFirestore(shortCode);
+          payload = await loadPublicRaceFromFirestore(eventKey);
         }
 
         if (!payload) {
@@ -228,7 +230,7 @@ export function PublicPortalView({
     } finally {
       setLoading(false);
     }
-  }, [shortCode]);
+  }, [competitionId, isRacePage, shortCode]);
 
   useEffect(() => {
     setLoading(true);
@@ -237,7 +239,7 @@ export function PublicPortalView({
   }, [loadData]);
 
   useEffect(() => {
-    if (shortCode) {
+    if (isRacePage) {
       setFirestoreCompetitionsList([]);
       return;
     }
@@ -247,7 +249,23 @@ export function PublicPortalView({
         console.error('Kunde inte prenumerera på publika tävlingar från Firestore:', error);
       }
     );
-  }, [shortCode]);
+  }, [isRacePage]);
+
+  useEffect(() => {
+    if (!raceData) return;
+    if (!classFilter) {
+      setSelectedClassId('ALL');
+      return;
+    }
+
+    const normalizedFilter = classFilter.trim().toLocaleLowerCase();
+    const matchingClass = raceData.classes.find(
+      (cls) =>
+        cls.id === classFilter ||
+        cls.name.trim().toLocaleLowerCase() === normalizedFilter
+    );
+    setSelectedClassId(matchingClass?.id ?? 'ALL');
+  }, [classFilter, raceData]);
 
   useEffect(() => {
     let active = true;
@@ -337,43 +355,6 @@ export function PublicPortalView({
     };
   }, [loadData]);
 
-  // Generate SVG QR code for public portal URL (/publik)
-  const publicEventUrl = useMemo(() => {
-    if (typeof window === 'undefined') return '';
-    return `${window.location.origin}/publik`;
-  }, []);
-
-  const iofResultsXmlUrl = useMemo(() => {
-    if (typeof window === 'undefined') return '';
-    const code = shortCode || raceData?.competition.shortCode;
-    return code
-      ? `${window.location.origin}/api/public/events/${code}/iof-results`
-      : '';
-  }, [shortCode, raceData]);
-
-  useEffect(() => {
-    if (!publicEventUrl) return;
-    let mounted = true;
-    QRCode.toString(publicEventUrl, {
-      type: 'svg',
-      margin: 1,
-      width: 200,
-      color: {
-        dark: '#0f172a',
-        light: '#ffffff',
-      },
-    })
-      .then((svg) => {
-        if (mounted) setQrSvgMarkup(svg);
-      })
-      .catch(() => {
-        // ignore
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [publicEventUrl]);
-
   const effectiveClubSettings = useMemo(() => {
     const settings = raceData?.clubSettings ?? seasonClubSettings;
     return firestoreBranding ? { ...settings, ...firestoreBranding } : settings;
@@ -387,16 +368,6 @@ export function PublicPortalView({
   useEffect(() => {
     applyClubThemeToDocument(effectiveClubSettings, darkMode);
   }, [effectiveClubSettings, darkMode]);
-
-  const copyText = async (key: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 2200);
-    } catch {
-      // ignore
-    }
-  };
 
   const uniqueClubs = useMemo(() => {
     if (!raceData) return [];
@@ -417,7 +388,7 @@ export function PublicPortalView({
   // ============================================================================
   // VIEW A: SEASON OVERVIEW (/publik)
   // ============================================================================
-  if (!shortCode) {
+  if (!isRacePage) {
     const liveList = competitionsList.filter((c) => c.status === 'LIVE');
     const upcomingList = competitionsList.filter((c) => c.status === 'UPCOMING');
     const completedList = competitionsList.filter((c) => c.status === 'COMPLETED');
@@ -443,7 +414,7 @@ export function PublicPortalView({
               <button
                 key={ev.id}
                 type="button"
-                onClick={() => onSelectEventShortCode(ev.shortCode)}
+                onClick={() => onNavigatePublicUrl(ev.id)}
                 className="w-full text-left px-3.5 py-2 hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-3"
               >
                 <div className="min-w-0 flex-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -686,7 +657,7 @@ export function PublicPortalView({
             )}
             <button
               type="button"
-              onClick={() => onSelectEventShortCode(null)}
+              onClick={() => onNavigatePublicUrl(null)}
               className="inline-flex items-center gap-1 text-xs font-medium club-muted text-slate-700 dark:text-slate-300 hover:underline whitespace-nowrap shrink-0"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
@@ -881,7 +852,21 @@ export function PublicPortalView({
                     competitors={filteredCompetitors}
                     radioControls={raceData.radioControls}
                     selectedClassId={selectedClassId}
-                    onSelectClassId={setSelectedClassId}
+                    onSelectClassId={(id) => {
+                      setSelectedClassId(id);
+                      const selectedClass = raceData.classes.find(
+                        (cls) => cls.id === id
+                      );
+                      const currentCompetitionId =
+                        raceData.competition.id || competitionId || shortCode;
+                      if (!currentCompetitionId) return;
+                      onNavigatePublicUrl(
+                        currentCompetitionId,
+                        selectedClass
+                          ? selectedClass.name || selectedClass.id
+                          : null
+                      );
+                    }}
                     onSelectClub={setSelectedClubName}
                     liveUpdates
                     liveUpdateScope={raceData.competition.id}
@@ -1069,108 +1054,10 @@ export function PublicPortalView({
 
       {/* Bottom Action & Share Footer */}
       <footer className="mt-6 club-surface bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
-        <div className="w-full px-2 sm:px-4 py-2.5 space-y-2.5">
-          {qrModalOpen && (
-            <section className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Share2 className="w-4 h-4 club-accent-text shrink-0" />
-                  <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                    Dela publiksida, QR & Livelox
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setQrModalOpen(false)}
-                  className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg shrink-0"
-                  aria-label="Stäng"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
-                {qrSvgMarkup && (
-                  <div className="md:col-span-4 flex flex-col items-center justify-center p-3 bg-white border border-slate-200 rounded-xl">
-                    <div
-                      className="w-32 h-32"
-                      dangerouslySetInnerHTML={{ __html: qrSvgMarkup }}
-                    />
-                    <span className="mt-1.5 text-[11px] font-mono text-slate-600 text-center">
-                      Skanna för Liveresultat
-                    </span>
-                  </div>
-                )}
-
-                <div className="md:col-span-8 space-y-2.5 text-xs min-w-0">
-                  <div>
-                    <label className="block font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Publik länk till liveresultat
-                    </label>
-                    <div className="flex items-center gap-2 min-w-0">
-                      <input
-                        type="text"
-                        readOnly
-                        value={publicEventUrl}
-                        className="min-w-0 flex-1 px-2.5 py-1.5 font-mono text-[11px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void copyText('pub', publicEventUrl)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg whitespace-nowrap shrink-0"
-                      >
-                        {copiedKey === 'pub' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                        <span>{copiedKey === 'pub' ? 'Kopierad' : 'Kopiera'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      IOF XML 3.0 Resultat-URL (Livelox / WinSplits)
-                    </label>
-                    <div className="flex items-center gap-2 min-w-0">
-                      <input
-                        type="text"
-                        readOnly
-                        value={iofResultsXmlUrl}
-                        className="min-w-0 flex-1 px-2.5 py-1.5 font-mono text-[11px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void copyText('iof', iofResultsXmlUrl)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg whitespace-nowrap shrink-0"
-                      >
-                        {copiedKey === 'iof' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                        <span>{copiedKey === 'iof' ? 'Kopierad' : 'Kopiera'}</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
-
+        <div className="w-full px-2 sm:px-4 py-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
               <PWAInstallButton />
-
-              <button
-                type="button"
-                onClick={() => setQrModalOpen((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium club-accent-btn rounded-lg transition-colors whitespace-nowrap shrink-0"
-              >
-                {qrModalOpen ? <X className="w-3.5 h-3.5" /> : <QrCode className="w-3.5 h-3.5" />}
-                <span>{qrModalOpen ? 'Dölj QR' : 'QR & Livelox'}</span>
-              </button>
             </div>
 
             <span className="text-[11px] text-slate-500 dark:text-slate-400">

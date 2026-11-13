@@ -7,7 +7,6 @@ import {
   ArrowDown,
   ArrowUp,
   MapPin,
-  QrCode,
   RefreshCw,
   Sliders,
   Trophy,
@@ -455,7 +454,7 @@ export function CompetitionSettingsView({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            <span>Publiksida & QR</span>
+            <span>Publiksida</span>
           </button>
         </div>
       </div>

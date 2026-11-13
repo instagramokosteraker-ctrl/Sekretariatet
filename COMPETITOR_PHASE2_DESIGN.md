@@ -46,6 +46,8 @@ Phase 1 completed:
 - `feePaid`
 - `rentalReturned`
 
+Current-state note: fee/payment management has been removed from the application. This document records the historical Phase 1 boundary; only rental-card return tracking remains active.
+
 Competitor ownership beyond those fields remains mostly in:
 
 - `seasonDb`

@@ -46,7 +46,6 @@ interface EntriesRegistrationViewProps {
   competitors: Competitor[];
   runnerDb: RunnerDbEntry[];
   clubSettings?: ClubSettings;
-  feeTrackingEnabled?: boolean;
   serialStatus: SerialConnectionStatus;
   onConnectUsb: () => Promise<void>;
   onConnectWebUsb: () => Promise<void>;
@@ -91,7 +90,6 @@ export function EntriesRegistrationView({
   competitors,
   runnerDb,
   clubSettings,
-  feeTrackingEnabled = false,
   serialStatus,
   onConnectUsb,
   onConnectWebUsb,
@@ -117,7 +115,6 @@ export function EntriesRegistrationView({
   const [classId, setClassId] = useState<string>(classes[3]?.id ?? classes[0]?.id ?? '');
   const [isRentalCard, setIsRentalCard] = useState(false);
   const [isBorrowedCard, setIsBorrowedCard] = useState(false);
-  const [feePaid, setFeePaid] = useState(false);
   const [startClock, setStartClock] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,15 +122,6 @@ export function EntriesRegistrationView({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const lastAutoFilledSiRef = useRef<number | null>(null);
-
-  const rentalFeeExtra = clubSettings?.rentalCardFeeSek ?? 30;
-  const defaultEntryFee = clubSettings?.defaultDirectEntryFeeSek ?? 100;
-  const selectedFormClass = useMemo(
-    () => classes.find((c) => c.id === classId) ?? classes[0] ?? null,
-    [classes, classId]
-  );
-  const formCalculatedFeeSek =
-    (selectedFormClass?.feeSek ?? defaultEntryFee) + (isRentalCard ? rentalFeeExtra : 0);
 
   const nameSuggestions = useMemo(() => {
     const query = fullName
@@ -284,7 +272,6 @@ export function EntriesRegistrationView({
       isRentalCard,
       isBorrowedCard,
       runnerProfileId: selectedRunner?.id ?? null,
-      feePaid: feeTrackingEnabled ? feePaid : false,
       allocatedStartSec: allocSec,
       pendingReadout: isLinkingUnknown ? pendingUnknownReadout : undefined,
     });
@@ -310,7 +297,6 @@ export function EntriesRegistrationView({
       setClub('');
       setIsRentalCard(false);
       setIsBorrowedCard(false);
-      setFeePaid(false);
       setStartClock('');
     }
   };
@@ -633,7 +619,6 @@ export function EntriesRegistrationView({
               {classes.map((cls) => (
                 <option key={cls.id} value={cls.id}>
                   {cls.name}
-                  {feeTrackingEnabled ? ` (${cls.feeSek} kr)` : ''}
                   {cls.freeStart ? ' · Fri start' : ''}
                 </option>
               ))}
@@ -659,17 +644,7 @@ export function EntriesRegistrationView({
                 onChange={(e) => setIsRentalCard(e.target.checked)}
                 className="w-3.5 h-3.5 rounded border-slate-300 text-red-600 focus:ring-red-600"
               />
-              <span>
-                {feeTrackingEnabled ? (
-                  <>
-                    Klubbens hyrbricka (
-                    <span className="font-mono tabular-nums">+{rentalFeeExtra} kr</span> · flaggar
-                    vid mål)
-                  </>
-                ) : (
-                  'Klubbens hyrbricka (flaggar vid mål)'
-                )}
-              </span>
+              <span>Klubbens hyrbricka (flaggar vid mål)</span>
             </label>
 
             <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
@@ -681,20 +656,6 @@ export function EntriesRegistrationView({
               />
               <span>Lånad privatbricka (ändra ej ägare i Löpardatabas)</span>
             </label>
-
-            {feeTrackingEnabled && (
-              <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={feePaid}
-                  onChange={(e) => setFeePaid(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-slate-300 text-red-600 focus:ring-red-600"
-                />
-                <span>
-                  Betald (<span className="font-mono tabular-nums">{formCalculatedFeeSek} kr</span>)
-                </span>
-              </label>
-            )}
 
             <div className="flex items-center gap-2 text-xs">
               <span className="text-slate-600 dark:text-slate-400">Valfri starttid (HH:MM:SS):</span>
@@ -736,17 +697,12 @@ export function EntriesRegistrationView({
                   <th className="py-1.5 px-2">Klass</th>
                   <th className="hidden md:table-cell py-1.5 px-2">SI-bricka</th>
                   <th className="hidden lg:table-cell py-1.5 px-2">Starttid</th>
-                  {feeTrackingEnabled && <th className="hidden sm:table-cell py-1.5 px-2">Avgift</th>}
                   <th className="hidden sm:table-cell py-1.5 px-2">Status</th>
                   <th className="py-1.5 pl-2 pr-3.5 text-right">Hantera</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
                 {filteredCompetitors.map((c) => {
-                  const runnerCls = classes.find((cls) => cls.id === c.classId);
-                  const runnerFeeSek =
-                    (runnerCls?.feeSek ?? defaultEntryFee) +
-                    (c.isRentalCard ? rentalFeeExtra : 0);
                   return (
                     <tr
                       key={c.id}
@@ -795,24 +751,6 @@ export function EntriesRegistrationView({
                       <td className="hidden lg:table-cell py-1.5 px-2 font-mono tabular-nums whitespace-nowrap text-slate-600 dark:text-slate-400">
                         {formatSecondsAsClock(c.startTimeSec ?? c.allocatedStartSec)}
                       </td>
-                      {feeTrackingEnabled && (
-                        <td className="hidden sm:table-cell py-1.5 px-2 whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void onUpdateCompetitor(c.id, { feePaid: !c.feePaid })
-                            }
-                            className={`px-2 py-0.5 text-[11px] font-medium rounded border transition-colors whitespace-nowrap shrink-0 ${
-                              c.feePaid
-                                ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/60'
-                                : 'text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800'
-                            }`}
-                          >
-                            <span className="font-mono tabular-nums">{runnerFeeSek} kr</span> ·{' '}
-                            {c.feePaid ? 'Betald' : 'Obet.'}
-                          </button>
-                        </td>
-                      )}
                       <td className="hidden sm:table-cell py-1.5 px-2 whitespace-nowrap">
                         <RunnerStatusIndicator status={c.status} compact />
                       </td>

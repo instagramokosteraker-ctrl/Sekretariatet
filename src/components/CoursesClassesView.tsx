@@ -19,7 +19,6 @@ interface CoursesClassesViewProps {
   courses: Course[];
   classes: CompClass[];
   competitors: Competitor[];
-  feeTrackingEnabled?: boolean;
   onSaveCourse: (payload: Partial<Course>, existingId?: string) => Promise<void>;
   onDeleteCourse: (id: string) => Promise<void>;
   onSaveClass: (payload: Partial<CompClass>, existingId?: string) => Promise<void>;
@@ -40,7 +39,6 @@ export function CoursesClassesView({
   courses,
   classes,
   competitors,
-  feeTrackingEnabled = false,
   onSaveCourse,
   onDeleteCourse,
   onSaveClass,
@@ -65,7 +63,6 @@ export function CoursesClassesView({
   const [rogainingPenaltyPerMin, setRogainingPenaltyPerMin] = useState<string>('10');
   const [freeStart, setFreeStart] = useState(true);
   const [autoMatchCourse, setAutoMatchCourse] = useState(false);
-  const [classFeeSek, setClassFeeSek] = useState('100');
   const [classActionError, setClassActionError] = useState<string | null>(null);
 
   const [importPanelOpen, setImportPanelOpen] = useState(false);
@@ -150,7 +147,6 @@ export function CoursesClassesView({
     setRogainingPenaltyPerMin('10');
     setFreeStart(true);
     setAutoMatchCourse(false);
-    setClassFeeSek('100');
     setClassModalOpen(true);
   };
 
@@ -175,7 +171,6 @@ export function CoursesClassesView({
     );
     setFreeStart(cls.freeStart);
     setAutoMatchCourse(cls.autoMatchCourse);
-    setClassFeeSek(String(cls.feeSek ?? 100));
     setClassModalOpen(true);
   };
 
@@ -242,9 +237,6 @@ export function CoursesClassesView({
           allowDirectEntry: true,
           freeStart,
           autoMatchCourse: classFormat === 'FORKED' ? true : autoMatchCourse,
-          ...(feeTrackingEnabled
-            ? { feeSek: Math.max(0, Math.min(10000, Math.round(Number(classFeeSek) || 0))) }
-            : {}),
         },
         editingClass?.id
       );
@@ -747,21 +739,6 @@ export function CoursesClassesView({
                 </div>
               )}
 
-              {feeTrackingEnabled && (
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                    Startavgift (kr)
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={10000}
-                    value={classFeeSek}
-                    onChange={(e) => setClassFeeSek(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-mono tabular-nums bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg"
-                  />
-                </div>
-              )}
             </div>
 
             {classFormat === 'FORKED' && (
@@ -944,7 +921,6 @@ export function CoursesClassesView({
                   <th className="py-1.5 pl-3.5 pr-2">Klass</th>
                   <th className="py-1.5 px-2">Format / Bana</th>
                   <th className="hidden sm:table-cell py-1.5 px-2">Regler</th>
-                  {feeTrackingEnabled && <th className="py-1.5 px-2 text-right">Avgift</th>}
                   <th className="py-1.5 pl-2 pr-3.5 text-right">Ändra</th>
                 </tr>
               </thead>
@@ -1008,11 +984,6 @@ export function CoursesClassesView({
                           .filter(Boolean)
                           .join(' · ')}
                       </td>
-                      {feeTrackingEnabled && (
-                        <td className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap text-slate-700 dark:text-slate-300">
-                          {cls.feeSek} kr
-                        </td>
-                      )}
                       <td className="py-1.5 pl-2 pr-3.5 text-right">
                         <button
                           type="button"

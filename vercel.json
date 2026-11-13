@@ -8,6 +8,10 @@
     {
       "source": "/api/:path((?!eventor(?:/|$)).*)",
       "destination": "/api"
+    },
+    {
+      "source": "/((?!api(?:/|$)).*)",
+      "destination": "/"
     }
   ]
 }

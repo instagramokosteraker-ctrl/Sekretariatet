@@ -377,7 +377,7 @@
     },
     "ClubSettings": {
       "title": "ClubSettings",
-      "description": "Public club configuration including Eventor organisation ID, payment settings, rental card fees, and active season state. Eventor API credentials are not stored in Firestore.",
+      "description": "Public club configuration including Eventor organisation ID, branding, and active season state. Eventor API credentials are not stored in Firestore.",
       "type": "object",
       "properties": {
         "settingId": {
@@ -398,18 +398,6 @@
           "description": "Optional Swedish Eventor organisation ID.",
           "minLength": 0,
           "maxLength": 32
-        },
-        "defaultDirectEntryFeeSek": {
-          "type": "integer",
-          "description": "Default direct entry fee in SEK."
-        },
-        "rentalCardFeeSek": {
-          "type": "integer",
-          "description": "Additional fee in SEK when borrowing a club rental SI-card."
-        },
-        "missingRentalFeeSek": {
-          "type": "integer",
-          "description": "Replacement charge in SEK noted for unreturned rental SI-cards."
         },
         "portalTitle": {
           "type": "string",
@@ -510,9 +498,6 @@
         "settingId",
         "clubName",
         "eventorOrgId",
-        "defaultDirectEntryFeeSek",
-        "rentalCardFeeSek",
-        "missingRentalFeeSek",
         "activeEventId",
         "demoCleared",
         "competitionIds",
@@ -633,10 +618,6 @@
           "type": "boolean",
           "description": "Whether self registration is enabled for mobile participants."
         },
-        "feeTrackingEnabled": {
-          "type": "boolean",
-          "description": "Whether entry fees and payment tracking are enabled for this competition."
-        },
         "competitorCount": {
           "type": "integer",
           "description": "Total registered competitors."
@@ -682,7 +663,6 @@
         "zeroTimeSec",
         "arenaInfo",
         "seriesName",
-        "feeTrackingEnabled",
         "competitorCount",
         "finishedCount",
         "brokenControls",
@@ -820,10 +800,6 @@
           "type": "boolean",
           "description": "Whether readout automatically matches any open course."
         },
-        "feeSek": {
-          "type": "integer",
-          "description": "Class entry fee in SEK."
-        },
         "ownerUid": {
           "type": "string",
           "description": "UID of the administrator who synced the class.",
@@ -854,7 +830,6 @@
         "allowDirectEntry",
         "freeStart",
         "autoMatchCourse",
-        "feeSek",
         "ownerUid",
         "createdAt",
         "updatedAt"
@@ -862,7 +837,7 @@
     },
     "CloudCompetitor": {
       "title": "CloudCompetitor",
-      "description": "Registered competitor, rental/payment status, and raw SI-card punches persisted under a competition.",
+      "description": "Registered competitor, rental-card status, and raw SI-card punches persisted under a competition.",
       "type": "object",
       "properties": {
         "competitorId": {
@@ -919,10 +894,6 @@
         "rentalReturned": {
           "type": "boolean",
           "description": "Whether the borrowed rental SI-card has been returned."
-        },
-        "feePaid": {
-          "type": "boolean",
-          "description": "Whether the competition fee has been marked paid."
         },
         "status": {
           "type": "string",
@@ -1007,7 +978,6 @@
         "cardSeries",
         "isRentalCard",
         "rentalReturned",
-        "feePaid",
         "status",
         "allocatedStartSec",
         "checkTimeSec",
@@ -1128,7 +1098,7 @@
     },
     "/clubSettings/{settingId}": {
       "schema": { "$ref": "#/entities/ClubSettings" },
-      "description": "Public club-wide configuration for Eventor organisation ID, payment settings, rental fees, and active season state."
+      "description": "Public club-wide configuration for Eventor organisation ID, branding, and active season state."
     },
     "/clubSettings/default/private/eventor": {
       "schema": { "$ref": "#/entities/EventorPrivateSettings" },

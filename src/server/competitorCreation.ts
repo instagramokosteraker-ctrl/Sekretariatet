@@ -14,7 +14,6 @@ export interface TrustedCompetitorCreateInput {
   cardSeries: string;
   isRentalCard: boolean;
   rentalReturned: boolean;
-  feePaid: boolean;
   status: string;
   allocatedStartSec: number;
   checkTimeSec: number;
@@ -92,7 +91,6 @@ function validateCreateInput(value: unknown): TrustedCompetitorCreateInput {
     input.cardSeries.length > 24 ||
     typeof input.isRentalCard !== 'boolean' ||
     typeof input.rentalReturned !== 'boolean' ||
-    typeof input.feePaid !== 'boolean' ||
     typeof input.status !== 'string' ||
     !VALID_STATUSES.has(input.status) ||
     !isBoundedInteger(input.allocatedStartSec, -1, 86400) ||
@@ -122,7 +120,6 @@ function validateCreateInput(value: unknown): TrustedCompetitorCreateInput {
     cardSeries: input.cardSeries,
     isRentalCard: input.isRentalCard,
     rentalReturned: input.rentalReturned,
-    feePaid: input.feePaid,
     status: input.status,
     allocatedStartSec: input.allocatedStartSec,
     checkTimeSec: input.checkTimeSec,
@@ -339,8 +336,6 @@ export async function createCompetitorWithAssignment(
       cardSeries: input.cardSeries,
       isRentalCard: input.isRentalCard,
       rentalReturned: input.rentalReturned,
-      feePaid: input.feePaid,
-      billingFieldsUpdatedAt: serverTimestamp,
       status: input.status,
       allocatedStartSec: input.allocatedStartSec,
       checkTimeSec: input.checkTimeSec,

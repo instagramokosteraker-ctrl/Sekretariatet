@@ -11,6 +11,8 @@ The migration is intentionally incremental and layered. Each phase narrows the r
 
 ## Phase summary
 
+Historical phase records below document the payment/rental migration as it existed when those phases were completed. Fee/payment management has since been removed; only rental-card return tracking remains active, and legacy payment fields are ignored.
+
 | Phase | Scope | Status | Estimated effort |
 |---|---|---:|---:|
 | Phase 1 | `feePaid`, `rentalReturned` | Completed | Small |

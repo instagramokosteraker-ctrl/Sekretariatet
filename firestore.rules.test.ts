@@ -340,7 +340,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         zeroTimeSec: 36000,
         arenaInfo: '',
         seriesName: '',
-        feeTrackingEnabled: false,
         competitorCount: 0,
         finishedCount: 0,
         brokenControls: [],
@@ -365,7 +364,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         zeroTimeSec: 36000,
         arenaInfo: '',
         seriesName: '',
-        feeTrackingEnabled: false,
         competitorCount: 0,
         finishedCount: 0,
         brokenControls: [],
@@ -426,9 +424,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         settingId: 'default',
         clubName: 'OK Linné',
         eventorOrgId: '',
-        defaultDirectEntryFeeSek: 100,
-        rentalCardFeeSek: 30,
-        missingRentalFeeSek: 650,
         activeEventId: 'evt_live',
         demoCleared: false,
         competitionIds: [],
@@ -478,7 +473,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         cardSeries: 'SI-Card 10',
         isRentalCard: false,
         rentalReturned: false,
-        feePaid: false,
         status: 'REGISTERED',
         allocatedStartSec: -1,
         checkTimeSec: -1,
@@ -496,15 +490,15 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     };
     const incompleteImportedCompetitor: Record<string, unknown> = {
       ...initialCompetitor,
-      competitorId: 'cmp_import_missing_fee',
+      competitorId: 'cmp_import_missing_rental_status',
       siNumber: 8500199,
     };
-    delete incompleteImportedCompetitor.feePaid;
+    delete incompleteImportedCompetitor.rentalReturned;
     const incompleteImportBatch = writeBatch(raceAdminCtx.firestore());
     incompleteImportBatch.set(
       doc(
         raceAdminCtx.firestore(),
-        'competitions/evt_live/competitors/cmp_import_missing_fee'
+        'competitions/evt_live/competitors/cmp_import_missing_rental_status'
       ),
       incompleteImportedCompetitor
     );
@@ -512,13 +506,35 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500199'),
       {
         ...siCardAssignment,
-        competitorId: 'cmp_import_missing_fee',
-        competitorDocumentId: 'cmp_import_missing_fee',
+        competitorId: 'cmp_import_missing_rental_status',
+        competitorDocumentId: 'cmp_import_missing_rental_status',
         siNumber: 8500199,
         source: 'IMPORT',
       }
     );
     await assertFails(incompleteImportBatch.commit());
+
+    const feeCompetitorBatch = writeBatch(raceAdminCtx.firestore());
+    feeCompetitorBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_legacy_fee_create'),
+      {
+        ...initialCompetitor,
+        competitorId: 'cmp_legacy_fee_create',
+        siNumber: 8500197,
+        feePaid: false,
+      }
+    );
+    feeCompetitorBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500197'),
+      {
+        ...siCardAssignment,
+        competitorId: 'cmp_legacy_fee_create',
+        competitorDocumentId: 'cmp_legacy_fee_create',
+        siNumber: 8500197,
+        source: 'IMPORT',
+      }
+    );
+    await assertFails(feeCompetitorBatch.commit());
 
     const invalidCompetitorVersionBatch = writeBatch(raceAdminCtx.firestore());
     invalidCompetitorVersionBatch.set(
@@ -556,6 +572,12 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     );
     // Competitor creation is now accepted only with its matching assignment.
     await assertSucceeds(initialCompetitorBatch.commit());
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await context
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ feePaid: false, billingFieldsUpdatedAt: now });
+    });
 
     await assertSucceeds(
       raceAdminCtx
@@ -868,14 +890,13 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     );
     await assertFails(spoofedReadoutAutocreate.commit());
 
-    // READOUT officials may update rental return only, not payment status.
+    // READOUT officials may update rental return status, but not legacy payment fields.
     await assertSucceeds(
       readoutCtx
         .firestore()
         .doc('competitions/evt_live/competitors/cmp_valid')
         .update({
           rentalReturned: true,
-          billingFieldsUpdatedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
     );
@@ -946,7 +967,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         cardSeries: 'SI-Card 10',
         isRentalCard: false,
         rentalReturned: false,
-        feePaid: true,
         status: 'OK',
         allocatedStartSec: -1,
         checkTimeSec: 36000,
@@ -990,9 +1010,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         settingId: 'default',
         clubName: 'OK Linné',
         eventorOrgId: '',
-        defaultDirectEntryFeeSek: 100,
-        rentalCardFeeSek: 30,
-        missingRentalFeeSek: 650,
         logoDataUrl: 'data:image/svg+xml;base64,PHN2Zz48c2NyaXB0PmFsZXJ0KDEpPC9zY3JpcHQ+PC9zdmc+',
         customBgColor: 'javascript:alert(1)',
         activeEventId: 'evt_live',
@@ -1010,9 +1027,6 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         settingId: 'default',
         clubName: 'OK Linné',
         eventorOrgId: '',
-        defaultDirectEntryFeeSek: 100,
-        rentalCardFeeSek: 30,
-        missingRentalFeeSek: 650,
         seriesScoringSettings: {
           'Vårserien': {
             model: 'PLACEMENT',

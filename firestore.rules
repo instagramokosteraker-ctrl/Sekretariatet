@@ -192,9 +192,6 @@ service cloud.firestore {
           'settingId',
           'clubName',
           'eventorOrgId',
-          'defaultDirectEntryFeeSek',
-          'rentalCardFeeSek',
-          'missingRentalFeeSek',
           'activeEventId',
           'demoCleared',
           'competitionIds',
@@ -206,6 +203,8 @@ service cloud.firestore {
           'settingId',
           'clubName',
           'eventorOrgId',
+          'swishNumber',
+          'swishRecipientName',
           'defaultDirectEntryFeeSek',
           'rentalCardFeeSek',
           'missingRentalFeeSek',
@@ -225,9 +224,11 @@ service cloud.firestore {
         data.settingId is string && data.settingId.size() >= 1 && data.settingId.size() <= 64 && data.settingId.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.clubName is string && data.clubName.size() >= 1 && data.clubName.size() <= 100 &&
         data.eventorOrgId is string && data.eventorOrgId.size() <= 32 &&
-        data.defaultDirectEntryFeeSek is int && data.defaultDirectEntryFeeSek >= 0 && data.defaultDirectEntryFeeSek <= 10000 &&
-        data.rentalCardFeeSek is int && data.rentalCardFeeSek >= 0 && data.rentalCardFeeSek <= 5000 &&
-        data.missingRentalFeeSek is int && data.missingRentalFeeSek >= 0 && data.missingRentalFeeSek <= 20000 &&
+        (!data.keys().hasAny(['swishNumber']) || (data.swishNumber is string && data.swishNumber.size() <= 40)) &&
+        (!data.keys().hasAny(['swishRecipientName']) || (data.swishRecipientName is string && data.swishRecipientName.size() <= 100)) &&
+        (!data.keys().hasAny(['defaultDirectEntryFeeSek']) || (data.defaultDirectEntryFeeSek is int && data.defaultDirectEntryFeeSek >= 0 && data.defaultDirectEntryFeeSek <= 10000)) &&
+        (!data.keys().hasAny(['rentalCardFeeSek']) || (data.rentalCardFeeSek is int && data.rentalCardFeeSek >= 0 && data.rentalCardFeeSek <= 5000)) &&
+        (!data.keys().hasAny(['missingRentalFeeSek']) || (data.missingRentalFeeSek is int && data.missingRentalFeeSek >= 0 && data.missingRentalFeeSek <= 20000)) &&
         (!('portalTitle' in data) || (data.portalTitle is string && data.portalTitle.size() <= 80)) &&
         (!('logoDataUrl' in data) || isValidLogoDataUrlField(data.logoDataUrl)) &&
         (!('customBgColor' in data) || isValidHexColorField(data.customBgColor)) &&
@@ -311,9 +312,12 @@ service cloud.firestore {
           data.statusOverride is bool
         ) &&
         (
-          ('feeTrackingEnabled' in data && data.feeTrackingEnabled is bool) ||
-          // Read existing competitions created before the field was renamed.
-          ('enableFeesAndSwish' in data && data.enableFeesAndSwish is bool)
+          !data.keys().hasAny(['feeTrackingEnabled']) ||
+          data.feeTrackingEnabled is bool
+        ) &&
+        (
+          !data.keys().hasAny(['enableFeesAndSwish']) ||
+          data.enableFeesAndSwish is bool
         ) &&
         data.competitorCount is int && data.competitorCount >= 0 && data.competitorCount <= 50000 &&
         data.finishedCount is int && data.finishedCount >= 0 && data.finishedCount <= 50000 &&
@@ -397,7 +401,6 @@ service cloud.firestore {
           'allowDirectEntry',
           'freeStart',
           'autoMatchCourse',
-          'feeSek',
           'ownerUid',
           'createdAt',
           'updatedAt'
@@ -432,7 +435,7 @@ service cloud.firestore {
         data.allowDirectEntry is bool &&
         data.freeStart is bool &&
         data.autoMatchCourse is bool &&
-        data.feeSek is int && data.feeSek >= 0 && data.feeSek <= 10000 &&
+        (!data.keys().hasAny(['feeSek']) || (data.feeSek is int && data.feeSek >= 0 && data.feeSek <= 10000)) &&
         isValidId(data.ownerUid) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -450,7 +453,6 @@ service cloud.firestore {
           'cardSeries',
           'isRentalCard',
           'rentalReturned',
-          'feePaid',
           'status',
           'allocatedStartSec',
           'checkTimeSec',
@@ -477,7 +479,6 @@ service cloud.firestore {
           'isRentalCard',
           'rentalReturned',
           'isSelfRegistered',
-          'feePaid',
           'readoutReceiptId',
           'status',
           'allocatedStartSec',
@@ -492,6 +493,7 @@ service cloud.firestore {
           'ownerUid',
           'schemaVersion',
           'createdAt',
+          'feePaid',
           'billingFieldsUpdatedAt',
           'updatedAt'
         ]) &&
@@ -499,10 +501,7 @@ service cloud.firestore {
           !data.keys().hasAny(['schemaVersion']) ||
           data.schemaVersion == 1
         ) &&
-        (
-          !data.keys().hasAny(['billingFieldsUpdatedAt']) ||
-          data.billingFieldsUpdatedAt is timestamp
-        ) &&
+        (!data.keys().hasAny(['billingFieldsUpdatedAt']) || data.billingFieldsUpdatedAt is timestamp) &&
         (
           !data.keys().hasAny(['readoutReceiptId']) ||
           isValidId(data.readoutReceiptId)
@@ -521,7 +520,7 @@ service cloud.firestore {
           !data.keys().hasAny(['isSelfRegistered']) ||
           data.isSelfRegistered is bool
         ) &&
-        data.feePaid is bool &&
+        (!data.keys().hasAny(['feePaid']) || data.feePaid is bool) &&
         data.status is string && data.status.size() >= 2 && data.status.size() <= 15 &&
         (
           data.status == 'REGISTERED' ||
@@ -981,6 +980,13 @@ service cloud.firestore {
         settingId == 'default' &&
         isValidClubSettings(incoming()) &&
         incoming().settingId == settingId &&
+        !incoming().keys().hasAny([
+          'swishNumber',
+          'swishRecipientName',
+          'defaultDirectEntryFeeSek',
+          'rentalCardFeeSek',
+          'missingRentalFeeSek'
+        ]) &&
         incoming().ownerUid == request.auth.uid &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
@@ -997,18 +1003,11 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
-          // Action 1: Owner admin updates club settings
           (
             existing().ownerUid == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'clubName',
               'eventorOrgId',
-              // Permit cleanup of these fields from pre-existing club documents.
-              'swishNumber',
-              'swishRecipientName',
-              'defaultDirectEntryFeeSek',
-              'rentalCardFeeSek',
-              'missingRentalFeeSek',
               'portalTitle',
               'logoDataUrl',
               'customBgColor',
@@ -1022,17 +1021,11 @@ service cloud.firestore {
             ]) &&
             isAdmin()
           ) ||
-          // Action 2: Super Admin escape hatch
           (
             isSuperAdmin() &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'clubName',
               'eventorOrgId',
-              'swishNumber',
-              'swishRecipientName',
-              'defaultDirectEntryFeeSek',
-              'rentalCardFeeSek',
-              'missingRentalFeeSek',
               'portalTitle',
               'logoDataUrl',
               'customBgColor',
@@ -1174,8 +1167,10 @@ service cloud.firestore {
       allow create: if isVerifiedUser() &&
         isValidId(competitionId) &&
         isValidCloudCompetition(incoming()) &&
-        incoming().keys().hasAll(['feeTrackingEnabled']) &&
-        !incoming().keys().hasAny(['enableFeesAndSwish']) &&
+        !incoming().keys().hasAny([
+          'feeTrackingEnabled',
+          'enableFeesAndSwish'
+        ]) &&
         incoming().competitionId == competitionId &&
         incoming().ownerUid == request.auth.uid &&
         incoming().createdAt == request.time &&
@@ -1191,6 +1186,10 @@ service cloud.firestore {
         incoming().ownerUid == existing().ownerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
+        !incoming().diff(existing()).affectedKeys().hasAny([
+          'feeTrackingEnabled',
+          'enableFeesAndSwish'
+        ]) &&
         (
           // Action 1: Club Admin updates active/upcoming competition (Terminal State Locked once COMPLETED)
           (
@@ -1211,7 +1210,6 @@ service cloud.firestore {
               'arenaInfo',
               'seriesName',
               'allowSelfRegistration',
-              'feeTrackingEnabled',
               'competitorCount',
               'finishedCount',
               'brokenControls',
@@ -1240,7 +1238,6 @@ service cloud.firestore {
               'arenaInfo',
               'seriesName',
               'allowSelfRegistration',
-              'feeTrackingEnabled',
               'competitorCount',
               'finishedCount',
               'brokenControls',
@@ -1451,13 +1448,6 @@ service cloud.firestore {
           incoming().ownerUid == existing().ownerUid &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
-          (
-            !incoming().diff(existing()).affectedKeys().hasAny([
-              'feePaid',
-              'rentalReturned'
-            ]) ||
-            incoming().billingFieldsUpdatedAt == request.time
-          ) &&
           parentCompetitionExists(competitionId) &&
           (
             (
@@ -1521,6 +1511,7 @@ service cloud.firestore {
           incoming().ownerUid == request.auth.uid &&
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
+          !incoming().keys().hasAny(['feeSek']) &&
           parentCompetitionExists(competitionId) &&
           (
             (
@@ -1542,6 +1533,7 @@ service cloud.firestore {
           incoming().ownerUid == existing().ownerUid &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
+          !incoming().diff(existing()).affectedKeys().hasAny(['feeSek']) &&
           parentCompetitionExists(competitionId) &&
           (
             (
@@ -1557,7 +1549,6 @@ service cloud.firestore {
                 'allowDirectEntry',
                 'freeStart',
                 'autoMatchCourse',
-                'feeSek',
                 'updatedAt'
               ]) &&
               isAdmin()
@@ -1574,7 +1565,6 @@ service cloud.firestore {
                 'allowDirectEntry',
                 'freeStart',
                 'autoMatchCourse',
-                'feeSek',
                 'updatedAt'
               ])
             )
@@ -1622,11 +1612,9 @@ service cloud.firestore {
           ) || (
             changed.hasOnly([
               'rentalReturned',
-              'billingFieldsUpdatedAt',
               'updatedAt'
             ]) &&
-            changed.hasAll(['rentalReturned', 'billingFieldsUpdatedAt']) &&
-            incoming().billingFieldsUpdatedAt == request.time &&
+            changed.hasAll(['rentalReturned']) &&
             hasOfficialRole('READOUT')
           );
         }
@@ -1655,7 +1643,8 @@ service cloud.firestore {
           incoming().competitionId == competitionId &&
           incoming().ownerUid == request.auth.uid &&
           incoming().createdAt == request.time &&
-          incoming().updatedAt == request.time;
+          incoming().updatedAt == request.time &&
+          !incoming().keys().hasAny(['feePaid', 'billingFieldsUpdatedAt']);
 
         allow update: if (
           isVerifiedUser() &&
@@ -1667,6 +1656,10 @@ service cloud.firestore {
           incoming().ownerUid == existing().ownerUid &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
+          !incoming().diff(existing()).affectedKeys().hasAny([
+            'feePaid',
+            'billingFieldsUpdatedAt'
+          ]) &&
           parentCompetitionExists(competitionId) &&
           (
             (

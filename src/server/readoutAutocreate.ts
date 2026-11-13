@@ -369,7 +369,6 @@ export async function createReadoutCompetitorFromRunnerDb(
       cardSeries: String(runner?.cardSeries),
       isRentalCard: false,
       rentalReturned: false,
-      feePaid: false,
       status: input.competitor.status,
       allocatedStartSec: -1,
       checkTimeSec: input.competitor.checkTimeSec,

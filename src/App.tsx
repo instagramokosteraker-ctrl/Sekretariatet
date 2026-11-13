@@ -111,7 +111,7 @@ import {
   saveStationToFirestore,
   deleteStationFromFirestore,
   updateCompetitorInFirestore,
-  updateCompetitorBillingFieldsInFirestore,
+  updateCompetitorRentalReturnedInFirestore,
   deleteCompetitorFromFirestore,
   deleteRunnerDbEntryFromFirestore,
   saveRunnerDbEntriesToFirestore,
@@ -126,7 +126,7 @@ import {
   subscribeClubSettingsFromFirestore,
   subscribeActiveEventIdFromFirestore,
   subscribeRunnerDbFromFirestore,
-  subscribeCompetitorBillingFieldsFromFirestore,
+  subscribeCompetitorRentalReturnsFromFirestore,
   loadRunnerDbEntriesFromFirestore,
   saveLearnedRunnerDbEntryToFirestore,
 } from './firebase';
@@ -178,25 +178,52 @@ type MeosTab =
 interface AppRouteState {
   mode: 'SECRETARIAT' | 'PUBLIC';
   shortCode: string | null;
+  competitionId: string | null;
+  classFilter: string | null;
 }
 
-function parsePathnameToRoute(pathname: string): AppRouteState {
+function parsePathnameToRoute(pathname: string, search = ''): AppRouteState {
+  const params = new URLSearchParams(search);
+  const competitionId = params.get('id')?.trim() || null;
+  const classFilter = competitionId ? params.get('class')?.trim() || null : null;
   const shortMatch = pathname.match(/^\/t\/([^/?#]+)/i);
   if (shortMatch && shortMatch[1]) {
     return {
       mode: 'PUBLIC',
       shortCode: decodeURIComponent(shortMatch[1]),
+      competitionId: null,
+      classFilter: null,
     };
   }
   if (/^\/publik(\/|$)/i.test(pathname)) {
     return {
       mode: 'PUBLIC',
       shortCode: null,
+      competitionId,
+      classFilter,
+    };
+  }
+  if (/^\/admin(\/|$)|^\/login(\/|$)/i.test(pathname)) {
+    return {
+      mode: 'SECRETARIAT',
+      shortCode: null,
+      competitionId: null,
+      classFilter: null,
+    };
+  }
+  if (pathname === '/' || pathname === '/index.html') {
+    return {
+      mode: 'PUBLIC',
+      shortCode: null,
+      competitionId,
+      classFilter,
     };
   }
   return {
     mode: 'SECRETARIAT',
     shortCode: null,
+    competitionId: null,
+    classFilter: null,
   };
 }
 
@@ -319,14 +346,22 @@ async function mirrorNewCompetitionToExpress(params: {
 export default function App() {
   const [route, setRoute] = useState<AppRouteState>(() =>
     typeof window !== 'undefined'
-      ? parsePathnameToRoute(window.location.pathname)
-      : { mode: 'SECRETARIAT', shortCode: null }
+      ? parsePathnameToRoute(window.location.pathname, window.location.search)
+      : {
+          mode: 'SECRETARIAT',
+          shortCode: null,
+          competitionId: null,
+          classFilter: null,
+        }
   );
   const [lastPublicShortCode, setLastPublicShortCode] = useState<
     string | null | undefined
   >(() => {
     if (typeof window === 'undefined') return undefined;
-    const initial = parsePathnameToRoute(window.location.pathname);
+    const initial = parsePathnameToRoute(
+      window.location.pathname,
+      window.location.search
+    );
     return initial.mode === 'PUBLIC' ? initial.shortCode : undefined;
   });
 
@@ -543,10 +578,13 @@ export default function App() {
     }
   }, [darkMode]);
 
-  // Browser URL history synchronization for /t/:shortCode and /publik
+  // Browser URL history synchronization for public and Secretariat routes.
   useEffect(() => {
     const onPopState = () => {
-      const next = parsePathnameToRoute(window.location.pathname);
+      const next = parsePathnameToRoute(
+        window.location.pathname,
+        window.location.search
+      );
       if (next.mode === 'PUBLIC') {
         setLastPublicShortCode(next.shortCode);
       }
@@ -557,19 +595,56 @@ export default function App() {
   }, []);
 
   const navigatePublicPortal = useCallback((shortCode: string | null) => {
-    const targetPath = '/publik';
-    if (window.location.pathname !== targetPath) {
-      window.history.pushState({}, '', targetPath);
+    const targetPath = shortCode
+      ? `/t/${encodeURIComponent(shortCode)}`
+      : '/';
+    const targetUrl = new URL(targetPath, window.location.origin);
+    if (
+      window.location.pathname !== targetUrl.pathname ||
+      window.location.search !== targetUrl.search
+    ) {
+      window.history.pushState({}, '', targetUrl);
     }
     setLastPublicShortCode(shortCode);
-    setRoute({ mode: 'PUBLIC', shortCode });
+    setRoute({
+      mode: 'PUBLIC',
+      shortCode,
+      competitionId: null,
+      classFilter: null,
+    });
   }, []);
 
+  const navigatePublicCompetition = useCallback(
+    (competitionId: string | null, classFilter: string | null = null) => {
+      const params = new URLSearchParams();
+      if (competitionId) {
+        params.set('id', competitionId);
+        if (classFilter) params.set('class', classFilter);
+      }
+      const search = params.toString();
+      const targetUrl = search ? `/?${search}` : '/';
+      window.history.pushState({}, '', targetUrl);
+      setLastPublicShortCode(null);
+      setRoute({
+        mode: 'PUBLIC',
+        shortCode: null,
+        competitionId,
+        classFilter: competitionId ? classFilter : null,
+      });
+    },
+    []
+  );
+
   const navigateSecretariat = useCallback(() => {
-    if (window.location.pathname !== '/') {
-      window.history.pushState({}, '', '/');
+    if (window.location.pathname !== '/admin' || window.location.search) {
+      window.history.pushState({}, '', '/admin');
     }
-    setRoute({ mode: 'SECRETARIAT', shortCode: null });
+    setRoute({
+      mode: 'SECRETARIAT',
+      shortCode: null,
+      competitionId: null,
+      classFilter: null,
+    });
   }, []);
 
   // Authoritative MeOS state synced via WebSockets
@@ -580,7 +655,7 @@ export default function App() {
   const [activeEventId, setActiveEventId] = useState<string>('');
   const activeEventIdRef = useRef<string>('');
   const activeEventIdFromFirestoreRef = useRef(false);
-  const billingFieldsLoadedEventIdRef = useRef<string>('');
+  const rentalFieldsLoadedEventIdRef = useRef<string>('');
   const mirroredActiveEventIdRef = useRef<string | null>(null);
   const mirroredSeriesScoringSettingsRef = useRef<string | null>(null);
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
@@ -591,9 +666,6 @@ export default function App() {
   const [clubSettings, setClubSettings] = useState<ClubSettings>({
     clubName: 'OK Österåker',
     eventorOrgId: '',
-    defaultDirectEntryFeeSek: 0,
-    rentalCardFeeSek: 0,
-    missingRentalFeeSek: 0,
   });
   const [logoBroken, setLogoBroken] = useState<boolean>(false);
   const availableSeriesNames = useMemo(
@@ -742,13 +814,13 @@ export default function App() {
   }, [firebaseUserUid]);
   useEffect(() => {
     if (!firebaseUserUid || !activeEventId) {
-      billingFieldsLoadedEventIdRef.current = '';
+      rentalFieldsLoadedEventIdRef.current = '';
       return;
     }
-    return subscribeCompetitorBillingFieldsFromFirestore(
+    return subscribeCompetitorRentalReturnsFromFirestore(
       activeEventId,
       (fields) => {
-        billingFieldsLoadedEventIdRef.current = activeEventId;
+        rentalFieldsLoadedEventIdRef.current = activeEventId;
         const fieldsById = new Map(
           fields.map((item) => [item.competitorId, item])
         );
@@ -758,7 +830,6 @@ export default function App() {
             return canonical
               ? {
                   ...competitor,
-                  feePaid: canonical.feePaid,
                   rentalReturned: canonical.rentalReturned,
                 }
               : competitor;
@@ -766,7 +837,7 @@ export default function App() {
         );
       },
       (error) => {
-        console.error('Kunde inte prenumerera på betalnings- och hyrstatus från Firestore:', error);
+        console.error('Kunde inte prenumerera på hyrstatus från Firestore:', error);
       }
     );
   }, [activeEventId, firebaseUserUid]);
@@ -1119,9 +1190,6 @@ export default function App() {
               customAccentColor: prev.customAccentColor,
               clubName: prev.clubName,
               eventorOrgId: prev.eventorOrgId,
-              defaultDirectEntryFeeSek: prev.defaultDirectEntryFeeSek,
-              rentalCardFeeSek: prev.rentalCardFeeSek,
-              missingRentalFeeSek: prev.missingRentalFeeSek,
               seriesScoringSettings: prev.seriesScoringSettings,
             }
           : {}),
@@ -1138,14 +1206,13 @@ export default function App() {
     setStations(snap.stations);
     setCompetitors((current) => {
       if (!hasFirestoreIdentity) return snap.competitors;
-      if (billingFieldsLoadedEventIdRef.current !== snap.activeEventId) return current;
+      if (rentalFieldsLoadedEventIdRef.current !== snap.activeEventId) return current;
       const currentById = new Map(current.map((competitor) => [competitor.id, competitor]));
       return snap.competitors.map((competitor) => {
         const canonical = currentById.get(competitor.id);
         return canonical
           ? {
               ...competitor,
-              feePaid: Boolean(canonical.feePaid),
               rentalReturned: Boolean(canonical.rentalReturned),
             }
           : competitor;
@@ -1395,21 +1462,21 @@ export default function App() {
       activeEventId,
       String(demoCleared),
       String(isEmptySeason),
-      `${clubSettings.clubName}:${clubSettings.defaultDirectEntryFeeSek}:${clubSettings.rentalCardFeeSek}:${clubSettings.missingRentalFeeSek}`,
+      clubSettings.clubName,
       competitionsList
         .map(
           (c) =>
             `${c.id}:${c.name}:${c.status}:${c.date}:${c.seriesName || ''}:${c.competitorCount}:${c.finishedCount}`
         )
         .join('|'),
-      `${competition.id}:${competition.zeroTimeStr}:${competition.arenaInfo || ''}:${String(competition.feeTrackingEnabled)}`,
+      `${competition.id}:${competition.zeroTimeStr}:${competition.arenaInfo || ''}`,
       courses
         .map((cr) => `${cr.id}:${cr.name}:${cr.lengthMeters}:${cr.climbMeters}:${cr.controls.join(',')}`)
         .join('|'),
       classes
         .map(
           (cl) =>
-            `${cl.id}:${cl.name}:${cl.courseId || ''}:${cl.classFormat || 'STANDARD'}:${(cl.forkCourseIds || []).join(',')}:${String(cl.freeStart)}:${String(cl.autoMatchCourse)}:${cl.feeSek}`
+            `${cl.id}:${cl.name}:${cl.courseId || ''}:${cl.classFormat || 'STANDARD'}:${(cl.forkCourseIds || []).join(',')}:${String(cl.freeStart)}:${String(cl.autoMatchCourse)}`
         )
         .join('|'),
       competitors
@@ -1608,11 +1675,15 @@ export default function App() {
     }
   };
 
-  const updateActiveCompetitorBillingFields = async (
+  const updateActiveCompetitorRentalFields = async (
     competitorId: string,
-    patch: Partial<Pick<Competitor, 'feePaid' | 'rentalReturned'>>
+    patch: Pick<Competitor, 'rentalReturned'>
   ) => {
-    await updateCompetitorBillingFieldsInFirestore(activeEventId, competitorId, patch);
+    await updateCompetitorRentalReturnedInFirestore(
+      activeEventId,
+      competitorId,
+      patch.rentalReturned
+    );
     setCompetitors((current) =>
       current.map((competitor) =>
         competitor.id === competitorId ? { ...competitor, ...patch } : competitor
@@ -1625,7 +1696,7 @@ export default function App() {
     competitorId: string,
     rentalReturned: boolean
   ) => {
-    await updateCompetitorBillingFieldsInFirestore(eventId, competitorId, { rentalReturned });
+    await updateCompetitorRentalReturnedInFirestore(eventId, competitorId, rentalReturned);
     if (eventId === activeEventId) {
       setCompetitors((current) =>
         current.map((competitor) =>
@@ -1761,7 +1832,6 @@ export default function App() {
         classId,
         isRentalCard: false,
         isBorrowedCard: false,
-        feePaid: false,
         allocatedStartSec: null,
       });
       if (error) errors.push(`${runner.fullName}: ${error}`);
@@ -1849,7 +1919,6 @@ export default function App() {
                 allowDirectEntry: true,
                 freeStart: cls.freeStart ?? true,
                 autoMatchCourse: cls.autoMatchCourse ?? true,
-                feeSek: clubSettings.defaultDirectEntryFeeSek,
               };
             })
           : [];
@@ -1866,7 +1935,6 @@ export default function App() {
               allowDirectEntry: true,
               freeStart: true,
               autoMatchCourse: true,
-              feeSek: clubSettings.defaultDirectEntryFeeSek,
             }));
       const newComp: CompetitionMeta = {
         id: compId,
@@ -2001,7 +2069,6 @@ export default function App() {
       allowDirectEntry: true,
       freeStart: true,
       autoMatchCourse: true,
-      feeSek: clubSettings.defaultDirectEntryFeeSek,
     }));
     const classIdByName = new Map(
       classes.map((eventClass) => [eventClass.name.toLocaleLowerCase(), eventClass.id])
@@ -2356,14 +2423,16 @@ export default function App() {
     });
   };
 
-  // 1. Public spectator portal (/t/:shortCode & /publik) — zero login required
+  // 1. Public spectator portal (/ and legacy /t/:shortCode, /publik) — zero login required
   if (route.mode === 'PUBLIC') {
     return (
       <PublicPortalView
         shortCode={route.shortCode}
+        competitionId={route.competitionId}
+        classFilter={route.classFilter}
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode((d) => !d)}
-        onSelectEventShortCode={(sc) => navigatePublicPortal(sc)}
+        onNavigatePublicUrl={navigatePublicCompetition}
         onSwitchToSecretariat={navigateSecretariat}
       />
     );
@@ -3496,7 +3565,6 @@ export default function App() {
                                 previous?.autoMatchCourse ??
                                 parsed.freeStart
                             ),
-                        feeSek: previous?.feeSek ?? clubSettings.defaultDirectEntryFeeSek,
                       };
                       const existingIndex = nextClasses.findIndex(
                         (existing) => existing.id === cls.id
@@ -3525,7 +3593,6 @@ export default function App() {
                           allowDirectEntry: true,
                           freeStart: false,
                           autoMatchCourse: false,
-                          feeSek: clubSettings.defaultDirectEntryFeeSek,
                         };
                         nextClasses.push(targetClass);
                         importedClasses.push(targetClass);
@@ -3546,7 +3613,6 @@ export default function App() {
                         cardSeries: inferCardSeries(siNumber),
                         isRentalCard: entry.siNumber <= 0,
                         rentalReturned: false,
-                        feePaid: false,
                         status: 'REGISTERED',
                         allocatedStartSec: Math.min(86400, competition.zeroTimeSec + bib * 30),
                         checkTimeSec: null,
@@ -3727,7 +3793,7 @@ export default function App() {
                   selectedRunnerId={selectedRunnerId}
                   onSelectRunner={(id) => setSelectedRunnerId(id)}
                   onMarkRentalReturned={async (id) => {
-                    await updateActiveCompetitorBillingFields(id, { rentalReturned: true });
+                    await updateActiveCompetitorRentalFields(id, { rentalReturned: true });
                   }}
                   onSimulateFullReadout={handleSimulateFullReadout}
                   onSimulateOnlinePunch={handleSimulateOnlinePunch}
@@ -3838,9 +3904,11 @@ export default function App() {
                     const patchFields = Object.keys(patch);
                     if (
                       patchFields.length > 0 &&
-                      patchFields.every((field) => field === 'feePaid' || field === 'rentalReturned')
+                      patchFields.every((field) => field === 'rentalReturned')
                     ) {
-                      await updateActiveCompetitorBillingFields(id, patch);
+                      await updateActiveCompetitorRentalFields(id, {
+                        rentalReturned: Boolean(patch.rentalReturned),
+                      });
                       return;
                     }
                     await updateCompetitorInFirestore(activeEventId, id, patch);
@@ -3887,7 +3955,6 @@ export default function App() {
                   competitors={competitors}
                   runnerDb={runnerDb}
                   clubSettings={clubSettings}
-                  feeTrackingEnabled={Boolean(competition.feeTrackingEnabled)}
                   serialStatus={serialStatus}
                   onConnectUsb={async () => {
                     await sportidentSerial.connect();
@@ -3940,9 +4007,11 @@ export default function App() {
                     const patchFields = Object.keys(patch);
                     if (
                       patchFields.length > 0 &&
-                      patchFields.every((field) => field === 'feePaid' || field === 'rentalReturned')
+                      patchFields.every((field) => field === 'rentalReturned')
                     ) {
-                      await updateActiveCompetitorBillingFields(id, patch);
+                      await updateActiveCompetitorRentalFields(id, {
+                        rentalReturned: Boolean(patch.rentalReturned),
+                      });
                       return;
                     }
                     await updateCompetitorInFirestore(activeEventId, id, patch);
@@ -4249,7 +4318,6 @@ export default function App() {
                   courses={courses}
                   classes={classes}
                   competitors={competitors}
-                  feeTrackingEnabled={Boolean(competition.feeTrackingEnabled)}
                   onSaveCourse={async (payload, existingId) => {
                     let saved: Course | null = null;
                     const firestoreOwned = Boolean(firebaseUserPresent || auth.currentUser);
@@ -4339,7 +4407,6 @@ export default function App() {
                         allowDirectEntry: payload.allowDirectEntry ?? prevClass?.allowDirectEntry ?? true,
                         freeStart: payload.freeStart ?? prevClass?.freeStart ?? false,
                         autoMatchCourse: payload.autoMatchCourse ?? prevClass?.autoMatchCourse ?? false,
-                        feeSek: payload.feeSek ?? prevClass?.feeSek ?? 100,
                       };
                     }
                     setClasses((current) =>
@@ -4461,7 +4528,6 @@ export default function App() {
                         autoMatchCourse: isForked
                           ? true
                           : cls.autoMatchCourse ?? previous?.autoMatchCourse ?? freeStart,
-                        feeSek: previous?.feeSek ?? 100,
                       };
                     });
                     const nextClasses = payload.replaceExisting
@@ -4767,11 +4833,7 @@ export default function App() {
                   key={activeTab === 'season' ? 'season' : 'access'}
                   view={activeTab === 'season' ? 'events' : 'admin'}
                   activeEventId={activeEventId}
-                  competitionName={isEmptySeason ? 'Ingen aktiv tävling' : competition.name}
-                  feeTrackingEnabled={!isEmptySeason && Boolean(competition.feeTrackingEnabled)}
                   competitionsList={competitionsList}
-                  competitors={competitors}
-                  classes={classes}
                   clubSettings={clubSettings}
                   seriesStandings={seriesStandings}
                   currentUser={authSession.user}

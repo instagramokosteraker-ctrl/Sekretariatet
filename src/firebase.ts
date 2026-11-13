@@ -11,7 +11,6 @@ import {
   Timestamp,
   collection,
   deleteDoc,
-  deleteField,
   doc,
   getDoc,
   getDocFromServer,
@@ -1771,7 +1770,6 @@ export async function updateCompetitionMetadataInFirestore(
     arenaInfo?: string;
     seriesName?: string;
     allowSelfRegistration?: boolean;
-    feeTrackingEnabled?: boolean;
   }
 ): Promise<void> {
   const statusOnlyUpdate =
@@ -1816,9 +1814,6 @@ export async function updateCompetitionMetadataInFirestore(
   if ('seriesName' in patch) mutable.seriesName = (patch.seriesName || '').trim().slice(0, 80);
   if ('allowSelfRegistration' in patch) {
     mutable.allowSelfRegistration = Boolean(patch.allowSelfRegistration);
-  }
-  if ('feeTrackingEnabled' in patch) {
-    mutable.feeTrackingEnabled = Boolean(patch.feeTrackingEnabled);
   }
   if (Object.keys(mutable).length === 0) return;
   await updateDoc(doc(db, 'competitions', context.competitionId), {
@@ -1872,15 +1867,13 @@ export async function activateCompetitionInFirestore(
   await updateDoc(clubRef, {
     activeEventId: competitionId,
     competitionIds: Array.from(new Set([...competitionIds, competitionId])),
-    swishNumber: deleteField(),
-    swishRecipientName: deleteField(),
     updatedAt: serverTimestamp(),
   });
 }
 
-const FIRESTORE_OWNED_COMPETITOR_FIELDS = new Set(['feePaid', 'rentalReturned']);
+const FIRESTORE_OWNED_RENTAL_FIELDS = new Set(['rentalReturned']);
 
-function warnOnLegacyCompetitorFieldWrite(
+function warnOnRentalFieldWrite(
   source: string,
   competitorId: string,
   fields: Array<string>
@@ -1889,7 +1882,7 @@ function warnOnLegacyCompetitorFieldWrite(
     return;
   }
   console.warn(
-    `[single-writer] Ignoring legacy ${source} write to Firestore-owned competitor fields for ${competitorId}: ${fields.join(', ')}`
+    `[single-writer] Ignoring ${source} write to Firestore-owned rental fields for ${competitorId}: ${fields.join(', ')}`
   );
 }
 
@@ -2019,7 +2012,6 @@ async function writeImportedCompetitorWithAssignment(params: {
           competitionId,
           ownerUid: params.ownerUid,
           schemaVersion: 1,
-          feePaid: false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -2140,19 +2132,6 @@ export async function syncFullSeasonToFirestore(
         clubName:
           (snapshot.clubSettings.clubName || 'OK Österåker').trim().slice(0, 100) ||
           'OK Österåker',
-        defaultDirectEntryFeeSek: clampInt(
-          snapshot.clubSettings.defaultDirectEntryFeeSek,
-          0,
-          10000,
-          100
-        ),
-        rentalCardFeeSek: clampInt(snapshot.clubSettings.rentalCardFeeSek, 0, 5000, 30),
-        missingRentalFeeSek: clampInt(
-          snapshot.clubSettings.missingRentalFeeSek,
-          0,
-          20000,
-          650
-        ),
         eventorOrgId: (snapshot.clubSettings.eventorOrgId || '').trim().slice(0, 32),
         ...legacyBranding,
         seriesScoringSettings: normalizeSeriesScoringSettings(
@@ -2178,8 +2157,6 @@ export async function syncFullSeasonToFirestore(
             : '';
       await updateDoc(doc(db, 'clubSettings', 'default'), {
         ...clubMutable,
-        swishNumber: deleteField(),
-        swishRecipientName: deleteField(),
         ...(existingClubDoc?.activeEventId === undefined ? { activeEventId } : {}),
         updatedAt: serverTimestamp(),
       });
@@ -2221,7 +2198,6 @@ export async function syncFullSeasonToFirestore(
       arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
       seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
       allowSelfRegistration: Boolean(ev.competition.allowSelfRegistration),
-      feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       competitorCount,
       finishedCount,
       brokenControls: (ev.brokenControls || [])
@@ -2331,14 +2307,14 @@ export async function syncFullSeasonToFirestore(
           ? cmp.status
           : 'REGISTERED';
 
-      const legacyBillingFields = Object.keys(cmp).filter((key) =>
-        FIRESTORE_OWNED_COMPETITOR_FIELDS.has(key)
+      const rentalFields = Object.keys(cmp).filter((key) =>
+        FIRESTORE_OWNED_RENTAL_FIELDS.has(key)
       );
-      if (legacyBillingFields.length > 0) {
-        warnOnLegacyCompetitorFieldWrite(
+      if (rentalFields.length > 0) {
+        warnOnRentalFieldWrite(
           'snapshot sync',
           competitorId,
-          legacyBillingFields
+          rentalFields
         );
       }
 
@@ -2365,7 +2341,6 @@ export async function syncFullSeasonToFirestore(
       if (existingCompIds.has(competitorId)) {
         const existingData = existingCompetitors.get(competitorId) ?? {};
         const proposedFields: Record<string, unknown> = { ...cmpMutable };
-        if (typeof cmp.feePaid === 'boolean') proposedFields.feePaid = cmp.feePaid;
         if (typeof cmp.rentalReturned === 'boolean') {
           proposedFields.rentalReturned = cmp.rentalReturned;
         }
@@ -2521,9 +2496,6 @@ export async function loadFullSeasonFromFirestore(options?: {
   interface CloudClubDocData {
     clubName?: string;
     eventorOrgId?: string;
-    defaultDirectEntryFeeSek?: number;
-    rentalCardFeeSek?: number;
-    missingRentalFeeSek?: number;
     portalTitle?: string;
     logoDataUrl?: string;
     customBgColor?: string;
@@ -2556,9 +2528,6 @@ export async function loadFullSeasonFromFirestore(options?: {
   const clubSettings: ClubSettings = {
     clubName: (clubData?.clubName || 'OK Österåker').trim().slice(0, 100) || 'OK Österåker',
     eventorOrgId: clubData?.eventorOrgId || '',
-    defaultDirectEntryFeeSek: Number(clubData?.defaultDirectEntryFeeSek ?? 0),
-    rentalCardFeeSek: Number(clubData?.rentalCardFeeSek ?? 0),
-    missingRentalFeeSek: Number(clubData?.missingRentalFeeSek ?? 0),
     portalTitle: (clubData?.portalTitle || '').trim().slice(0, 80),
     logoDataUrl: sanitizeCloudLogoDataUrl(clubData?.logoDataUrl),
     customBgColor: sanitizeCloudHexColor(clubData?.customBgColor),
@@ -2668,7 +2637,6 @@ export async function loadFullSeasonFromFirestore(options?: {
           allowDirectEntry: boolean;
           freeStart: boolean;
           autoMatchCourse: boolean;
-          feeSek: number;
         };
         classes.push({
           id: cld.classId || d.id,
@@ -2682,7 +2650,6 @@ export async function loadFullSeasonFromFirestore(options?: {
           allowDirectEntry: Boolean(cld.allowDirectEntry),
           freeStart: Boolean(cld.freeStart),
           autoMatchCourse: Boolean(cld.autoMatchCourse),
-          feeSek: Number(cld.feeSek ?? 100),
         });
       }
     } catch (err) {
@@ -2737,7 +2704,6 @@ export async function loadFullSeasonFromFirestore(options?: {
           cardSeries: SICardSeries;
           isRentalCard: boolean;
           rentalReturned: boolean;
-          feePaid: boolean;
           status: RunnerStatus;
           allocatedStartSec: number;
           checkTimeSec: number;
@@ -2787,7 +2753,6 @@ export async function loadFullSeasonFromFirestore(options?: {
           cardSeries: cmd.cardSeries || 'SI-Card 10',
           isRentalCard: Boolean(cmd.isRentalCard),
           rentalReturned: Boolean(cmd.rentalReturned),
-          feePaid: Boolean(cmd.feePaid),
           status: cmd.status || 'REGISTERED',
           allocatedStartSec,
           checkTimeSec: checkSec,
@@ -2933,9 +2898,6 @@ export async function loadFullSeasonFromFirestore(options?: {
         arenaInfo: String(compDocData.arenaInfo || ''),
         seriesName: String(compDocData.seriesName || ''),
         allowSelfRegistration: Boolean(compDocData.allowSelfRegistration),
-        feeTrackingEnabled: Boolean(
-          compDocData.feeTrackingEnabled ?? compDocData.enableFeesAndSwish
-        ),
       },
       courses,
       classes,
@@ -3003,12 +2965,11 @@ function parseRunnerDbDocument(id: string, data: Record<string, unknown>): Runne
     };
 }
 
-export function subscribeCompetitorBillingFieldsFromFirestore(
+export function subscribeCompetitorRentalReturnsFromFirestore(
   competitionId: string,
   onFields: (
     fields: Array<{
       competitorId: string;
-      feePaid: boolean;
       rentalReturned: boolean;
     }>
   ) => void,
@@ -3021,7 +2982,6 @@ export function subscribeCompetitorBillingFieldsFromFirestore(
       onFields(
         snapshot.docs.map((competitorDoc) => ({
           competitorId: competitorDoc.id,
-          feePaid: Boolean(competitorDoc.data().feePaid),
           rentalReturned: Boolean(competitorDoc.data().rentalReturned),
         }))
       );
@@ -3267,7 +3227,6 @@ export async function saveCompetitionImportToFirestore(params: {
       allowDirectEntry: Boolean(cls.allowDirectEntry),
       freeStart: Boolean(cls.freeStart),
       autoMatchCourse: Boolean(cls.autoMatchCourse),
-      feeSek: clampInt(cls.feeSek, 0, 10000, 100),
     };
     await addOperation('classes', id, mutable, {
       classId: id,
@@ -3280,18 +3239,15 @@ export async function saveCompetitionImportToFirestore(params: {
 
   for (const competitor of params.competitors) {
     const id = sanitizeFirestoreId(competitor.id, 'cmp');
-    const legacyBillingFields: string[] = [];
-    if ('feePaid' in competitor && competitor.feePaid !== undefined) {
-      legacyBillingFields.push('feePaid');
-    }
+    const legacyRentalFields: string[] = [];
     if ('rentalReturned' in competitor && competitor.rentalReturned !== undefined) {
-      legacyBillingFields.push('rentalReturned');
+      legacyRentalFields.push('rentalReturned');
     }
-    if (legacyBillingFields.length > 0) {
-      warnOnLegacyCompetitorFieldWrite(
+    if (legacyRentalFields.length > 0) {
+      warnOnRentalFieldWrite(
         'import',
         id,
-        legacyBillingFields
+        legacyRentalFields
       );
     }
     const punches = (competitor.rawReadout?.punches ?? competitor.cardPunches ?? []).slice(0, 192);
@@ -4188,7 +4144,6 @@ export async function saveClassToFirestore(
     allowDirectEntry: boolean;
     freeStart: boolean;
     autoMatchCourse: boolean;
-    feeSek: number;
   } = {
     name: (payload.name ?? (typeof previous.name === 'string' ? previous.name : '')).trim().slice(0, 80),
     courseId: courseId ? sanitizeFirestoreId(courseId, 'crs') : '',
@@ -4222,10 +4177,6 @@ export async function saveClassToFirestore(
       payload.autoMatchCourse !== undefined
         ? payload.autoMatchCourse
         : Boolean(previous.autoMatchCourse),
-    feeSek:
-      payload.feeSek !== undefined
-        ? clampInt(payload.feeSek, 0, 10000, 100)
-        : clampInt(previous.feeSek, 0, 10000, 100),
   };
   if (!mutable.name) {
     throw new Error('Klassen måste ha ett namn.');
@@ -4439,7 +4390,6 @@ export function subscribeClassesFromFirestore(
             allowDirectEntry: Boolean(data.allowDirectEntry),
             freeStart: Boolean(data.freeStart),
             autoMatchCourse: Boolean(data.autoMatchCourse),
-            feeSek: Number(data.feeSek ?? 100),
           };
         })
       );
@@ -4578,7 +4528,6 @@ export async function updateCompetitorInFirestore(
     'cardSeries',
     'isRentalCard',
     'rentalReturned',
-    'feePaid',
     'status',
     'allocatedStartSec',
     'checkTimeSec',
@@ -4991,17 +4940,15 @@ export async function updateCompetitorInFirestore(
   }
 }
 
-export async function updateCompetitorBillingFieldsInFirestore(
+export async function updateCompetitorRentalReturnedInFirestore(
   competitionId: string,
   competitorId: string,
-  patch: Partial<Pick<Competitor, 'feePaid' | 'rentalReturned'>>
+  rentalReturned: boolean
 ): Promise<void> {
   const authorization = await getCurrentFirebaseRoles();
-  const hasFeeUpdate = typeof patch.feePaid === 'boolean';
-  const hasRentalUpdate = typeof patch.rentalReturned === 'boolean';
-  const isRentalOfficial = authorization.officialRole === 'READOUT' && !hasFeeUpdate;
-  if ((!authorization.adminTier && !isRentalOfficial) || (!hasFeeUpdate && !hasRentalUpdate)) {
-    throw new Error('Ditt Google-konto saknar behörighet att ändra betalnings- eller hyrstatus.');
+  const isRentalOfficial = authorization.officialRole === 'READOUT';
+  if ((!authorization.adminTier && !isRentalOfficial) || typeof rentalReturned !== 'boolean') {
+    throw new Error('Ditt Google-konto saknar behörighet att ändra hyrkortsstatus.');
   }
 
   const safeCompetitionId = sanitizeFirestoreId(competitionId, 'evt');
@@ -5026,25 +4973,23 @@ export async function updateCompetitorBillingFieldsInFirestore(
       competitionSnap.data().status === 'COMPLETED' &&
       authorization.adminTier !== 'SUPER_ADMIN'
     ) {
-      throw new Error('Ekonomi- och hyrstatus kan inte ändras i en avslutad tävling.');
+      throw new Error('Hyrkortsstatus kan inte ändras i en avslutad tävling.');
     }
 
     declareCompetitorMutation({
-      source: 'updateCompetitorBillingFieldsInFirestore',
+      source: 'updateCompetitorRentalReturnedInFirestore',
       operation: 'UPDATE',
       competitionId: safeCompetitionId,
       competitorId: safeCompetitorId,
       siNumber: Number(competitorSnap.data().siNumber),
       assignmentHandling: {
         mode: 'LEGACY',
-        reason: 'Billing/rental mutation does not validate SI assignment because it does not change competitor identity.',
+        reason: 'Rental return mutation does not change competitor identity.',
       },
       identityAffecting: false,
     });
     transaction.update(competitorRef, {
-      ...(hasFeeUpdate ? { feePaid: patch.feePaid } : {}),
-      ...(hasRentalUpdate ? { rentalReturned: patch.rentalReturned } : {}),
-      billingFieldsUpdatedAt: serverTimestamp(),
+      rentalReturned,
       updatedAt: serverTimestamp(),
     });
   });
@@ -5961,7 +5906,6 @@ export async function submitReadoutToFirestore(
       cardSeries: runnerDbMatch.cardSeries,
       isRentalCard: false,
       rentalReturned: false,
-      feePaid: false,
       status: 'REGISTERED',
       allocatedStartSec: null,
       checkTimeSec: null,
@@ -6435,7 +6379,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     isRentalCard: Boolean(params.payload.isRentalCard),
     isBorrowedCard: Boolean(params.payload.isBorrowedCard),
     rentalReturned: false,
-    feePaid: Boolean(params.payload.feePaid),
     status,
     allocatedStartSec,
     checkTimeSec: hasPendingReadout ? pendingReadout?.checkTimeSec ?? null : null,
@@ -6472,7 +6415,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     cardSeries: competitor.cardSeries,
     isRentalCard: competitor.isRentalCard,
     rentalReturned: false,
-    feePaid: competitor.feePaid ?? false,
     status: competitor.status,
     allocatedStartSec: encodeNullableSec(allocatedStartSec),
     checkTimeSec: encodeNullableSec(competitor.checkTimeSec),
@@ -6649,7 +6591,6 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         ...mutableCompetitor,
         ownerUid: actorUid,
         createdAt: serverTime,
-        billingFieldsUpdatedAt: serverTime,
         updatedAt: serverTime,
       });
 
@@ -6819,7 +6760,9 @@ export async function loadPublicRaceFromFirestore(
   if (!season) return null;
 
   const target = season.events.find(
-    (event) => event.competition.shortCode.toLowerCase() === shortCode.toLowerCase()
+    (event) =>
+      event.competition.id === shortCode ||
+      event.competition.shortCode.toLowerCase() === shortCode.toLowerCase()
   );
   if (!target) return null;
 
@@ -6843,22 +6786,10 @@ export async function loadPublicRaceFromFirestore(
     }))
     .sort((a, b) => b.date.localeCompare(a.date));
 
-  const feesEnabled = Boolean(target.competition.feeTrackingEnabled);
-  const clubSettings = feesEnabled
-    ? season.clubSettings
-    : {
-        ...season.clubSettings,
-        defaultDirectEntryFeeSek: 0,
-        rentalCardFeeSek: 0,
-        missingRentalFeeSek: 0,
-      };
-
   return {
     competition: target.competition,
     courses: target.courses,
-    classes: feesEnabled
-      ? target.classes
-      : target.classes.map((compClass) => ({ ...compClass, feeSek: 0 })),
+    classes: target.classes,
     competitors: target.competitors,
     radioControls: (target.stations ?? [])
       .filter(
@@ -6878,7 +6809,7 @@ export async function loadPublicRaceFromFirestore(
       controlTimeOffsets: {},
     },
     competitionsList,
-    clubSettings,
+    clubSettings: season.clubSettings,
     seriesStandings: season.seriesStandings ?? [],
     updatedAt: new Date().toISOString(),
   };
@@ -7053,9 +6984,6 @@ export function subscribeCompetitionMetadataFromFirestore(
         arenaInfo: typeof data.arenaInfo === 'string' ? data.arenaInfo : '',
         seriesName: typeof data.seriesName === 'string' ? data.seriesName : '',
         allowSelfRegistration: Boolean(data.allowSelfRegistration),
-        feeTrackingEnabled: Boolean(
-          data.feeTrackingEnabled ?? data.enableFeesAndSwish
-        ),
       });
     },
     onError
@@ -7065,9 +6993,6 @@ export function subscribeCompetitionMetadataFromFirestore(
 export const DEFAULT_CLUB_SETTINGS: ClubSettings = {
   clubName: 'OK Österåker',
   eventorOrgId: '',
-  defaultDirectEntryFeeSek: 0,
-  rentalCardFeeSek: 0,
-  missingRentalFeeSek: 0,
   portalTitle: '',
   logoDataUrl: '',
   customBgColor: '',
@@ -7094,9 +7019,6 @@ export async function loadClubSettingsFromFirestore(): Promise<ClubSettings> {
     return {
       clubName: (data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) || DEFAULT_CLUB_SETTINGS.clubName,
       eventorOrgId: (data.eventorOrgId || '').trim().slice(0, 32),
-      defaultDirectEntryFeeSek: clampInt(data.defaultDirectEntryFeeSek, 0, 10000, DEFAULT_CLUB_SETTINGS.defaultDirectEntryFeeSek),
-      rentalCardFeeSek: clampInt(data.rentalCardFeeSek, 0, 5000, DEFAULT_CLUB_SETTINGS.rentalCardFeeSek),
-      missingRentalFeeSek: clampInt(data.missingRentalFeeSek, 0, 20000, DEFAULT_CLUB_SETTINGS.missingRentalFeeSek),
       portalTitle: (data.portalTitle || '').trim().slice(0, 80),
       logoDataUrl: sanitizeCloudLogoDataUrl(data.logoDataUrl),
       customBgColor: sanitizeCloudHexColor(data.customBgColor),
@@ -7141,9 +7063,6 @@ export function subscribeClubSettingsFromFirestore(
       onUpdate({
         clubName: (data.clubName || DEFAULT_CLUB_SETTINGS.clubName).trim().slice(0, 100) || DEFAULT_CLUB_SETTINGS.clubName,
         eventorOrgId: (data.eventorOrgId || '').trim().slice(0, 32),
-        defaultDirectEntryFeeSek: clampInt(data.defaultDirectEntryFeeSek, 0, 10000, DEFAULT_CLUB_SETTINGS.defaultDirectEntryFeeSek),
-        rentalCardFeeSek: clampInt(data.rentalCardFeeSek, 0, 5000, DEFAULT_CLUB_SETTINGS.rentalCardFeeSek),
-        missingRentalFeeSek: clampInt(data.missingRentalFeeSek, 0, 20000, DEFAULT_CLUB_SETTINGS.missingRentalFeeSek),
         portalTitle: (data.portalTitle || '').trim().slice(0, 80),
         logoDataUrl: sanitizeCloudLogoDataUrl(data.logoDataUrl),
         customBgColor: sanitizeCloudHexColor(data.customBgColor),
@@ -7191,7 +7110,6 @@ export interface CreateCompetitionInFirestoreParams {
   arenaInfo?: string;
   seriesName?: string;
   allowSelfRegistration?: boolean;
-  feeTrackingEnabled?: boolean;
   activateOnCreate?: boolean;
   courses?: Course[];
   classes?: CompClass[];
@@ -7242,7 +7160,6 @@ export async function createCompetitionInFirestore(
   const arenaInfo = (params.arenaInfo ?? '').trim().slice(0, 500);
   const seriesName = (params.seriesName ?? '').trim().slice(0, 80);
   const allowSelfRegistration = Boolean(params.allowSelfRegistration);
-  const feeTrackingEnabled = Boolean(params.feeTrackingEnabled);
 
   // Required keys per firestore.rules isValidCloudCompetition.
   const compDocData = {
@@ -7257,7 +7174,6 @@ export async function createCompetitionInFirestore(
     arenaInfo,
     seriesName,
     allowSelfRegistration,
-    feeTrackingEnabled,
     competitorCount: 0,
     finishedCount: 0,
     brokenControls: [] as number[],
@@ -7333,7 +7249,6 @@ export async function createCompetitionInFirestore(
           allowDirectEntry: Boolean(cls.allowDirectEntry),
           freeStart: Boolean(cls.freeStart),
           autoMatchCourse: Boolean(cls.autoMatchCourse),
-          feeSek: clampInt(cls.feeSek, 0, 10000, 100),
           ownerUid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -7358,8 +7273,6 @@ export async function createCompetitionInFirestore(
         ...(params.activateOnCreate === false ? {} : { activeEventId: competitionId }),
         competitionIds: updatedIds,
         demoCleared: false,
-        swishNumber: deleteField(),
-        swishRecipientName: deleteField(),
         updatedAt: serverTimestamp(),
       });
     } else {
@@ -7367,9 +7280,6 @@ export async function createCompetitionInFirestore(
         settingId: 'default',
         clubName: organizer,
         eventorOrgId: '',
-        defaultDirectEntryFeeSek: 0,
-        rentalCardFeeSek: 0,
-        missingRentalFeeSek: 0,
         activeEventId: params.activateOnCreate === false ? '' : competitionId,
         demoCleared: true,
         competitionIds: [competitionId],
@@ -7387,7 +7297,7 @@ export async function createCompetitionInFirestore(
 }
 
 /**
- * Saves club profile, branding, and fee settings directly to Firestore (/clubSettings/default)
+ * Saves club profile and branding directly to Firestore (/clubSettings/default)
  * ensuring all keys conform strictly to isValidClubSettings rules.
  */
 export async function saveClubSettingsToFirestore(
@@ -7413,18 +7323,6 @@ export async function saveClubSettingsToFirestore(
     settings.eventorOrgId !== undefined
       ? settings.eventorOrgId.trim().slice(0, 32)
       : (typeof existingData?.eventorOrgId === 'string' ? existingData.eventorOrgId : '');
-  const defaultDirectEntryFeeSek =
-    settings.defaultDirectEntryFeeSek !== undefined
-      ? clampInt(settings.defaultDirectEntryFeeSek, 0, 10000, 100)
-      : (typeof existingData?.defaultDirectEntryFeeSek === 'number' ? existingData.defaultDirectEntryFeeSek : 100);
-  const rentalCardFeeSek =
-    settings.rentalCardFeeSek !== undefined
-      ? clampInt(settings.rentalCardFeeSek, 0, 5000, 30)
-      : (typeof existingData?.rentalCardFeeSek === 'number' ? existingData.rentalCardFeeSek : 30);
-  const missingRentalFeeSek =
-    settings.missingRentalFeeSek !== undefined
-      ? clampInt(settings.missingRentalFeeSek, 0, 20000, 650)
-      : (typeof existingData?.missingRentalFeeSek === 'number' ? existingData.missingRentalFeeSek : 650);
   const portalTitle =
     settings.portalTitle !== undefined
       ? settings.portalTitle.trim().slice(0, 80)
@@ -7465,11 +7363,6 @@ export async function saveClubSettingsToFirestore(
     await updateDoc(clubRef, {
       clubName,
       eventorOrgId,
-      defaultDirectEntryFeeSek,
-      rentalCardFeeSek,
-      missingRentalFeeSek,
-      swishNumber: deleteField(),
-      swishRecipientName: deleteField(),
       ...brandingPatch,
       ...(seriesScoringSettings === undefined ? {} : { seriesScoringSettings }),
       updatedAt: serverTimestamp(),
@@ -7479,9 +7372,6 @@ export async function saveClubSettingsToFirestore(
       settingId: 'default',
       clubName,
       eventorOrgId,
-      defaultDirectEntryFeeSek,
-      rentalCardFeeSek,
-      missingRentalFeeSek,
       portalTitle,
       logoDataUrl,
       customBgColor,
@@ -7511,8 +7401,6 @@ export async function seedDemoSeasonToFirestore(_ownerUidParam?: string): Promis
       activeEventId: '',
       competitionIds: [],
       demoCleared: true,
-      swishNumber: deleteField(),
-      swishRecipientName: deleteField(),
       updatedAt: serverTimestamp(),
     });
   }

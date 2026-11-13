@@ -117,9 +117,6 @@ type EventLifecycleStatus = 'LIVE' | 'UPCOMING' | 'COMPLETED';
 interface ClubSettings {
   clubName: string;
   eventorOrgId: string;
-  defaultDirectEntryFeeSek: number;
-  rentalCardFeeSek: number;
-  missingRentalFeeSek: number;
   portalTitle?: string;
   logoDataUrl?: string;
   customBgColor?: string;
@@ -148,7 +145,6 @@ interface CompetitionMeta {
   arenaInfo: string;
   seriesName?: string;
   allowSelfRegistration?: boolean;
-  feeTrackingEnabled?: boolean;
 }
 
 interface CompetitionSummary {
@@ -187,7 +183,6 @@ interface CompClass {
   allowDirectEntry: boolean;
   freeStart: boolean;
   autoMatchCourse: boolean;
-  feeSek: number;
 }
 
 interface SIStation {
@@ -271,7 +266,6 @@ interface Competitor {
   isRentalCard: boolean;
   isBorrowedCard?: boolean;
   rentalReturned: boolean;
-  feePaid?: boolean;
   status: RunnerStatus;
   allocatedStartSec: number | null;
   checkTimeSec: number | null;
@@ -301,8 +295,6 @@ interface RentalCardOverviewItem {
   siNumber: number;
   cardSeries: SICardSeries;
   rentalReturned: boolean;
-  feePaid: boolean;
-  feeTrackingEnabled: boolean;
   status: RunnerStatus;
 }
 
@@ -463,7 +455,6 @@ interface CloudEventExportItem {
     arenaInfo: string;
     seriesName: string;
     allowSelfRegistration?: boolean;
-    feeTrackingEnabled: boolean;
   };
   courses: Course[];
   classes: CompClass[];
@@ -1480,13 +1471,35 @@ function sanitizeServerLogoDataUrl(raw?: string | null): string {
   return '';
 }
 
+function omitLegacyPaymentFields<T extends object>(record: T): T {
+  const sanitized = { ...record } as Record<string, unknown>;
+  for (const field of [
+    'feePaid',
+    'feeSek',
+    'feeTrackingEnabled',
+    'enableFeesAndSwish',
+    'defaultDirectEntryFeeSek',
+    'rentalCardFeeSek',
+    'missingRentalFeeSek',
+  ]) {
+    delete sanitized[field];
+  }
+  return sanitized as T;
+}
+
+function omitLegacyEventPaymentFields(event: SingleEventRecord): SingleEventRecord {
+  return {
+    ...event,
+    competition: omitLegacyPaymentFields(event.competition),
+    classes: event.classes.map(omitLegacyPaymentFields),
+    competitors: event.competitors.map(omitLegacyPaymentFields),
+  };
+}
+
 function buildDefaultClubSettings(): ClubSettings {
   return {
     clubName: 'OK Österåker',
     eventorOrgId: '',
-    defaultDirectEntryFeeSek: 0,
-    rentalCardFeeSek: 0,
-    missingRentalFeeSek: 0,
     portalTitle: '',
     logoDataUrl: '',
     customBgColor: '',
@@ -1503,17 +1516,9 @@ function ensureClubSettings(seasonDb: SeasonDatabase): ClubSettings {
   }
   const c = seasonDb.clubSettings;
   seasonDb.clubSettings = {
+    ...c,
     clubName: (c.clubName || 'OK Österåker').trim() || 'OK Österåker',
     eventorOrgId: (c.eventorOrgId || '').trim(),
-    defaultDirectEntryFeeSek: Number.isFinite(Number(c.defaultDirectEntryFeeSek))
-      ? Math.max(0, Math.round(Number(c.defaultDirectEntryFeeSek)))
-      : 0,
-    rentalCardFeeSek: Number.isFinite(Number(c.rentalCardFeeSek))
-      ? Math.max(0, Math.round(Number(c.rentalCardFeeSek)))
-      : 0,
-    missingRentalFeeSek: Number.isFinite(Number(c.missingRentalFeeSek))
-      ? Math.max(0, Math.round(Number(c.missingRentalFeeSek)))
-      : 0,
     portalTitle: (c.portalTitle || '').trim().slice(0, 80),
     logoDataUrl: sanitizeServerLogoDataUrl(c.logoDataUrl),
     customBgColor: sanitizeServerHexColor(c.customBgColor),
@@ -1860,7 +1865,6 @@ function loadSeasonDatabase(): SeasonDatabase {
           Object.keys(full.authConfig).some((key) => key !== 'admins')
         );
         ensureSeasonAuthConfig(full);
-        let normalizedAnyEventMeta = false;
         for (const ev of Object.values(full.eventsMap)) {
           const legacyPinFields = ev as SingleEventRecord & {
             rolePins?: unknown;
@@ -1869,27 +1873,13 @@ function loadSeasonDatabase(): SeasonDatabase {
           if ('rolePins' in legacyPinFields || 'pinsCustomized' in legacyPinFields) {
             delete legacyPinFields.rolePins;
             delete legacyPinFields.pinsCustomized;
-            normalizedAnyEventMeta = true;
           }
-          const legacyCompetition = ev.competition as typeof ev.competition & {
-            enableFeesAndSwish?: boolean;
-          };
-          if (
-            ev.competition.feeTrackingEnabled === undefined ||
-            legacyCompetition.enableFeesAndSwish !== undefined
-          ) {
-            normalizedAnyEventMeta = true;
-          }
-          ev.competition.feeTrackingEnabled = Boolean(
-            ev.competition.feeTrackingEnabled ?? legacyCompetition.enableFeesAndSwish
-          );
-          delete legacyCompetition.enableFeesAndSwish;
           if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
           if (!ev.roc) ev.roc = buildDefaultRocStatus('1042');
           if (!Array.isArray(ev.processedClientIds)) ev.processedClientIds = [];
           recomputeAllSplitRanks(ev);
         }
-        if (!hadAuthConfig || hadLegacyAuthConfig || normalizedAnyEventMeta) {
+        if (!hadAuthConfig || hadLegacyAuthConfig) {
           saveSeasonDatabase(full);
         }
         return full;
@@ -1937,8 +1927,6 @@ function listAllRentalCards(seasonDb: SeasonDatabase): RentalCardOverviewItem[] 
         siNumber: cmp.siNumber,
         cardSeries: cmp.cardSeries,
         rentalReturned: Boolean(cmp.rentalReturned),
-        feePaid: Boolean(cmp.feePaid),
-        feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
         status: cmp.status,
       });
     }
@@ -2129,8 +2117,6 @@ async function startServer() {
         zeroTimeSec: 36000,
         arenaInfo: '',
         seriesName: '',
-
-        feeTrackingEnabled: false,
       },
       courses: [],
       classes: [],
@@ -2193,14 +2179,14 @@ async function startServer() {
       isEmptySeason,
       isFreshColdStart,
       demoCleared: Boolean(seasonDb.demoCleared),
-      clubSettings: ensureClubSettings(seasonDb),
+      clubSettings: omitLegacyPaymentFields(ensureClubSettings(seasonDb)),
       seriesStandings: computeSeasonSeriesStandings(seasonDb),
       competitionsList: buildCompetitionsSummaryList(seasonDb),
-      competition: effectiveCompetition,
+      competition: omitLegacyPaymentFields(effectiveCompetition),
       courses: ev.courses,
-      classes: ev.classes,
+      classes: ev.classes.map(omitLegacyPaymentFields),
       stations: ev.stations,
-      competitors: ev.competitors,
+      competitors: ev.competitors.map(omitLegacyPaymentFields),
       runnerDb: seasonDb.runnerDb,
       eventor: buildLiveEventorStatus(),
       emergency: ev.emergency,
@@ -2214,25 +2200,14 @@ async function startServer() {
   }
 
   function buildPublicRacePayload(ev: SingleEventRecord) {
-    const rawClub = ensureClubSettings(seasonDb);
-    const feesEnabled = Boolean(ev.competition.feeTrackingEnabled);
-    const publicClub: ClubSettings = feesEnabled
-      ? rawClub
-      : {
-          ...rawClub,
-          defaultDirectEntryFeeSek: 0,
-          rentalCardFeeSek: 0,
-          missingRentalFeeSek: 0,
-        };
     return {
-      competition: {
+      competition: omitLegacyPaymentFields({
         ...ev.competition,
         status: resolveEffectiveCompetitionStatus(ev),
-        feeTrackingEnabled: feesEnabled,
-      },
+      }),
       courses: ev.courses,
-      classes: feesEnabled ? ev.classes : ev.classes.map((cls) => ({ ...cls, feeSek: 0 })),
-      competitors: ev.competitors,
+      classes: ev.classes.map(omitLegacyPaymentFields),
+      competitors: ev.competitors.map(omitLegacyPaymentFields),
       radioControls: ev.stations
         .filter(
           (station) =>
@@ -2248,7 +2223,7 @@ async function startServer() {
       events: ev.events.slice(0, 60),
       emergency: ev.emergency,
       competitionsList: buildCompetitionsSummaryList(seasonDb),
-      clubSettings: publicClub,
+      clubSettings: omitLegacyPaymentFields(ensureClubSettings(seasonDb)),
       seriesStandings: computeSeasonSeriesStandings(seasonDb),
       updatedAt: new Date().toISOString(),
     };
@@ -2638,7 +2613,7 @@ async function startServer() {
   }
 
   // ==========================================================================
-  // PUBLIC SPECTATOR, QR SELF-REGISTRATION & LIVELOX IOF XML 3.0 ROUTES
+  // PUBLIC SPECTATOR, SELF-REGISTRATION & LIVELOX IOF XML 3.0 ROUTES
   // ==========================================================================
   app.get('/api/public/competitions', (_req, res) => {
     res.json(buildCompetitionsSummaryList(seasonDb));
@@ -2925,7 +2900,6 @@ async function startServer() {
     'isRentalCard',
     'isBorrowedCard',
     'rentalReturned',
-    'feePaid',
     'status',
     'allocatedStartSec',
     'checkTimeSec',
@@ -3106,10 +3080,10 @@ async function startServer() {
   });
 
   // ==========================================================================
-  // CLUB SETTINGS, SWISH, RENTAL CARDS & CLOUD PERSISTENCE ROUTES
+  // CLUB SETTINGS, RENTAL CARDS & CLOUD PERSISTENCE ROUTES
   // ==========================================================================
   app.get('/api/club-settings', (_req, res) => {
-    res.json(ensureClubSettings(seasonDb));
+    res.json(omitLegacyPaymentFields(ensureClubSettings(seasonDb)));
   });
 
   app.put('/api/club-settings', (req, res) => {
@@ -3129,6 +3103,7 @@ async function startServer() {
     }
 
     seasonDb.clubSettings = {
+      ...current,
       clubName:
         body.clubName !== undefined
           ? body.clubName.trim().slice(0, 100) || current.clubName
@@ -3137,18 +3112,6 @@ async function startServer() {
         body.eventorOrgId !== undefined
           ? body.eventorOrgId.trim().slice(0, 32)
           : current.eventorOrgId,
-      defaultDirectEntryFeeSek:
-        body.defaultDirectEntryFeeSek !== undefined
-          ? Math.max(0, Math.min(10000, Math.round(Number(body.defaultDirectEntryFeeSek) || 0)))
-          : current.defaultDirectEntryFeeSek,
-      rentalCardFeeSek:
-        body.rentalCardFeeSek !== undefined
-          ? Math.max(0, Math.min(5000, Math.round(Number(body.rentalCardFeeSek) || 0)))
-          : current.rentalCardFeeSek,
-      missingRentalFeeSek:
-        body.missingRentalFeeSek !== undefined
-          ? Math.max(0, Math.min(20000, Math.round(Number(body.missingRentalFeeSek) || 0)))
-          : current.missingRentalFeeSek,
       portalTitle:
         body.portalTitle !== undefined
           ? body.portalTitle.trim().slice(0, 80)
@@ -3176,7 +3139,7 @@ async function startServer() {
     };
     persistUserMutation();
     broadcastFullState();
-    res.json(seasonDb.clubSettings);
+    res.json(omitLegacyPaymentFields(seasonDb.clubSettings));
   });
 
   app.get('/api/club/rentals', (req, res) => {
@@ -3196,15 +3159,9 @@ async function startServer() {
       res.status(404).json({ error: 'Deltagaren hittades inte.' });
       return;
     }
-    const body = req.body as { rentalReturned?: boolean; feePaid?: boolean };
-    logLegacyCompetitorFieldWrite('rental return mirror', cmp.id, [
-      'rentalReturned',
-      ...(body.feePaid !== undefined ? ['feePaid'] : []),
-    ]);
+    const body = req.body as { rentalReturned?: boolean };
+    logLegacyCompetitorFieldWrite('rental return mirror', cmp.id, ['rentalReturned']);
     cmp.rentalReturned = body.rentalReturned !== undefined ? Boolean(body.rentalReturned) : true;
-    if (body.feePaid !== undefined) {
-      cmp.feePaid = Boolean(body.feePaid);
-    }
     persistUserMutation();
     broadcastFullState(ev.competition.shortCode);
     res.json({ rentals: listAllRentalCards(seasonDb) });
@@ -3212,7 +3169,7 @@ async function startServer() {
 
   app.get('/api/system/cloud-export', (req, res) => {
     if (!requireAdminRequest(req, res)) return;
-    const clubSettings = ensureClubSettings(seasonDb);
+    const clubSettings = omitLegacyPaymentFields(ensureClubSettings(seasonDb));
     for (const event of Object.values(seasonDb.eventsMap)) {
       if (event.competitors.length > 0) {
         declareCompetitorMutation({
@@ -3240,11 +3197,10 @@ async function startServer() {
         zeroTimeSec: ev.competition.zeroTimeSec,
         arenaInfo: ev.competition.arenaInfo || '',
         seriesName: ev.competition.seriesName || '',
-        feeTrackingEnabled: Boolean(ev.competition.feeTrackingEnabled),
       },
       courses: ev.courses,
-      classes: ev.classes,
-      competitors: ev.competitors,
+      classes: ev.classes.map(omitLegacyPaymentFields),
+      competitors: ev.competitors.map(omitLegacyPaymentFields),
       stations: ev.stations,
       brokenControls: ev.emergency?.brokenControls ?? [],
       emergency: ev.emergency,
@@ -3302,12 +3258,6 @@ async function startServer() {
           arenaInfo: item.competition.arenaInfo || '',
           seriesName: item.competition.seriesName || '',
           allowSelfRegistration: Boolean(item.competition.allowSelfRegistration),
-          feeTrackingEnabled: Boolean(
-            item.competition.feeTrackingEnabled ??
-              (item.competition as typeof item.competition & {
-                enableFeesAndSwish?: boolean;
-              }).enableFeesAndSwish
-          ),
         },
         courses: Array.isArray(item.courses) ? item.courses : [],
         classes: Array.isArray(item.classes) ? item.classes : [],
@@ -3457,7 +3407,6 @@ async function startServer() {
       status?: EventLifecycleStatus;
       arenaInfo?: string;
       seriesName?: string;
-      feeTrackingEnabled?: boolean;
       copyCoursesFromActive?: boolean;
       importedCourses?: {
         name: string;
@@ -3573,7 +3522,6 @@ async function startServer() {
             allowDirectEntry: true,
             freeStart,
             autoMatchCourse: isForked ? true : Boolean(cl.autoMatchCourse ?? freeStart),
-            feeSek: clubCfg.defaultDirectEntryFeeSek,
           };
         });
       } else {
@@ -3586,7 +3534,6 @@ async function startServer() {
           allowDirectEntry: true,
           freeStart: true,
           autoMatchCourse: true,
-          feeSek: clubCfg.defaultDirectEntryFeeSek,
         }));
       }
     } else if (canCopyFromActive && activeRef.classes.length > 0) {
@@ -3609,7 +3556,6 @@ async function startServer() {
           allowDirectEntry: true,
           freeStart: false,
           autoMatchCourse: false,
-          feeSek: clubCfg.defaultDirectEntryFeeSek,
         },
         {
           id: `cls-${Date.now()}-2`,
@@ -3618,7 +3564,6 @@ async function startServer() {
           allowDirectEntry: true,
           freeStart: true,
           autoMatchCourse: true,
-          feeSek: clubCfg.defaultDirectEntryFeeSek,
         },
       ];
     }
@@ -3635,7 +3580,6 @@ async function startServer() {
         zeroTimeSec: zeroSec,
         arenaInfo: body.arenaInfo?.trim() || '',
         seriesName: body.seriesName?.trim() || '',
-        feeTrackingEnabled: Boolean(body.feeTrackingEnabled),
       },
       courses,
       classes,
@@ -3690,19 +3634,23 @@ async function startServer() {
         : 'UPCOMING';
     const record: SingleEventRecord = {
       competition: {
-        ...competition,
         id: competitionId,
+        shortCode: competition.shortCode,
         status,
+        statusOverride: competition.statusOverride,
+        allowSelfRegistration: competition.allowSelfRegistration,
+        name: competition.name,
+        organizer: competition.organizer,
+        date: competition.date,
         zeroTimeStr: competition.zeroTimeStr || '18:00:00',
         zeroTimeSec: Number.isFinite(competition.zeroTimeSec)
           ? competition.zeroTimeSec
           : parseClockStrToSec(competition.zeroTimeStr || '18:00:00') ?? 64800,
         arenaInfo: competition.arenaInfo || '',
         seriesName: competition.seriesName || '',
-        feeTrackingEnabled: Boolean(competition.feeTrackingEnabled),
       },
       courses: body.courses,
-      classes: body.classes,
+      classes: body.classes.map(omitLegacyPaymentFields),
       stations: buildDefaultStations(new Date().toISOString()),
       competitors: [],
       emergency: { brokenControls: [], controlTimeOffsets: {} },
@@ -3769,9 +3717,6 @@ async function startServer() {
     if (body.seriesName !== undefined) {
       target.competition.seriesName = body.seriesName.trim();
     }
-    if (body.feeTrackingEnabled !== undefined) {
-      target.competition.feeTrackingEnabled = Boolean(body.feeTrackingEnabled);
-    }
     persistUserMutation();
     broadcastFullState(target.competition.shortCode);
     res.json(buildFullStatePayload());
@@ -3830,7 +3775,6 @@ async function startServer() {
         zeroTimeSec: src.competition.zeroTimeSec,
         arenaInfo: src.competition.arenaInfo || '',
         seriesName: src.competition.seriesName || '',
-        feeTrackingEnabled: Boolean(src.competition.feeTrackingEnabled),
       },
       courses: clonedCourses,
       classes: clonedClasses,
@@ -3954,7 +3898,10 @@ async function startServer() {
       broadcastFullState(ev.competition.shortCode);
     }
 
-    res.status(201).json({ event: result.eventItem, competitor: result.competitor });
+    res.status(201).json({
+      event: result.eventItem,
+      competitor: result.competitor ? omitLegacyPaymentFields(result.competitor) : null,
+    });
   });
 
   // 2. Handle Full SI-Card Memory Readout (0xEF / 0xE1 / 0xB1 + Offline Queue idempotency + Raw Archive)
@@ -3992,7 +3939,7 @@ async function startServer() {
     if (clientReadoutId && db.processedClientIds.includes(clientReadoutId)) {
       const existing = db.competitors.find((c) => c.siNumber === parsedSi) ?? null;
       res.status(200).json({
-        competitor: existing,
+        competitor: existing ? omitLegacyPaymentFields(existing) : null,
         event: db.events[0] ?? null,
         deduplicated: true,
       });
@@ -4163,7 +4110,7 @@ async function startServer() {
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
 
-    res.status(201).json({ competitor: runner, event: ev });
+    res.status(201).json({ competitor: omitLegacyPaymentFields(runner), event: ev });
   });
 
   // 3. Emergency Forest Tools & Raw Readout Recalculation
@@ -4287,7 +4234,7 @@ async function startServer() {
 
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
-    res.json(runner);
+    res.json(omitLegacyPaymentFields(runner));
   });
 
   // 4. Start List Draw Engine (Lottning med minutstart, masstart, fri start, vakanser & klubbseparering)
@@ -4654,17 +4601,15 @@ async function startServer() {
         'UPDATE',
         db.competition.id,
         existingMirror,
-        'Legacy Express mirror updates billing state without SI assignment validation.'
+        'Legacy Express mirror updates rental-return state without SI assignment validation.'
       );
       logLegacyCompetitorFieldWrite('direct-entry compatibility mirror', existingMirror.id, [
-        'feePaid',
         'rentalReturned',
       ]);
-      existingMirror.feePaid = Boolean(body.feePaid);
       existingMirror.rentalReturned = Boolean(body.rentalReturned);
       persistUserMutation();
       broadcastFullState(db.competition.shortCode);
-      res.status(200).json(existingMirror);
+      res.status(200).json(omitLegacyPaymentFields(existingMirror));
       return;
     }
 
@@ -4698,7 +4643,6 @@ async function startServer() {
       isRentalCard: Boolean(body.isRentalCard),
       isBorrowedCard: Boolean(body.isBorrowedCard),
       rentalReturned: false,
-      feePaid: Boolean(body.feePaid),
       status: body.status ?? 'REGISTERED',
       allocatedStartSec:
         body.allocatedStartSec !== undefined ? body.allocatedStartSec : null,
@@ -4807,7 +4751,7 @@ async function startServer() {
 
     persistUserMutation();
     broadcastFullState(db.competition.shortCode);
-    res.status(201).json(created);
+    res.status(201).json(omitLegacyPaymentFields(created));
   });
 
   app.put('/api/competitors/:id', (req, res) => {
@@ -4858,7 +4802,6 @@ async function startServer() {
         body.isBorrowedCard !== undefined ? body.isBorrowedCard : existing.isBorrowedCard,
       rentalReturned:
         body.rentalReturned !== undefined ? body.rentalReturned : existing.rentalReturned,
-      feePaid: body.feePaid !== undefined ? Boolean(body.feePaid) : existing.feePaid,
       status: body.status ?? existing.status,
       allocatedStartSec:
         body.allocatedStartSec !== undefined
@@ -4993,7 +4936,7 @@ async function startServer() {
     recomputeAllSplitRanks(db);
     persistUserMutation();
     broadcastFullState(db.competition.shortCode);
-    res.json(updated);
+    res.json(omitLegacyPaymentFields(updated));
   });
 
   app.delete('/api/competitors/:id', (req, res) => {
@@ -5111,6 +5054,7 @@ async function startServer() {
       return;
     }
     const created: CompClass = {
+      ...(db.classes.find((compClass) => compClass.id === body.id?.trim()) ?? {}),
       id: body.id?.trim() || `cls-${Date.now()}`,
       name: body.name.trim(),
       courseId:
@@ -5124,7 +5068,6 @@ async function startServer() {
       allowDirectEntry: body.allowDirectEntry !== false,
       freeStart: Boolean(body.freeStart),
       autoMatchCourse: Boolean(body.autoMatchCourse),
-      feeSek: Number(body.feeSek ?? 140),
     };
     const existingIndex = db.classes.findIndex((compClass) => compClass.id === created.id);
     if (existingIndex >= 0) {
@@ -5143,6 +5086,7 @@ async function startServer() {
     const body = req.body as Partial<CompClass>;
     const existing = idx >= 0 ? db.classes[idx] : null;
     const saved: CompClass = {
+      ...(existing ?? {}),
       id: req.params.id,
       name: body.name !== undefined ? body.name.trim() : existing?.name ?? 'Klass',
       courseId: body.courseId !== undefined ? body.courseId : existing?.courseId ?? db.courses[0]?.id ?? null,
@@ -5167,10 +5111,6 @@ async function startServer() {
         body.autoMatchCourse !== undefined
           ? body.autoMatchCourse
           : existing?.autoMatchCourse ?? false,
-      feeSek:
-        body.feeSek !== undefined
-          ? Math.max(0, Math.min(10000, Math.round(Number(body.feeSek) || 0)))
-          : existing?.feeSek ?? 140,
     };
     if (idx >= 0) {
       db.classes[idx] = saved;
@@ -5299,7 +5239,6 @@ async function startServer() {
         freeStart?: boolean;
         autoMatchCourse?: boolean;
         allowDirectEntry?: boolean;
-        feeSek?: number;
         rogainingMaxTimeSec?: number | null;
         rogainingPenaltyPerMin?: number | null;
       }[];
@@ -5329,7 +5268,6 @@ async function startServer() {
     }
 
     const db = getActiveEvent();
-    const clubCfg = ensureClubSettings(seasonDb);
     const validIncomingClasses = classes.filter(
       (cl) => String(cl.name || '').trim().length > 0
     );
@@ -5432,7 +5370,6 @@ async function startServer() {
         freeStart?: boolean;
         autoMatchCourse?: boolean;
         allowDirectEntry?: boolean;
-        feeSek?: number;
         rogainingMaxTimeSec?: number | null;
         rogainingPenaltyPerMin?: number | null;
       },
@@ -5482,7 +5419,6 @@ async function startServer() {
         autoMatchCourse: isForked
           ? true
           : Boolean(cl.autoMatchCourse ?? existingClass?.autoMatchCourse ?? freeStart),
-        feeSek: cl.feeSek ?? existingClass?.feeSek ?? clubCfg.defaultDirectEntryFeeSek,
       };
     };
 
@@ -5902,15 +5838,12 @@ async function startServer() {
     }
     if (body.arenaInfo !== undefined) db.competition.arenaInfo = body.arenaInfo.trim();
     if (body.seriesName !== undefined) db.competition.seriesName = body.seriesName.trim();
-    if (body.feeTrackingEnabled !== undefined) {
-      db.competition.feeTrackingEnabled = Boolean(body.feeTrackingEnabled);
-    }
     persistUserMutation();
     broadcastFullState(db.competition.shortCode);
-    res.json({
+    res.json(omitLegacyPaymentFields({
       ...db.competition,
       status: resolveEffectiveCompetitionStatus(db),
-    });
+    }));
   });
 
   app.post('/api/system/reset-seed', (req, res) => {
@@ -5928,8 +5861,14 @@ async function startServer() {
       version: seasonDb.version,
       activeEventId: seasonDb.activeEventId,
       demoCleared: Boolean(seasonDb.demoCleared),
-      clubSettings: ensureClubSettings(seasonDb),
-      eventsMap: seasonDb.eventsMap,
+      clubSettings: omitLegacyPaymentFields(ensureClubSettings(seasonDb)),
+      eventsMap: Object.entries(seasonDb.eventsMap).reduce(
+        (eventsMap, [id, event]) => {
+          eventsMap[id] = omitLegacyEventPaymentFields(event);
+          return eventsMap;
+        },
+        {} as Record<string, SingleEventRecord>
+      ),
       runnerDb: seasonDb.runnerDb,
       eventor: seasonDb.eventor,
     };
@@ -6050,7 +5989,6 @@ async function startServer() {
           identityAffecting: false,
         });
       }
-      ev.competition.feeTrackingEnabled = Boolean(ev.competition.feeTrackingEnabled);
       if (!ev.emergency) ev.emergency = { brokenControls: [], controlTimeOffsets: {} };
       if (!ev.roc) ev.roc = buildDefaultRocStatus('1042');
       if (!Array.isArray(ev.processedClientIds)) ev.processedClientIds = [];

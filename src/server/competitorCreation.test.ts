@@ -18,7 +18,6 @@ const createInput: TrustedCompetitorCreateInput = {
   cardSeries: 'SI-Card 10',
   isRentalCard: false,
   rentalReturned: false,
-  feePaid: false,
   status: 'REGISTERED',
   allocatedStartSec: -1,
   checkTimeSec: -1,

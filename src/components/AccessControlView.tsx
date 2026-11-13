@@ -20,9 +20,7 @@ import type {
   ClubAdminAccount,
   ClubAdminTier,
   ClubSettings,
-  CompClass,
   CompetitionSummary,
-  Competitor,
   EventLifecycleStatus,
   MeosAppState,
   OfficialRole,
@@ -75,11 +73,7 @@ import type { ParsedEventorXml } from '../utils/eventorXml';
 interface AccessControlViewProps {
   view?: 'events' | 'admin';
   activeEventId: string;
-  competitionName: string;
-  feeTrackingEnabled?: boolean;
   competitionsList: CompetitionSummary[];
-  competitors: Competitor[];
-  classes: CompClass[];
   clubSettings: ClubSettings;
   seriesStandings: SeriesStandingsBundle[];
   currentUser: AuthSessionUser;
@@ -133,11 +127,7 @@ const OFFICIAL_ROLE_LABELS: Record<OfficialRole, string> = {
 export function AccessControlView({
   view = 'admin',
   activeEventId,
-  competitionName,
-  feeTrackingEnabled = false,
   competitionsList,
-  competitors,
-  classes,
   clubSettings,
   seriesStandings,
   currentUser,
@@ -192,7 +182,7 @@ export function AccessControlView({
     };
   }, []);
 
-  // Club, appearance, and fee settings state
+  // Club and appearance settings state
   const [clubForm, setClubForm] = useState<ClubSettings>(clubSettings);
   const [clubBusy, setClubBusy] = useState<boolean>(false);
   const [logoBusy, setLogoBusy] = useState<boolean>(false);
@@ -234,7 +224,6 @@ export function AccessControlView({
   } | null>(null);
 
   const isSuperAdmin = currentUser.adminTier === 'SUPER_ADMIN';
-  const anyEventHasFees = Boolean(feeTrackingEnabled);
 
   useEffect(() => {
     setClubForm(clubSettings);
@@ -369,7 +358,7 @@ export function AccessControlView({
             includeRunnerDb: false,
           });
           if (!cloudSeason) {
-            throw new Error('Firestore kunde inte läsa in hyr- och betalstatus.');
+            throw new Error('Firestore kunde inte läsa in hyrkortsstatus.');
           }
           setRentals(
             cloudSeason.events.flatMap((event) =>
@@ -390,20 +379,18 @@ export function AccessControlView({
                   siNumber: competitor.siNumber,
                   cardSeries: competitor.cardSeries || 'SI-Card 10',
                   rentalReturned: Boolean(competitor.rentalReturned),
-                  feePaid: Boolean(competitor.feePaid),
-                  feeTrackingEnabled: Boolean(event.competition.feeTrackingEnabled),
                   status: competitor.status,
                 }))
             )
           );
           setRentalNotice(null);
         } catch (error) {
-          console.error('Kunde inte läsa hyr- och betalstatus från Firestore:', error);
+          console.error('Kunde inte läsa hyrkortsstatus från Firestore:', error);
           setRentals([]);
           setRentalNotice(
             error instanceof Error
               ? error.message
-              : 'Kunde inte läsa hyr- och betalstatus från Firestore.'
+              : 'Kunde inte läsa hyrkortsstatus från Firestore.'
           );
         }
       } catch {
@@ -1099,28 +1086,6 @@ export function AccessControlView({
     [rentals, rentalFilter]
   );
 
-  const activePaymentSummary = useMemo(() => {
-    let paidCount = 0;
-    let unpaidCount = 0;
-    let totalPaidSek = 0;
-    let totalOutstandingSek = 0;
-
-    for (const c of competitors) {
-      const cls = classes.find((x) => x.id === c.classId);
-      const fee =
-        (cls?.feeSek ?? clubSettings.defaultDirectEntryFeeSek) +
-        (c.isRentalCard ? clubSettings.rentalCardFeeSek : 0);
-      if (c.feePaid) {
-        paidCount += 1;
-        totalPaidSek += fee;
-      } else if (feeTrackingEnabled) {
-        unpaidCount += 1;
-        totalOutstandingSek += fee;
-      }
-    }
-    return { paidCount, unpaidCount, totalPaidSek, totalOutstandingSek };
-  }, [competitors, classes, clubSettings, feeTrackingEnabled]);
-
   const activeSeriesBundle = useMemo(
     () =>
       seriesStandings.find((b) => b.seriesName === selectedSeriesName) ??
@@ -1622,7 +1587,7 @@ export function AccessControlView({
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              {anyEventHasFees ? 'Klubb, utseende & avgifter' : 'Klubbprofil & utseende'}
+              Klubbprofil & utseende
             </button>
             <button
               type="button"
@@ -2297,7 +2262,7 @@ export function AccessControlView({
       )}
 
       {/* =====================================================================
-          TAB 3: KLUBBPROFIL, LOGOTYP, GRUNDUTSEENDE & SWISH
+          TAB 3: KLUBBPROFIL, LOGOTYP & GRUNDUTSEENDE
          ===================================================================== */}
       {subTab === 'club' && (
         <form onSubmit={handleSaveClubSettings} className="space-y-3.5">
@@ -2600,101 +2565,6 @@ export function AccessControlView({
             </section>
           </div>
 
-          {/* Optional fee settings and payment status */}
-          {anyEventHasFees && (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-stretch">
-              <section className="lg:col-span-12 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3">
-                <div>
-                  <h3 className="text-sm font-display font-bold text-slate-900 dark:text-slate-100">
-                    Avgifter & hyrbrickor
-                  </h3>
-                  <p className="text-[11px] club-muted text-slate-500 dark:text-slate-400">
-                    Används för avgiftsuppföljning vid sekretariatets direktanmälan.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Startavgift (kr)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={10000}
-                      value={clubForm.defaultDirectEntryFeeSek}
-                      onChange={(e) =>
-                        setClubForm((p) => ({
-                          ...p,
-                          defaultDirectEntryFeeSek: Number(e.target.value) || 0,
-                        }))
-                      }
-                      className="w-full px-3 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Hyrbricka (kr)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={5000}
-                      value={clubForm.rentalCardFeeSek}
-                      onChange={(e) =>
-                        setClubForm((p) => ({
-                          ...p,
-                          rentalCardFeeSek: Number(e.target.value) || 0,
-                        }))
-                      }
-                      className="w-full px-3 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Saknad bricka (kr)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={20000}
-                      value={clubForm.missingRentalFeeSek}
-                      onChange={(e) =>
-                        setClubForm((p) => ({
-                          ...p,
-                          missingRentalFeeSek: Number(e.target.value) || 0,
-                        }))
-                      }
-                      className="w-full px-3 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className="lg:col-span-12 min-w-0 club-surface bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
-                {feeTrackingEnabled && (
-                  <div className="pt-2.5 border-t border-slate-200 dark:border-slate-800 space-y-1 text-xs">
-                    <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                      Betalningsstatus ({competitionName})
-                    </div>
-                    <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-                      <span>Betalda</span>
-                      <span className="font-mono tabular-nums font-medium text-emerald-700 dark:text-emerald-400">
-                        {activePaymentSummary.paidCount} st · {activePaymentSummary.totalPaidSek} kr
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-                      <span>Obetalda</span>
-                      <span className="font-mono tabular-nums font-medium text-amber-700 dark:text-amber-400">
-                        {activePaymentSummary.unpaidCount} st ·{' '}
-                        {activePaymentSummary.totalOutstandingSek} kr
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
         </form>
       )}
 
@@ -2851,14 +2721,6 @@ export function AccessControlView({
                 </h2>
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
                   <span>Säsongsuppföljning</span>
-                  {anyEventHasFees && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span className="font-mono tabular-nums">
-                        Ersättningsavgift {clubSettings.missingRentalFeeSek} kr
-                      </span>
-                    </>
-                  )}
                 </div>
               </div>
 
@@ -2930,9 +2792,7 @@ export function AccessControlView({
                           </span>
                         ) : (
                           <span className="text-[11px] text-amber-700 dark:text-amber-400 font-semibold whitespace-nowrap">
-                            {r.feeTrackingEnabled
-                              ? `Ute (${clubSettings.missingRentalFeeSek} kr)`
-                              : 'Ej inlämnad'}
+                            Ej inlämnad
                           </span>
                         )}
                         <button
