@@ -18,6 +18,16 @@ export interface LiveIntegrityFinding {
   issue: SIAssignmentInventoryIssue;
 }
 
+export function getLiveIntegrityFindingKey(finding: LiveIntegrityFinding): string {
+  return JSON.stringify([
+    finding.competitionId,
+    finding.issue.conflictType,
+    [...finding.issue.competitorIds].sort(),
+    [...finding.issue.assignmentDocumentIds].sort(),
+    finding.issue.siNumber,
+  ]);
+}
+
 export const ACKNOWLEDGED_HISTORICAL_OWNER_UID_EXCEPTIONS: readonly AcknowledgedIntegrityException[] = [
   {
     competitionId: 'evt-1794087219877',

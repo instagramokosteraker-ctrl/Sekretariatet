@@ -3,6 +3,7 @@ import { Timestamp } from 'firebase/firestore';
 import { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from '../types/sportident';
 import {
   ACKNOWLEDGED_HISTORICAL_OWNER_UID_EXCEPTIONS,
+  getLiveIntegrityFindingKey,
   partitionLiveIntegrityFindings,
 } from './liveIntegrityMonitoring';
 import { buildSIAssignmentInventory } from './siAssignmentInventory';
@@ -56,6 +57,38 @@ function createReport(params: {
 }
 
 describe('live integrity monitoring', () => {
+  it('creates stable dismissal keys from finding identity rather than detail text', () => {
+    const report = createReport({
+      competitionId: 'evt_test',
+      competitorDocumentId: 'cmp_test',
+      siNumber: '123',
+    });
+    const issue = report.competitions[0].issues.find(
+      (finding) => finding.conflictType === 'ASSIGNMENT_OWNER_UID_MISMATCH'
+    );
+    expect(issue).toBeDefined();
+    if (!issue) return;
+
+    const key = getLiveIntegrityFindingKey({
+      competitionId: 'evt_test',
+      competitionName: 'Test',
+      issue,
+    });
+    const sameIdentityDifferentDetail = getLiveIntegrityFindingKey({
+      competitionId: 'evt_test',
+      competitionName: 'Renamed',
+      issue: { ...issue, detail: 'Updated finding details.' },
+    });
+    const differentCompetition = getLiveIntegrityFindingKey({
+      competitionId: 'evt_other',
+      competitionName: 'Test',
+      issue,
+    });
+
+    expect(sameIdentityDifferentDetail).toBe(key);
+    expect(differentCompetition).not.toBe(key);
+  });
+
   it('acknowledges only the six exact historical ownerUid findings', () => {
     const report = {
       competitions: ACKNOWLEDGED_HISTORICAL_OWNER_UID_EXCEPTIONS.map((exception) =>
