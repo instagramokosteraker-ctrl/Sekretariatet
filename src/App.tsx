@@ -3024,12 +3024,16 @@ export default function App() {
                       if (!eventorConfig.apiKey.trim()) {
                         throw new Error('Spara en Eventor API-nyckel lokalt innan du hämtar en tävling.');
                       }
-                      const res = await apiFetch('/api/eventor/import-event', {
+                      const eventorEndpoint = import.meta.env.DEV
+                        ? '/api/eventor/import-event'
+                        : '/api/eventor';
+                      const res = await apiFetch(eventorEndpoint, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                           ...eventorConfig,
                           eventId,
+                          action: 'import',
                         }),
                       });
                       const data = await readApiResponseJson<{

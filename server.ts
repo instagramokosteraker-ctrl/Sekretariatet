@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import express from 'express';
 import http from 'http';
 import fs from 'fs';
@@ -35,6 +34,21 @@ import {
   deleteCompetitionWithAssignments,
   CompetitionDeletionError,
 } from './src/server/competitionDeletion';
+import {
+  parseEventorClassesXml,
+  parseEventorCompetitorsXml,
+  parseEventorEntriesXml,
+  parseEventorEventXml,
+  parseEventorOrgXml,
+} from './src/server/eventorXml';
+import {
+  EventorApiError,
+  fetchFromEventorApi,
+} from './src/server/eventorApiClient';
+import {
+  readFirestoreRole,
+  verifyFirebaseIdToken,
+} from './src/server/firebaseTokenAuth';
 import {
   declareCompetitorMutation,
   runCompetitorMutation,
@@ -644,123 +658,6 @@ function ensureSeasonAuthConfig(seasonDb: SeasonDatabase): SeasonAuthConfig {
   }
   seasonDb.authConfig = { admins };
   return seasonDb.authConfig;
-}
-
-let cachedGoogleCerts: { certs: Record<string, string>; fetchedAtMs: number } | null = null;
-
-async function getGoogleSecureTokenCerts(forceRefresh = false): Promise<Record<string, string>> {
-  const now = Date.now();
-  if (
-    !forceRefresh &&
-    cachedGoogleCerts &&
-    now - cachedGoogleCerts.fetchedAtMs < 50 * 60 * 1000
-  ) {
-    return cachedGoogleCerts.certs;
-  }
-  const resp = await fetch(
-    'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com'
-  );
-  if (!resp.ok) {
-    throw new Error('Kunde inte hämta Googles certifikat för tokenverifiering.');
-  }
-  const certs = (await resp.json()) as Record<string, string>;
-  cachedGoogleCerts = { certs, fetchedAtMs: now };
-  return certs;
-}
-
-async function verifyFirebaseIdToken(idToken: string): Promise<{
-  uid: string;
-  email: string;
-  emailVerified: boolean;
-  name: string;
-  expiresAt: number;
-}> {
-  const parts = idToken.trim().split('.');
-  if (parts.length !== 3) {
-    throw new Error('Ogiltigt Firebase ID-tokenformat.');
-  }
-  const [headerB64, payloadB64, sigB64] = parts;
-  const header = JSON.parse(
-    Buffer.from(headerB64, 'base64url').toString('utf-8')
-  ) as { alg?: string; kid?: string };
-  const payload = JSON.parse(
-    Buffer.from(payloadB64, 'base64url').toString('utf-8')
-  ) as {
-    aud?: string;
-    iss?: string;
-    sub?: string;
-    exp?: number;
-    email?: string;
-    email_verified?: boolean;
-    name?: string;
-  };
-
-  if (header.alg !== 'RS256' || !header.kid) {
-    throw new Error('Ogiltig tokensignaturalgoritm.');
-  }
-  if (
-    payload.aud !== FIREBASE_PROJECT_ID ||
-    payload.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`
-  ) {
-    throw new Error('Token tillhör inte detta Firebase-projekt.');
-  }
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (!payload.exp || payload.exp < nowSec - 30) {
-    throw new Error('Inloggningssessionen har löpt ut. Logga in igen.');
-  }
-  if (!payload.sub || !payload.email || payload.email_verified !== true) {
-    throw new Error('Google-kontot saknar verifierad e-postadress.');
-  }
-
-  let certs = await getGoogleSecureTokenCerts(false);
-  let certPem = certs[header.kid];
-  if (!certPem) {
-    certs = await getGoogleSecureTokenCerts(true);
-    certPem = certs[header.kid];
-  }
-  if (!certPem) {
-    throw new Error('Kunde inte hitta matchande Google-certifikat.');
-  }
-
-  const verifier = crypto.createVerify('RSA-SHA256');
-  verifier.update(`${headerB64}.${payloadB64}`);
-  verifier.end();
-  const validSig = verifier.verify(certPem, Buffer.from(sigB64, 'base64url'));
-  if (!validSig) {
-    throw new Error('Kryptografisk verifiering av Google-token misslyckades.');
-  }
-
-  return {
-    uid: payload.sub,
-    email: payload.email.trim().toLowerCase(),
-    emailVerified: true,
-    name: (payload.name || payload.email.split('@')[0]).trim(),
-    expiresAt: payload.exp!,
-  };
-}
-
-async function readFirestoreRole(
-  token: string,
-  collectionName: 'admins' | 'roleAssignments',
-  uid: string
-): Promise<string | null> {
-  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
-    FIREBASE_PROJECT_ID
-  )}/databases/${encodeURIComponent(
-    FIRESTORE_DATABASE_ID
-  )}/documents/${collectionName}/${encodeURIComponent(uid)}`;
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (response.status === 403 || response.status === 404) return null;
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Kunde inte läsa Firebase-roll (${response.status}): ${body.slice(0, 300)}`);
-  }
-  const document = (await response.json()) as {
-    fields?: Record<string, { stringValue?: string }>;
-  };
-  return document.fields?.role?.stringValue || null;
 }
 
 function inferSeries(siNumber: number): SICardSeries {
@@ -1374,20 +1271,6 @@ interface EventorConfig {
 
 type EventorApiConfig = Pick<EventorConfig, 'apiKey' | 'baseUrl'>;
 
-class EventorApiError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string
-  ) {
-    super(message);
-    this.name = 'EventorApiError';
-  }
-}
-
-const EVENTOR_REQUEST_TIMEOUT_MS = 10_000;
-const EVENTOR_TIMEOUT_MESSAGE =
-  'Eventor svarade inte inom 10 sekunder. Försök igen om en stund.';
-
 function normalizeEventorBaseUrl(value: string): string {
   const rawBase = value.trim().replace(/\/+$/, '');
   const baseUrl = rawBase ? (rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`) : DEFAULT_EVENTOR_BASE_URL;
@@ -1717,336 +1600,6 @@ function upsertRunnerInSeasonDb(
   };
   seasonDb.runnerDb.unshift(created);
   return created;
-}
-
-/**
- * XML helpers for Eventor REST API & Server-Side IOF XML 3.0 ResultList feed (Livelox / WinSplits)
- */
-function decodeXmlEntities(raw: string): string {
-  return raw
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(Number(dec)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .trim();
-}
-
-function extractFirstTag(xml: string, localTagName: string): string | null {
-  const re = new RegExp(
-    `<(?:[a-zA-Z0-9_]+:)?${localTagName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:[a-zA-Z0-9_]+:)?${localTagName}>`,
-    'i'
-  );
-  const m = xml.match(re);
-  return m ? decodeXmlEntities(m[1]) : null;
-}
-
-function extractAllBlocks(xml: string, localTagName: string): string[] {
-  const re = new RegExp(
-    `<(?:[a-zA-Z0-9_]+:)?${localTagName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:[a-zA-Z0-9_]+:)?${localTagName}>`,
-    'gi'
-  );
-  const blocks: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(xml)) !== null) {
-    blocks.push(match[1]);
-  }
-  return blocks;
-}
-
-function parseEventorOrgXml(xml: string): { orgId: string; orgName: string } | null {
-  const orgBlock = extractFirstTag(xml, 'Organisation') ?? xml;
-  const orgId =
-    extractFirstTag(orgBlock, 'OrganisationId') ??
-    extractFirstTag(orgBlock, 'Id') ??
-    null;
-  const orgName =
-    extractFirstTag(orgBlock, 'Name') ??
-    extractFirstTag(orgBlock, 'ShortName') ??
-    null;
-  if (!orgId || !orgName) return null;
-  return { orgId, orgName };
-}
-
-function parseEventorEventXml(
-  xml: string,
-  requestedEventId: string
-): { eventId: string; name: string; organizer: string | null; date: string | null } | null {
-  const eventBlock = extractFirstTag(xml, 'Event') ?? xml;
-  const name = extractFirstTag(eventBlock, 'Name') ?? extractFirstTag(eventBlock, 'EventName');
-  if (!name?.trim()) return null;
-
-  const organizerBlock =
-    extractFirstTag(eventBlock, 'Organiser') ??
-    extractFirstTag(eventBlock, 'Organizer') ??
-    extractFirstTag(eventBlock, 'Organisation');
-  const organizer =
-    (organizerBlock
-      ? extractFirstTag(organizerBlock, 'Name') ?? extractFirstTag(organizerBlock, 'ShortName')
-      : null) ??
-    extractFirstTag(eventBlock, 'OrganiserName') ??
-    extractFirstTag(eventBlock, 'OrganizerName') ??
-    null;
-  const dateValue =
-    extractFirstTag(eventBlock, 'StartDate') ??
-    extractFirstTag(eventBlock, 'EventDate') ??
-    extractFirstTag(eventBlock, 'Date') ??
-    '';
-  const dateMatch = dateValue.match(/^(\d{4}-\d{2}-\d{2})/);
-
-  return {
-    eventId: requestedEventId,
-    name: name.trim().slice(0, 140),
-    organizer: organizer?.trim().slice(0, 100) || null,
-    date: dateMatch?.[1] ?? null,
-  };
-}
-
-function parseEventorCompetitorsXml(
-  xml: string,
-  fallbackClubName: string,
-  fallbackOrgId: string
-): {
-  siNumber: number;
-  fullName: string;
-  club: string;
-  birthYear: number | null;
-  eventorPersonId: string | null;
-  eventorOrgId: string | null;
-}[] {
-  const blocks = [
-    ...extractAllBlocks(xml, 'Competitor'),
-    ...extractAllBlocks(xml, 'PersonEntry'),
-  ];
-  const parsed: {
-    siNumber: number;
-    fullName: string;
-    club: string;
-    birthYear: number | null;
-    eventorPersonId: string | null;
-    eventorOrgId: string | null;
-  }[] = [];
-
-  for (const b of blocks) {
-    const personBlock = extractFirstTag(b, 'Person') ?? b;
-    const nameBlock = extractFirstTag(personBlock, 'Name') ?? personBlock;
-    const given = extractFirstTag(nameBlock, 'Given') ?? '';
-    const family = extractFirstTag(nameBlock, 'Family') ?? '';
-    const fullName = `${given} ${family}`.trim();
-    if (!fullName) continue;
-
-    const personId =
-      extractFirstTag(personBlock, 'PersonId') ??
-      extractFirstTag(personBlock, 'Id') ??
-      null;
-    const birthRaw = extractFirstTag(personBlock, 'BirthDate') ?? '';
-    const yearMatch = birthRaw.match(/\b(19\d{2}|20\d{2})\b/);
-    const birthYear = yearMatch ? Number(yearMatch[1]) : null;
-
-    const orgBlock = extractFirstTag(b, 'Organisation');
-    const club = (orgBlock ? extractFirstTag(orgBlock, 'Name') : null) || fallbackClubName;
-    const orgId =
-      (orgBlock
-        ? extractFirstTag(orgBlock, 'OrganisationId') ?? extractFirstTag(orgBlock, 'Id')
-        : null) || fallbackOrgId;
-
-    const cardTexts = [
-      ...extractAllBlocks(b, 'CCardId'),
-      ...extractAllBlocks(b, 'ControlCard'),
-      ...extractAllBlocks(b, 'PunchingUnitId'),
-    ];
-    for (const ct of cardTexts) {
-      const si = Number(decodeXmlEntities(ct).replace(/\D/g, ''));
-      if (Number.isFinite(si) && si > 0) {
-        parsed.push({
-          siNumber: si,
-          fullName,
-          club,
-          birthYear,
-          eventorPersonId: personId,
-          eventorOrgId: orgId,
-        });
-      }
-    }
-  }
-  return parsed;
-}
-
-function parseEventorClassesXml(xml: string): Map<string, string> {
-  const classMap = new Map<string, string>();
-  const blocks = [
-    ...extractAllBlocks(xml, 'EventClass'),
-    ...extractAllBlocks(xml, 'Class'),
-  ];
-  for (const b of blocks) {
-    const id = extractFirstTag(b, 'EventClassId') ?? extractFirstTag(b, 'Id');
-    const name = extractFirstTag(b, 'Name') ?? extractFirstTag(b, 'ClassShortName');
-    if (id?.trim() && name?.trim()) {
-      classMap.set(id.trim().slice(0, 128), name.trim().slice(0, 80));
-    }
-  }
-  return classMap;
-}
-
-function parseEventorEntriesXml(
-  xml: string,
-  classIdToName: Map<string, string>
-): { fullName: string; club: string; className: string; siNumber: number; personId: string | null }[] {
-  const blocks = [
-    ...extractAllBlocks(xml, 'Entry'),
-    ...extractAllBlocks(xml, 'PersonEntry'),
-  ];
-  const entries: {
-    fullName: string;
-    club: string;
-    className: string;
-    siNumber: number;
-    personId: string | null;
-  }[] = [];
-
-  for (const b of blocks) {
-    const personBlock = extractFirstTag(b, 'Competitor') ?? extractFirstTag(b, 'Person') ?? b;
-    const nameBlock = extractFirstTag(personBlock, 'Name') ?? personBlock;
-    const given = extractFirstTag(nameBlock, 'Given') ?? '';
-    const family = extractFirstTag(nameBlock, 'Family') ?? '';
-    const fullName = `${given} ${family}`.trim().slice(0, 120);
-    if (!fullName) continue;
-
-    const personId =
-      extractFirstTag(personBlock, 'PersonId') ??
-      extractFirstTag(personBlock, 'Id') ??
-      null;
-
-    const orgBlock =
-      extractFirstTag(b, 'Organisation') ?? extractFirstTag(personBlock, 'Organisation');
-    const club = ((orgBlock ? extractFirstTag(orgBlock, 'Name') : null) || 'Klubblös').slice(
-      0,
-      100
-    );
-
-    const entryClassBlock = extractFirstTag(b, 'EntryClass') ?? extractFirstTag(b, 'Class') ?? b;
-    const evClsId =
-      extractFirstTag(entryClassBlock, 'EventClassId') ??
-      extractFirstTag(b, 'EventClassId') ??
-      extractFirstTag(entryClassBlock, 'Id') ??
-      '';
-    const directClsName = extractFirstTag(entryClassBlock, 'Name');
-    const className = (
-      (evClsId && classIdToName.get(evClsId)) ||
-      directClsName ||
-      'Öppen Motion'
-    ).slice(0, 80);
-
-    const cardTexts = [
-      ...extractAllBlocks(b, 'CCardId'),
-      ...extractAllBlocks(b, 'ControlCard'),
-      ...extractAllBlocks(b, 'PunchingUnitId'),
-    ];
-    let siNumber = 0;
-    for (const ct of cardTexts) {
-      const candidate = Number(decodeXmlEntities(ct).replace(/\D/g, ''));
-      if (Number.isInteger(candidate) && candidate > 0 && candidate <= 99999999) {
-        siNumber = candidate;
-        break;
-      }
-    }
-
-    entries.push({
-      fullName,
-      club,
-      className,
-      siNumber,
-      personId: personId?.slice(0, 128) ?? null,
-    });
-  }
-  return entries;
-}
-
-function getEventorErrorDetail(body: string, statusText: string, apiKey: string): string {
-  let detail: string;
-  try {
-    const payload = JSON.parse(body) as {
-      error?: unknown;
-      message?: unknown;
-      detail?: unknown;
-    };
-    for (const value of [payload.error, payload.message, payload.detail]) {
-      if (typeof value === 'string' && value.trim()) {
-        detail = value.trim();
-        return detail.split(apiKey).join('[redacted]').slice(0, 500);
-      }
-    }
-  } catch {
-    // Eventor commonly returns XML or plain text errors.
-  }
-  const text = body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  detail = text || statusText || 'Okänt fel från Eventor.';
-  return detail.split(apiKey).join('[redacted]').slice(0, 500);
-}
-
-async function fetchFromEventorApi(
-  endpointPath: string,
-  config: EventorApiConfig,
-  requireStatus200 = false
-): Promise<string> {
-  if (!config.apiKey) {
-    throw new Error('Eventor API-nyckel saknas. Konfigurera integrationen under Klubbadmin & Behörighet.');
-  }
-  const url = `${config.baseUrl}${endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(
-    () => controller.abort(),
-    EVENTOR_REQUEST_TIMEOUT_MS
-  );
-  try {
-    const resp = await fetch(url, {
-      headers: {
-        ApiKey: config.apiKey,
-        Accept: 'application/xml, text/xml, */*',
-      },
-      signal: controller.signal,
-    });
-    const body = await resp.text();
-    const contentType = (resp.headers.get('content-type') ?? '').toLowerCase();
-    const isHtml =
-      contentType.includes('text/html') ||
-      /^\s*(?:<!doctype\s+html|<(?:html|head|body|title|meta|script)\b)/i.test(body);
-
-    if (!resp.ok || (requireStatus200 && resp.status !== 200)) {
-      const detail = isHtml
-        ? ''
-        : getEventorErrorDetail(body, resp.statusText, config.apiKey);
-      throw new EventorApiError(
-        resp.ok ? 502 : resp.status,
-        `Eventor svarade inte korrekt (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`
-      );
-    }
-
-    const isXml =
-      (body.trim().length > 0 && contentType.includes('xml')) ||
-      (!contentType.includes('html') &&
-        !contentType.includes('json') &&
-        body.trim().length > 0 &&
-        /^\s*(?:<\?xml\b|<[A-Za-z_][\w:.-]*(?:\s|>))/i.test(body) &&
-        !isHtml);
-    if (!isXml) {
-      throw new EventorApiError(
-        502,
-        `Eventor svarade inte korrekt (HTTP ${resp.status})`
-      );
-    }
-    return body;
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new EventorApiError(504, EVENTOR_TIMEOUT_MESSAGE);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 function sendEventorError(
@@ -3219,10 +2772,22 @@ async function startServer() {
 
     if (token.split('.').length === 3) {
       try {
-        const verified = await verifyFirebaseIdToken(token);
+        const verified = await verifyFirebaseIdToken(token, FIREBASE_PROJECT_ID);
         const [adminRole, assignedOfficialRole] = await Promise.all([
-          readFirestoreRole(token, 'admins', verified.uid),
-          readFirestoreRole(token, 'roleAssignments', verified.uid),
+          readFirestoreRole(
+            token,
+            'admins',
+            verified.uid,
+            FIREBASE_PROJECT_ID,
+            FIRESTORE_DATABASE_ID
+          ),
+          readFirestoreRole(
+            token,
+            'roleAssignments',
+            verified.uid,
+            FIREBASE_PROJECT_ID,
+            FIRESTORE_DATABASE_ID
+          ),
         ]);
         if (adminRole === 'SUPER_ADMIN' || adminRole === 'RACE_ADMIN') {
           return {
