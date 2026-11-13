@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  ArrowDown,
   Binary,
   CloudOff,
   Compass,
@@ -26,7 +27,6 @@ import {
   Sun,
   Timer,
   Trophy,
-  Upload,
   UserPlus,
   Volume2,
   VolumeX,
@@ -3015,7 +3015,7 @@ export default function App() {
                         </span>
                       </div>
                       <label className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-800 dark:text-slate-100 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded-md cursor-pointer transition-colors whitespace-nowrap shrink-0">
-                        <Upload className="w-3.5 h-3.5 shrink-0" />
+                        <ArrowDown className="w-3.5 h-3.5 shrink-0" />
                         <span>Ladda upp banfil (.xml)</span>
                         <input
                           type="file"

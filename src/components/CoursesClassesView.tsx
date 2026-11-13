@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Edit2, FileCode, Plus, Trash2, Upload, X } from 'lucide-react';
+import { ArrowDown, Edit2, FileCode, Plus, Trash2, X } from 'lucide-react';
 import type {
   ClassCompetitionFormat,
   CompClass,
@@ -344,7 +344,7 @@ export function CoursesClassesView({
             }}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium club-accent-btn rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
-            <Upload className="w-3.5 h-3.5 shrink-0" />
+            <ArrowDown className="w-3.5 h-3.5 shrink-0" />
             <span>{importPanelOpen ? 'Stäng import' : 'Importera banfil (.xml)'}</span>
           </button>
 
@@ -442,7 +442,7 @@ export function CoursesClassesView({
             <div className="flex flex-wrap items-center justify-between gap-2.5">
               <div className="flex flex-wrap items-center gap-2">
                 <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium club-accent-btn rounded-lg cursor-pointer whitespace-nowrap shrink-0">
-                  <Upload className="w-3.5 h-3.5 shrink-0" />
+                  <ArrowDown className="w-3.5 h-3.5 shrink-0" />
                   <span>Välj XML-banfil (.xml)</span>
                   <input
                     type="file"
@@ -579,8 +579,9 @@ export function CoursesClassesView({
                     type="button"
                     disabled={importBusy}
                     onClick={() => void handleConfirmCourseImport()}
-                    className="px-3.5 py-1.5 text-xs font-medium club-accent-btn disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium club-accent-btn disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
                   >
+                    <ArrowDown className="w-3.5 h-3.5" />
                     {importBusy
                       ? 'Importerar...'
                       : `Verkställ import (${effectiveImport.courses.length} banor)`}

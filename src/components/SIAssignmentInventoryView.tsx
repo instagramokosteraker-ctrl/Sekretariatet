@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, RefreshCw, UserPlus } from 'lucide-react';
+import { ArrowUp, RefreshCw, UserPlus } from 'lucide-react';
 import {
   generateMissingSIAssignmentsFromFirestore,
   scanSIAssignmentInventoryFromFirestore,
@@ -160,7 +160,7 @@ export function SIAssignmentInventoryView() {
             onClick={downloadReport}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
           >
-            <Download className="h-3.5 w-3.5" />
+            <ArrowUp className="h-3.5 w-3.5" />
             Ladda ner SI_ASSIGNMENT_INVENTORY.md
           </button>
         )}
@@ -176,7 +176,7 @@ export function SIAssignmentInventoryView() {
               }
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
             >
-              <Download className="h-3.5 w-3.5" />
+              <ArrowUp className="h-3.5 w-3.5" />
               Ladda ner LIVE_INTEGRITY_INVENTORY_V2.md
             </button>
             <button
@@ -189,7 +189,7 @@ export function SIAssignmentInventoryView() {
               }
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
             >
-              <Download className="h-3.5 w-3.5" />
+              <ArrowUp className="h-3.5 w-3.5" />
               Ladda ner CONFLICT_REMEDIATION_PLAN_V2.md
             </button>
             <button
@@ -202,7 +202,7 @@ export function SIAssignmentInventoryView() {
               }
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
             >
-              <Download className="h-3.5 w-3.5" />
+              <ArrowUp className="h-3.5 w-3.5" />
               Ladda ner OWNERUID_FORENSIC_ANALYSIS.md
             </button>
             <button
@@ -215,7 +215,7 @@ export function SIAssignmentInventoryView() {
               }
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
             >
-              <Download className="h-3.5 w-3.5" />
+              <ArrowUp className="h-3.5 w-3.5" />
               Ladda ner OWNERUID_REMEDIATION_PLAN.md
             </button>
           </>

@@ -2,16 +2,15 @@ import React, { useEffect, useState } from 'react';
 import {
   Calendar,
   Clock,
-  CloudDownload,
   Database,
   ExternalLink,
-  FileCode,
+  ArrowDown,
+  ArrowUp,
   MapPin,
   QrCode,
   RefreshCw,
   Sliders,
   Trophy,
-  Upload,
 } from 'lucide-react';
 import type {
   CompetitionMeta,
@@ -711,7 +710,7 @@ export function CompetitionSettingsView({
               disabled={eventorBusy || !eventorEventId.trim()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap"
             >
-              <CloudDownload className="w-3.5 h-3.5" />
+              <ArrowDown className="w-3.5 h-3.5" />
               <span>Hämta tävling</span>
             </button>
           </form>
@@ -752,7 +751,7 @@ export function CompetitionSettingsView({
               Kunde inte nå Eventor direkt (CORS/nätverk). Ladda upp Eventor IOF XML-fil
             </p>
             <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 rounded-lg cursor-pointer">
-              <Upload className="w-3.5 h-3.5" />
+              <ArrowDown className="w-3.5 h-3.5" />
               {eventorBusy ? 'Importerar...' : 'Välj XML-fil eller släpp den här'}
               <input
                 type="file"
@@ -803,7 +802,7 @@ export function CompetitionSettingsView({
 
           <div className="flex flex-wrap items-center gap-2">
             <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors cursor-pointer whitespace-nowrap">
-              <Upload className="w-3.5 h-3.5" />
+              <ArrowDown className="w-3.5 h-3.5" />
               <span>Välj XML-fil (.xml)</span>
               <input
                 type="file"
@@ -818,7 +817,7 @@ export function CompetitionSettingsView({
               onClick={() => void handleDownloadMopXml()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
             >
-              <FileCode className="w-3.5 h-3.5" />
+              <ArrowUp className="w-3.5 h-3.5" />
               <span>Exportera MOP XML</span>
             </button>
           </div>
@@ -832,6 +831,7 @@ export function CompetitionSettingsView({
             onClick={() => void handleImportSampleXml(SAMPLE_OCAD_COURSE_XML, 'OCAD CourseData')}
             className="px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-md transition-colors whitespace-nowrap"
           >
+            <ArrowDown className="w-3 h-3" />
             OCAD Banor XML
           </button>
           <button
@@ -840,6 +840,7 @@ export function CompetitionSettingsView({
             onClick={() => void handleImportSampleXml(SAMPLE_EVENTOR_ENTRY_XML, 'Eventor EntryList')}
             className="px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-md transition-colors whitespace-nowrap"
           >
+            <ArrowDown className="w-3 h-3" />
             Eventor Anmälningslista
           </button>
           <button
@@ -850,6 +851,7 @@ export function CompetitionSettingsView({
             }
             className="px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-950 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 rounded-md transition-colors whitespace-nowrap"
           >
+            <ArrowDown className="w-3 h-3" />
             Eventor Löpardatabas
           </button>
         </div>

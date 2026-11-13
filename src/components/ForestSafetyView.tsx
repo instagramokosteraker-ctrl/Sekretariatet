@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CheckCircle2, Download, Search } from 'lucide-react';
+import { ArrowUp, CheckCircle2, Search } from 'lucide-react';
 import type { CompClass, Competitor, RunnerStatus } from '../types/sportident';
 import {
   formatDurationMmSs,
@@ -98,7 +98,7 @@ export function ForestSafetyView({
           disabled={counts.allOut === 0}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto"
         >
-          <Download className="w-3.5 h-3.5" />
+          <ArrowUp className="w-3.5 h-3.5" />
           <span>Exportera CSV</span>
         </button>
       </div>

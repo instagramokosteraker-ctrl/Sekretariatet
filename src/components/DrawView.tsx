@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Download,
-  FileCode,
+  ArrowUp,
   Shuffle,
   Users,
 } from 'lucide-react';
@@ -170,7 +169,7 @@ export function DrawView({
             onClick={handleExportStartListIofXml}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap"
           >
-            <FileCode className="w-3.5 h-3.5" />
+            <ArrowUp className="w-3.5 h-3.5" />
             <span>IOF StartList XML</span>
           </button>
 
@@ -179,7 +178,7 @@ export function DrawView({
             onClick={handleExportStartListCsv}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
           >
-            <Download className="w-3.5 h-3.5" />
+            <ArrowUp className="w-3.5 h-3.5" />
             <span>Startlista CSV</span>
           </button>
         </div>

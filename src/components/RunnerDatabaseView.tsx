@@ -1,6 +1,15 @@
 import { useMemo, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { ArrowDownUp, Check, Download, Pencil, Search, Trash2, Upload, X } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowDownUp,
+  ArrowUp,
+  Check,
+  Pencil,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
 import type { RunnerDbEntry, RunnerDbSource } from '../types/sportident';
 import { formatSiNumber } from '../services/sportidentProtocol';
 import { exportRunnerDbCsv, parseRunnerDbCsvOrXml } from '../utils/iofXml';
@@ -261,7 +270,7 @@ export function RunnerDatabaseView({
         <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <label className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg cursor-pointer whitespace-nowrap">
-              <Upload className="w-3.5 h-3.5" />
+              <ArrowDown className="w-3.5 h-3.5" />
               <span>Importera Eventor/MeOS</span>
               <input
                 type="file"
@@ -275,7 +284,7 @@ export function RunnerDatabaseView({
               onClick={() => exportRunnerDbCsv(runnerDb)}
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg whitespace-nowrap"
             >
-              <Download className="w-3.5 h-3.5" />
+              <ArrowUp className="w-3.5 h-3.5" />
               <span>Exportera CSV</span>
             </button>
             <span className="text-xs text-slate-500">{runnerDb.length} löpare</span>

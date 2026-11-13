@@ -5,7 +5,7 @@ import {
   KeyRound,
   RefreshCw,
   Save,
-  Upload,
+  ArrowDown,
 } from 'lucide-react';
 import {
   DEFAULT_EVENTOR_BASE_URL,
@@ -271,7 +271,7 @@ export function EventorIntegrationSettingsView({
             Stöder EventList, EntryList och CompetitorList. Filen parsas i webbläsaren och sparas direkt i Firestore.
           </p>
           <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 rounded-lg cursor-pointer">
-            <Upload className="w-3.5 h-3.5" />
+            <ArrowDown className="w-3.5 h-3.5" />
             {busy ? 'Importerar...' : 'Välj XML-fil eller släpp den här'}
             <input
               type="file"

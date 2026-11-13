@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Check, Copy, Download, ExternalLink, FileCode, Mic } from 'lucide-react';
+import { ArrowUp, Check, Copy, ExternalLink, Mic } from 'lucide-react';
 import type {
   CompClass,
   CompetitionMeta,
@@ -124,7 +124,7 @@ export function SpeakerResultsView({
             onClick={handleDownloadIofXml}
             className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
-            <FileCode className="w-3.5 h-3.5" />
+            <ArrowUp className="w-3.5 h-3.5" />
             <span>IOF XML 3.0</span>
           </button>
 
@@ -133,7 +133,7 @@ export function SpeakerResultsView({
             onClick={() => exportClassResultsCsv(competitors, classes)}
             className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
-            <Download className="w-3.5 h-3.5" />
+            <ArrowUp className="w-3.5 h-3.5" />
             <span>CSV</span>
           </button>
         </div>

@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Check,
   Copy,
-  Download,
+  ArrowDown,
+  ArrowUp,
   ExternalLink,
   FolderPlus,
   ImagePlus,
@@ -11,7 +12,6 @@ import {
   ShieldCheck,
   Trash2,
   Trophy,
-  Upload,
   UserPlus,
 } from 'lucide-react';
 import type {
@@ -1934,12 +1934,12 @@ export function AccessControlView({
                     onClick={() => void handleDownloadBackup()}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
                   >
-                    <Download className="w-3.5 h-3.5" />
+                    <ArrowUp className="w-3.5 h-3.5" />
                     <span>Ladda ner .json</span>
                   </button>
 
                   <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg cursor-pointer transition-colors whitespace-nowrap shrink-0">
-                    <Upload className="w-3.5 h-3.5" />
+                    <ArrowDown className="w-3.5 h-3.5" />
                     <span>Återställ .json</span>
                     <input
                       type="file"
@@ -2556,7 +2556,7 @@ export function AccessControlView({
 
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-900 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 rounded-lg cursor-pointer transition-colors whitespace-nowrap shrink-0">
-                    <Upload className="w-3.5 h-3.5 shrink-0" />
+                    <ArrowDown className="w-3.5 h-3.5 shrink-0" />
                     <span>{logoBusy ? 'Läser bild...' : 'Välj logotyp (JPG / PNG)'}</span>
                     <input
                       type="file"
