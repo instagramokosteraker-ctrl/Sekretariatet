@@ -508,8 +508,9 @@ const hasAdminCredentials = Boolean(
     process.env.FIRESTORE_EMULATOR_HOST
 );
 
-if (!getApps().length) {
-  try {
+let isAdminInitialized = false;
+try {
+  if (!getApps().length) {
     let credential: Credential | undefined;
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       const serviceAccount = JSON.parse(
@@ -534,12 +535,11 @@ if (!getApps().length) {
         FIREBASE_ADMIN_APP_NAME
       );
     }
-  } catch (err) {
-    console.error('Firebase Admin initialization error:', err);
   }
+  isAdminInitialized = getApps().length > 0;
+} catch (err) {
+  console.error('Firebase Admin initialization error:', err);
 }
-
-const isAdminInitialized = getApps().length > 0;
 
 function getTrustedFirestore() {
   const app = getApps().find(
@@ -2525,6 +2525,9 @@ export const app = express();
 
 async function startServer() {
   app.use(express.json({ limit: '5mb' }));
+  app.get('/api/health', (_req, res) => {
+    res.status(200).json({ status: 'ok', time: new Date().toISOString() });
+  });
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
   const disableHmr = process.env.DISABLE_HMR === 'true';
@@ -6611,7 +6614,7 @@ async function startServer() {
     });
   }
 
-  if (!isVercel) {
+  if (!process.env.VERCEL) {
     const PORT = Number(process.env.PORT) || 3000;
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`PasserSI Multi-Event server running on http://0.0.0.0:${PORT}`);
@@ -6619,4 +6622,6 @@ async function startServer() {
   }
 }
 
-void startServer();
+void startServer().catch((error: unknown) => {
+  console.error('Server initialization error:', error);
+});
