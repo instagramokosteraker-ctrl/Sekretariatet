@@ -2999,7 +2999,12 @@ export default function App() {
                     } catch (error) {
                       return {
                         ok: false,
-                        message: error instanceof Error ? error.message : 'Kunde inte synka mot Eventor API.',
+                        message:
+                          error instanceof TypeError
+                            ? `Nätverksfel: Backend svarar inte. ${error.message}`
+                            : error instanceof Error
+                              ? error.message
+                              : 'Kunde inte synka mot Eventor API.',
                       };
                     }
                   }}

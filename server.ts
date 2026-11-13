@@ -1304,6 +1304,16 @@ interface EventorConfig {
   baseUrl: string;
 }
 
+class EventorApiError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'EventorApiError';
+  }
+}
+
 function normalizeEventorBaseUrl(value: string): string {
   const rawBase = value.trim().replace(/\/+$/, '');
   const baseUrl = rawBase ? (rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`) : DEFAULT_EVENTOR_BASE_URL;
@@ -1824,6 +1834,28 @@ function parseEventorEntriesXml(
   return entries;
 }
 
+function getEventorErrorDetail(body: string, statusText: string, apiKey: string): string {
+  let detail: string;
+  try {
+    const payload = JSON.parse(body) as {
+      error?: unknown;
+      message?: unknown;
+      detail?: unknown;
+    };
+    for (const value of [payload.error, payload.message, payload.detail]) {
+      if (typeof value === 'string' && value.trim()) {
+        detail = value.trim();
+        return detail.split(apiKey).join('[redacted]').slice(0, 500);
+      }
+    }
+  } catch {
+    // Eventor commonly returns XML or plain text errors.
+  }
+  const text = body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  detail = text || statusText || 'Okänt fel från Eventor.';
+  return detail.split(apiKey).join('[redacted]').slice(0, 500);
+}
+
 async function fetchFromEventorApi(
   endpointPath: string,
   config: EventorConfig,
@@ -1839,18 +1871,37 @@ async function fetchFromEventorApi(
       Accept: 'application/xml, text/xml, */*',
     },
   });
+  const body = await resp.text();
   if (!resp.ok || (requireStatus200 && resp.status !== 200)) {
-    if (resp.status === 401 || resp.status === 403) {
-      throw new Error(
-        `Eventor nekade åtkomst (HTTP ${resp.status}). Kontrollera API-nyckeln och organisations-ID:t i Eventor-integrationen.`
-      );
-    }
-    if (resp.status === 404) {
-      throw new Error(`Resursen hittades inte på Eventor (HTTP 404): ${endpointPath}`);
-    }
-    throw new Error(`Eventor API svarade med HTTP ${resp.status}.`);
+    throw new EventorApiError(
+      resp.status,
+      `HTTP ${resp.status}: ${getEventorErrorDetail(body, resp.statusText, config.apiKey)}`
+    );
   }
-  return await resp.text();
+  return body;
+}
+
+function sendEventorError(
+  res: express.Response,
+  error: unknown,
+  fallbackMessage: string,
+  fallbackStatus = 500
+): void {
+  if (error instanceof EventorApiError) {
+    res.status(error.statusCode).json({ success: false, error: error.message });
+    return;
+  }
+  if (error instanceof TypeError) {
+    res.status(502).json({
+      success: false,
+      error: `Nätverksfel: Kunde inte nå Eventor API. ${error.message}`,
+    });
+    return;
+  }
+  res.status(fallbackStatus).json({
+    success: false,
+    error: error instanceof Error ? error.message : fallbackMessage,
+  });
 }
 
 function buildServerIofResultListXml(ev: SingleEventRecord): string {
@@ -5918,6 +5969,7 @@ async function startServer() {
       config = getEventorConfigFromRequest(req.body);
     } catch (err: unknown) {
       res.status(400).json({
+        success: false,
         error: err instanceof Error ? err.message : 'Ogiltiga Eventor-inställningar.',
       });
       return;
@@ -5927,19 +5979,14 @@ async function startServer() {
     try {
       orgXml = await fetchFromEventorApi('/organisation/apiKey', config, true);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Okänt fel.';
-      const isNetworkError = err instanceof TypeError;
-      res.status(isNetworkError ? 502 : 400).json({
-        error: isNetworkError
-          ? `Kunde inte nå Eventor API: ${message}`
-          : message,
-      });
+      sendEventorError(res, err, 'Kunde inte testa anslutningen till Eventor.');
       return;
     }
 
     const org = parseEventorOrgXml(orgXml);
     if (org && org.orgId !== config.orgId) {
       res.status(400).json({
+        success: false,
         error: `API-nyckeln hör till organisation ${org.orgId} (${org.orgName}), inte angivet organisations-ID ${config.orgId}.`,
       });
       return;
@@ -5973,18 +6020,32 @@ async function startServer() {
 
   app.post('/api/eventor/sync-club', async (req, res) => {
     if (!requireEventorAdminRequest(req, res)) return;
+    let config: EventorConfig;
     try {
-      const config = getEventorConfigFromRequest(req.body);
+      config = getEventorConfigFromRequest(req.body);
+    } catch (err: unknown) {
+      res.status(400).json({
+        success: false,
+        error: err instanceof Error ? err.message : 'Ogiltiga Eventor-inställningar.',
+      });
+      return;
+    }
+
+    try {
       const orgXml = await fetchFromEventorApi('/organisation/apiKey', config);
       const org = parseEventorOrgXml(orgXml);
       if (!org) {
         res.status(502).json({
+          success: false,
           error: 'Kunde inte tolka klubbens organisationsdata från Eventor API.',
         });
         return;
       }
       if (org.orgId !== config.orgId) {
-        res.status(400).json({ error: 'Eventor API-nyckeln och organisations-ID:t matchar inte.' });
+        res.status(400).json({
+          success: false,
+          error: 'Eventor API-nyckeln och organisations-ID:t matchar inte.',
+        });
         return;
       }
 
@@ -6026,9 +6087,7 @@ async function startServer() {
         runnerDbEntries,
       });
     } catch (err: unknown) {
-      res.status(400).json({
-        error: err instanceof Error ? err.message : 'Kunde inte synka mot Eventor API.',
-      });
+      sendEventorError(res, err, 'Kunde inte synka mot Eventor API.');
     }
   });
 

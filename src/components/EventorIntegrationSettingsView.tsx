@@ -101,7 +101,12 @@ export function EventorIntegrationSettingsView() {
     } catch (error) {
       setNotice({
         ok: false,
-        message: error instanceof Error ? error.message : 'Anslutningen till Eventor misslyckades.',
+        message:
+          error instanceof TypeError
+            ? `Nätverksfel: Backend svarar inte. ${error.message}`
+            : error instanceof Error
+              ? error.message
+              : 'Anslutningen till Eventor misslyckades.',
       });
     } finally {
       setBusy(false);
