@@ -68,7 +68,7 @@ export function subscribeAuthSession(cb: AuthListener): () => void {
 
 /**
  * Wrapper around fetch for Secretariat `/api/*` endpoints that automatically
- * attaches the active session token (`x-passersi-token`) if available.
+ * attaches the active session token if available.
  */
 export async function apiFetch(
   input: RequestInfo | URL,
@@ -94,6 +94,7 @@ export async function apiFetch(
   }
   if (token) {
     headers.set('x-passersi-token', token);
+    headers.set('Authorization', `Bearer ${token}`);
   }
   return fetch(input, {
     ...init,
@@ -127,7 +128,8 @@ function getJsonErrorMessage(body: string, fallbackMessage: string): string {
  */
 export async function readApiResponseJson<T>(
   response: Response,
-  fallbackMessage: string
+  fallbackMessage: string,
+  includeHttpStatus = false
 ): Promise<T> {
   const body = await response.text();
   const contentType = response.headers.get('content-type') || '';
@@ -135,7 +137,14 @@ export async function readApiResponseJson<T>(
 
   if (!response.ok) {
     if (!isJson) logNonJsonApiResponse(response, body);
-    throw new Error(isJson ? getJsonErrorMessage(body, fallbackMessage) : fallbackMessage);
+    const message = isJson
+      ? getJsonErrorMessage(body, fallbackMessage)
+      : fallbackMessage;
+    throw new Error(
+      includeHttpStatus && !message.startsWith(`HTTP ${response.status}:`)
+        ? `HTTP ${response.status}: ${message}`
+        : message
+    );
   }
 
   if (!isJson) {

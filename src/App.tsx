@@ -3054,7 +3054,8 @@ export default function App() {
                         }>;
                       }>(
                         res,
-                        'Kunde inte hämta tävling från Eventor. Kontrollera serveranslutningen och försök igen.'
+                        'Kunde inte hämta tävling från Eventor. Kontrollera serveranslutningen och försök igen.',
+                        true
                       );
                       if (
                         !data.success ||

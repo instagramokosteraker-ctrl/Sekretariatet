@@ -93,7 +93,8 @@ export function EventorIntegrationSettingsView() {
         orgName?: string;
       }>(
         response,
-        'Anslutningen till Eventor misslyckades. Kontrollera serveranslutningen och försök igen.'
+        'Anslutningen till Eventor misslyckades. Kontrollera serveranslutningen och försök igen.',
+        true
       );
       if (!data.success) {
         throw new Error(data.message || 'Eventor kunde inte bekräfta anslutningen.');
