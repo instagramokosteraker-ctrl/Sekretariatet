@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { applicationDefault, cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import {
   calculateSeriesStandings,
@@ -494,19 +494,47 @@ function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: stri
 const { projectId: FIREBASE_PROJECT_ID, firestoreDatabaseId: FIRESTORE_DATABASE_ID } =
   loadFirebaseConfigIds();
 
+const FIREBASE_ADMIN_APP_NAME = 'passersi-retirement-writer';
+const hasAdminCredentials = Boolean(
+  process.env.FIREBASE_SERVICE_ACCOUNT ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+    process.env.FIRESTORE_EMULATOR_HOST
+);
+
+if (!getApps().some((app) => app.name === FIREBASE_ADMIN_APP_NAME)) {
+  if (!hasAdminCredentials) {
+    console.warn('Firebase Admin SDK not initialized: missing credentials');
+  } else {
+    try {
+      const credential = process.env.FIREBASE_SERVICE_ACCOUNT
+        ? cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
+        : process.env.GOOGLE_APPLICATION_CREDENTIALS
+          ? applicationDefault()
+          : undefined;
+      initializeApp(
+        {
+          projectId: FIREBASE_PROJECT_ID,
+          ...(credential ? { credential } : {}),
+        },
+        FIREBASE_ADMIN_APP_NAME
+      );
+    } catch {
+      console.warn('Firebase Admin SDK not initialized: missing credentials');
+    }
+  }
+}
+
+const isAdminInitialized = getApps().length > 0;
+
 function getTrustedFirestore() {
-  const appName = 'passersi-retirement-writer';
-  const app =
-    getApps().find((candidate) => candidate.name === appName) ??
-    initializeApp(
-      {
-        projectId: FIREBASE_PROJECT_ID,
-        ...(process.env.FIRESTORE_EMULATOR_HOST
-          ? {}
-          : { credential: applicationDefault() }),
-      },
-      appName
+  const app = getApps().find(
+    (candidate) => candidate.name === FIREBASE_ADMIN_APP_NAME
+  );
+  if (!app) {
+    throw new Error(
+      'Firebase Admin SDK saknar miljövariabler i Vercel (FIREBASE_SERVICE_ACCOUNT).'
     );
+  }
   return getFirestore(app, FIRESTORE_DATABASE_ID);
 }
 
@@ -4956,6 +4984,15 @@ async function startServer() {
         res.status(401).json({
           success: false,
           error: 'Authentication is required.',
+        });
+        return;
+      }
+
+      if (!isAdminInitialized) {
+        res.status(500).json({
+          success: false,
+          error:
+            'Firebase Admin SDK saknar miljövariabler i Vercel (FIREBASE_SERVICE_ACCOUNT).',
         });
         return;
       }
