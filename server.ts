@@ -1308,8 +1308,19 @@ function normalizeEventorBaseUrl(value: string): string {
   const rawBase = value.trim().replace(/\/+$/, '');
   const baseUrl = rawBase ? (rawBase.endsWith('/api') ? rawBase : `${rawBase}/api`) : DEFAULT_EVENTOR_BASE_URL;
   const parsed = new URL(baseUrl);
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('Eventor Base URL måste vara en giltig HTTPS-adress utan inloggningsuppgifter.');
+  if (
+    parsed.protocol !== 'https:' ||
+    parsed.hostname !== 'eventor.orientering.se' ||
+    parsed.port ||
+    parsed.pathname !== '/api' ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(
+      'Eventor Base URL måste vara https://eventor.orientering.se/api.'
+    );
   }
   return parsed.toString().replace(/\/+$/, '');
 }
@@ -1813,7 +1824,11 @@ function parseEventorEntriesXml(
   return entries;
 }
 
-async function fetchFromEventorApi(endpointPath: string, config: EventorConfig): Promise<string> {
+async function fetchFromEventorApi(
+  endpointPath: string,
+  config: EventorConfig,
+  requireStatus200 = false
+): Promise<string> {
   if (!config.apiKey) {
     throw new Error('Eventor API-nyckel saknas. Konfigurera integrationen under Klubbadmin & Behörighet.');
   }
@@ -1824,7 +1839,7 @@ async function fetchFromEventorApi(endpointPath: string, config: EventorConfig):
       Accept: 'application/xml, text/xml, */*',
     },
   });
-  if (!resp.ok) {
+  if (!resp.ok || (requireStatus200 && resp.status !== 200)) {
     if (resp.status === 401 || resp.status === 403) {
       throw new Error(
         `Eventor nekade åtkomst (HTTP ${resp.status}). Kontrollera API-nyckeln och organisations-ID:t i Eventor-integrationen.`
@@ -5896,7 +5911,7 @@ async function startServer() {
     res.status(204).end();
   });
 
-  app.post('/api/eventor/test', async (req, res) => {
+  app.post('/api/eventor/test-connection', async (req, res) => {
     if (!requireEventorAdminRequest(req, res)) return;
     let config: EventorConfig;
     try {
@@ -5910,7 +5925,7 @@ async function startServer() {
 
     let orgXml: string;
     try {
-      orgXml = await fetchFromEventorApi('/organisation/apiKey', config);
+      orgXml = await fetchFromEventorApi('/organisation/apiKey', config, true);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Okänt fel.';
       const isNetworkError = err instanceof TypeError;

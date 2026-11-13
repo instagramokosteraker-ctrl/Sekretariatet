@@ -75,7 +75,7 @@ export function EventorIntegrationSettingsView() {
         throw new Error('Spara ett Eventor Organisations-ID lokalt innan du testar anslutningen.');
       }
 
-      const response = await apiFetch('/api/eventor/test', {
+      const response = await apiFetch('/api/eventor/test-connection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),

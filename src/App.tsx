@@ -2963,7 +2963,10 @@ export default function App() {
                     const response = await apiFetch('/api/eventor/settings', {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(patch),
+                      body: JSON.stringify({
+                        ...readEventorLocalConfig(),
+                        ...patch,
+                      }),
                     });
                     await ensureApiResponseOk(
                       response,
@@ -3005,7 +3008,10 @@ export default function App() {
                       const res = await apiFetch('/api/eventor/import-event', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ eventId }),
+                        body: JSON.stringify({
+                          ...readEventorLocalConfig(),
+                          eventId,
+                        }),
                       });
                       const data = await readApiResponseJson<{
                         eventName?: string;
