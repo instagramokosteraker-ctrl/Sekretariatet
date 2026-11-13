@@ -17,6 +17,10 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function sanitizeEventId(value: unknown): string {
+  return String(value ?? '').trim().replace(/\D/g, '');
+}
+
 function buildEventorUrl(
   action: EventorAction,
   eventId: unknown,
@@ -28,6 +32,7 @@ function buildEventorUrl(
         suppliedUrl.trim().replace(/^\/+/, ''),
         EVENTOR_API_URL
       );
+      url.pathname = url.pathname.replace(/\/{2,}/g, '/');
       if (
         url.protocol === 'https:' &&
         url.hostname === 'eventor.orientering.se' &&
@@ -36,6 +41,24 @@ function buildEventorUrl(
         !url.password &&
         url.pathname.startsWith('/api/')
       ) {
+        const eventClassesPath = url.pathname === '/api/eventclasses';
+        const eventPathMatch = url.pathname.match(/^\/api\/event\/([^/]+)$/);
+        const queryEventId = url.searchParams.get('eventId');
+        if (eventClassesPath) {
+          const sanitizedEventId = sanitizeEventId(queryEventId);
+          if (!/^\d{1,32}$/.test(sanitizedEventId)) return null;
+          url.pathname = `/api/event/${sanitizedEventId}`;
+          url.search = '';
+        } else if (eventPathMatch) {
+          const sanitizedEventId = sanitizeEventId(eventPathMatch[1]);
+          if (!/^\d{1,32}$/.test(sanitizedEventId)) return null;
+          url.pathname = `/api/event/${sanitizedEventId}`;
+        } else if (url.pathname === '/api/entries') {
+          const sanitizedEventId = sanitizeEventId(queryEventId);
+          if (!/^\d{1,32}$/.test(sanitizedEventId)) return null;
+          url.searchParams.set('eventId', sanitizedEventId);
+          url.searchParams.set('includeDisqualified', 'true');
+        }
         return url;
       }
     } catch {
@@ -51,9 +74,12 @@ function buildEventorUrl(
   if (
     action === 'import-event' &&
     (typeof eventId === 'string' || typeof eventId === 'number') &&
-    /^\d{1,32}$/.test(String(eventId))
+    /^\d{1,32}$/.test(sanitizeEventId(eventId))
   ) {
-    return new URL(`event/${encodeURIComponent(String(eventId))}`, EVENTOR_API_URL);
+    return new URL(
+      `event/${encodeURIComponent(sanitizeEventId(eventId))}`,
+      EVENTOR_API_URL
+    );
   }
 
   return null;
@@ -65,8 +91,16 @@ function errorMessage(error: unknown): string {
     : 'Internt serverfel i Eventor-proxyn.';
 }
 
-function sendFailure(res: VercelResponse, error: string): void {
-  res.status(200).json({ success: false, error });
+function sendFailure(
+  res: VercelResponse,
+  error: string,
+  url?: string
+): void {
+  res.status(200).json({
+    success: false,
+    error,
+    ...(url ? { url } : {}),
+  });
 }
 
 export default async function handler(
@@ -86,7 +120,10 @@ export default async function handler(
     }
 
     const body = asRecord(req.body);
-    const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+    const apiKey =
+      typeof body.apiKey === 'string'
+        ? body.apiKey.trim().replace(/['"]/g, '')
+        : '';
     const action = body.action;
     if (!apiKey || apiKey.length > 512) {
       sendFailure(res, 'Eventor API-nyckeln saknas eller är ogiltig.');
@@ -112,8 +149,10 @@ export default async function handler(
       () => controller.abort(),
       EVENTOR_TIMEOUT_MS
     );
+    const targetUrl = eventorUrl.toString();
     try {
-      const response = await fetch(eventorUrl, {
+      console.log('Fetching Eventor API URL:', targetUrl);
+      const response = await fetch(targetUrl, {
         headers: {
           ApiKey: apiKey,
           'User-Agent': 'PasserSI/1.0 (Secretariat App)',
@@ -124,9 +163,16 @@ export default async function handler(
       const xml = await response.text();
 
       if (!response.ok) {
+        const errorBodyText = xml.trim();
+        console.error('Eventor API error response:', {
+          status: response.status,
+          url: targetUrl,
+          body: errorBodyText,
+        });
         sendFailure(
           res,
-          `Eventor svarade med HTTP ${response.status}: ${response.statusText}`
+          `Eventor HTTP ${response.status}: ${errorBodyText || response.statusText}`,
+          targetUrl
         );
         return;
       }
@@ -140,7 +186,7 @@ export default async function handler(
       const message = controller.signal.aborted
         ? 'Eventor svarade inte inom 10 sekunder.'
         : `Eventor kunde inte nås: ${errorMessage(error)}`;
-      sendFailure(res, message);
+      sendFailure(res, message, targetUrl);
     } finally {
       clearTimeout(timeoutId);
     }

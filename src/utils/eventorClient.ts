@@ -18,7 +18,7 @@ interface EventorProxyRequest {
 }
 
 function sanitizeEventId(value: string | null | undefined): string | null {
-  const eventId = value?.trim() ?? '';
+  const eventId = (value ?? '').trim().replace(/\D/g, '');
   return /^\d{1,32}$/.test(eventId) ? eventId : null;
 }
 
@@ -48,7 +48,7 @@ function getProxyRequest(path: string, isClubSync: boolean): EventorProxyRequest
   if (resource === 'eventclasses' && eventId) {
     return {
       action: 'import-event',
-      url: `eventclasses?eventId=${encodeURIComponent(eventId)}`,
+      url: `event/${encodeURIComponent(eventId)}`,
       eventId,
     };
   }
@@ -101,8 +101,12 @@ async function postToEventorProxy(
   );
   try {
     const apiBaseUrl = validateBaseUrl(config.baseUrl);
+    const sanitizedApiKey = config.apiKey.trim().replace(/['"]/g, '');
+    if (!sanitizedApiKey) {
+      throw new Error('Spara en Eventor API-nyckel lokalt innan du använder Eventor.');
+    }
     targetUrl = new URL(request.url, `${apiBaseUrl}/`).toString();
-    console.log('Fetching Eventor URL via proxy:', targetUrl);
+    console.log('Fetching Eventor API URL:', targetUrl);
     const response = await fetch('/api/eventor', {
       method: 'POST',
       headers: {
@@ -110,7 +114,7 @@ async function postToEventorProxy(
       },
       // The server restricts this URL to Eventor's API origin and /api path.
       body: JSON.stringify({
-        apiKey: config.apiKey.trim(),
+        apiKey: sanitizedApiKey,
         action: request.action,
         ...(request.eventId ? { eventId: request.eventId } : {}),
         url: targetUrl,
@@ -119,15 +123,17 @@ async function postToEventorProxy(
     });
 
     const result = (await response.json().catch(() => null)) as
-      | { success?: unknown; error?: unknown; xml?: unknown }
+      | { success?: unknown; error?: unknown; xml?: unknown; url?: unknown }
       | null;
     if (!response.ok || result?.success !== true) {
       const message =
         typeof result?.error === 'string'
           ? result.error
           : `Eventor-proxyn returnerade ett ogiltigt svar (HTTP ${response.status}).`;
+      const failedUrl =
+        typeof result?.url === 'string' ? result.url : targetUrl;
       throw new EventorNetworkError(
-        `${message} Begärd Eventor-URL: ${targetUrl}. Ladda upp Eventor IOF XML-fil.`
+        `${message} Begärd Eventor-URL: ${failedUrl}. Ladda upp Eventor IOF XML-fil.`
       );
     }
     if (typeof result.xml !== 'string') {
@@ -158,7 +164,7 @@ export async function fetchEventorXml(
   paths: string[],
   config: EventorLocalConfig
 ): Promise<string[]> {
-  if (!config.apiKey.trim()) {
+  if (!config.apiKey.trim().replace(/['"]/g, '')) {
     throw new Error('Spara en Eventor API-nyckel lokalt innan du använder Eventor.');
   }
   if (paths.length === 0) return [];

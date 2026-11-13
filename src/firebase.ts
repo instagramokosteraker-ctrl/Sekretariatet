@@ -4800,7 +4800,7 @@ export async function updateCompetitorInFirestore(
         }
         const oldAction = plan.oldAssignment;
         const targetAction = plan.targetAssignment;
-        const now = Timestamp.now();
+        const mutationTimestamp = serverTimestamp();
 
         if (oldAction === 'RETIRE' && currentAssignment) {
           if (currentSiNumber !== null) {
@@ -4809,8 +4809,8 @@ export async function updateCompetitorInFirestore(
               {
                 state: 'RETIRED',
                 assignmentVersion: currentAssignment.assignmentVersion + 1,
-                updatedAt: now,
-                retiredAt: now,
+                updatedAt: mutationTimestamp,
+                retiredAt: mutationTimestamp,
                 retirementReason: 'si_reassigned',
                 previousCompetitorId: id,
               }
@@ -4849,8 +4849,8 @@ export async function updateCompetitorInFirestore(
               source: 'MANUAL',
               ownerUid: nextIdentity.ownerUid,
               schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
-              createdAt: now,
-              updatedAt: now,
+              createdAt: mutationTimestamp,
+              updatedAt: mutationTimestamp,
             }
           );
         } else if (targetAction === 'ACTIVATE' && targetAssignment) {
@@ -4863,7 +4863,7 @@ export async function updateCompetitorInFirestore(
               ownerUid: nextIdentity.ownerUid,
               state: 'ACTIVE',
               assignmentVersion: targetAssignment.assignmentVersion + 1,
-              updatedAt: now,
+              updatedAt: mutationTimestamp,
               retiredAt: null,
               retirementReason: null,
               previousCompetitorId:

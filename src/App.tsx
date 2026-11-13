@@ -3310,22 +3310,24 @@ export default function App() {
                       if (!eventorConfig.apiKey.trim()) {
                         throw new Error('Spara en Eventor API-nyckel lokalt innan du hämtar en tävling.');
                       }
-                      if (!/^\d{1,32}$/.test(eventId)) {
+                      const sanitizedEventId = String(eventId)
+                        .trim()
+                        .replace(/\D/g, '');
+                      if (!/^\d{1,32}$/.test(sanitizedEventId)) {
                         throw new Error('Ange ett giltigt Eventor-tävlings-ID.');
                       }
-                      const encodedEventId = encodeURIComponent(eventId);
-                      const [eventXml, classesXml, entriesXml] = await fetchEventorXml(
+                      const encodedEventId = encodeURIComponent(sanitizedEventId);
+                      const [eventXml, entriesXml] = await fetchEventorXml(
                         [
                           `/event/${encodedEventId}`,
-                          `/eventclasses?eventId=${encodedEventId}`,
                           `/entries?eventId=${encodedEventId}`,
                         ],
                         eventorConfig
                       );
                       const data = parseEventorXml({
-                        eventId,
+                        eventId: sanitizedEventId,
                         eventXml,
-                        classesXml,
+                        classesXml: eventXml,
                         entriesXml,
                       });
                       if (!data.event) {
