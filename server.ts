@@ -1,10 +1,10 @@
-import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { config as loadDotEnv } from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
 import {
   applicationDefault,
@@ -43,6 +43,21 @@ import {
 } from './src/utils/siAssignmentDiagnostics';
 import { hasSameCompetitorIdentitySnapshot } from './src/utils/competitorIdentitySnapshot';
 import { protectCloudHydratedCompetitors } from './src/utils/cloudHydrateCompetitorFence';
+
+let initError: Error | null = null;
+
+function recordInitializationError(error: unknown): void {
+  initError = error instanceof Error ? error : new Error(String(error));
+}
+
+if (!process.env.VERCEL) {
+  try {
+    loadDotEnv();
+  } catch (error) {
+    recordInitializationError(error);
+    console.error('Environment initialization error:', error);
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -473,13 +488,15 @@ function isBootstrapAdminEmail(email?: string | null): boolean {
   return BOOTSTRAP_ADMIN_EMAILS.includes(clean);
 }
 
-let initError: Error | null = null;
-
-function recordInitializationError(publicMessage: string): void {
-  initError = new Error(publicMessage);
-}
-
 function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: string } {
+  if (process.env.VERCEL) {
+    return {
+      projectId: 'ai-studio-applet-webapp-72c01',
+      firestoreDatabaseId:
+        'ai-studio-kopiaavoksekreta-4d24d0cc-1fd7-4b98-ba1a-8c6f95c187df',
+    };
+  }
+
   try {
     const cfgPath = path.join(__dirname, 'firebase-applet-config.json');
     if (fs.existsSync(cfgPath)) {
@@ -495,7 +512,7 @@ function loadFirebaseConfigIds(): { projectId: string; firestoreDatabaseId: stri
       };
     }
   } catch (error) {
-    recordInitializationError('Firebase configuration could not be loaded.');
+    recordInitializationError(error);
     console.error('Firebase config initialization error:', error);
   }
   return {
@@ -545,9 +562,7 @@ try {
   }
   isAdminInitialized = getApps().length > 0;
 } catch (err) {
-  recordInitializationError(
-    'Firebase Admin SDK initialization failed. Check its Vercel credentials.'
-  );
+  recordInitializationError(err);
   console.error('Firebase Admin initialization error:', err);
 }
 
@@ -2236,6 +2251,8 @@ const SEASON_DB_FILE = path.join(DATA_DIR, 'passersi-season-db.json');
 const LEGACY_DB_FILE = path.join(DATA_DIR, 'meos-db.json');
 
 function saveSeasonDatabase(seasonDb: SeasonDatabase): void {
+  if (process.env.VERCEL) return;
+
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -2249,6 +2266,10 @@ function saveSeasonDatabase(seasonDb: SeasonDatabase): void {
 }
 
 function loadSeasonDatabase(): SeasonDatabase {
+  if (process.env.VERCEL) {
+    return buildSeasonSeed();
+  }
+
   try {
     if (fs.existsSync(LEGACY_DB_FILE)) {
       try {
@@ -2569,7 +2590,9 @@ async function startServer() {
     }
   });
 
-  const serverBootedWithoutDbFile = !fs.existsSync(SEASON_DB_FILE);
+  const serverBootedWithoutDbFile = process.env.VERCEL
+    ? true
+    : !fs.existsSync(SEASON_DB_FILE);
   let isFreshColdStart = serverBootedWithoutDbFile;
   let seasonDb = loadSeasonDatabase();
   const authenticatedWsClients = new WeakSet<WebSocket>();
@@ -3078,26 +3101,28 @@ async function startServer() {
   // Background ROC Poller + Automatic Nolltid Status Transition Broadcaster
   let lastRocTickMs = 0;
   let lastLifecycleSig = '';
-  setInterval(() => {
-    const now = new Date();
-    const nextSig = Object.values(seasonDb.eventsMap)
-      .map((e) => `${e.competition.id}:${resolveEffectiveCompetitionStatus(e, now)}`)
-      .join('|');
-    if (lastLifecycleSig && nextSig !== lastLifecycleSig) {
-      lastLifecycleSig = nextSig;
-      broadcastFullState();
-    } else if (!lastLifecycleSig) {
-      lastLifecycleSig = nextSig;
-    }
+  if (!isVercel) {
+    setInterval(() => {
+      const now = new Date();
+      const nextSig = Object.values(seasonDb.eventsMap)
+        .map((e) => `${e.competition.id}:${resolveEffectiveCompetitionStatus(e, now)}`)
+        .join('|');
+      if (lastLifecycleSig && nextSig !== lastLifecycleSig) {
+        lastLifecycleSig = nextSig;
+        broadcastFullState();
+      } else if (!lastLifecycleSig) {
+        lastLifecycleSig = nextSig;
+      }
 
-    const ev = getActiveEvent();
-    if (!ev.roc.enabled || !ev.roc.unitId.trim()) return;
-    const intervalMs = Math.max(3, ev.roc.pollIntervalSec || 5) * 1000;
-    const nowMs = Date.now();
-    if (nowMs - lastRocTickMs < intervalMs) return;
-    lastRocTickMs = nowMs;
-    void pollRocOnce(ev);
-  }, 1500);
+      const ev = getActiveEvent();
+      if (!ev.roc.enabled || !ev.roc.unitId.trim()) return;
+      const intervalMs = Math.max(3, ev.roc.pollIntervalSec || 5) * 1000;
+      const nowMs = Date.now();
+      if (nowMs - lastRocTickMs < intervalMs) return;
+      lastRocTickMs = nowMs;
+      void pollRocOnce(ev);
+    }, 1500);
+  }
 
   // ==========================================================================
   // PUBLIC SPECTATOR, QR SELF-REGISTRATION & LIVELOX IOF XML 3.0 ROUTES
