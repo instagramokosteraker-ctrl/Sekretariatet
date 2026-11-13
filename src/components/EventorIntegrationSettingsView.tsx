@@ -89,6 +89,7 @@ export function EventorIntegrationSettingsView() {
       const data = await readApiResponseJson<{
         success?: boolean;
         message?: string;
+        error?: string;
         orgId?: string;
         orgName?: string;
       }>(
@@ -97,7 +98,9 @@ export function EventorIntegrationSettingsView() {
         true
       );
       if (!data.success) {
-        throw new Error(data.message || 'Eventor kunde inte bekräfta anslutningen.');
+        throw new Error(
+          data.error || data.message || 'Eventor kunde inte bekräfta anslutningen.'
+        );
       }
       setNotice({
         ok: true,

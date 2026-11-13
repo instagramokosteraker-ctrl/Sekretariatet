@@ -46,6 +46,7 @@ try {
 } catch (error) {
   console.error('Firebase Admin initialization error:', error);
 }
+const isAdminInitialized = getApps().length > 0;
 
 function getHeader(req: Request, name: string): string | undefined {
   const value = req.headers[name.toLowerCase()];
@@ -110,17 +111,20 @@ async function requireEventorAdmin(req: Request, res: Response): Promise<boolean
   const token =
     rawToken?.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken?.trim();
   if (!token) {
-    res.status(401).json({ success: false, error: 'Inloggning krävs.' });
+    res.status(401).json({
+      success: false,
+      error: 'Du behöver vara inloggad som administratör.',
+    });
     return false;
   }
 
   let verified: Awaited<ReturnType<typeof verifyFirebaseIdToken>>;
   try {
     verified = await verifyFirebaseIdToken(token, FIREBASE_PROJECT_ID);
-  } catch (error) {
+  } catch {
     res.status(401).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Ogiltig inloggning.',
+      error: 'Du behöver vara inloggad som administratör.',
     });
     return false;
   }
@@ -154,7 +158,9 @@ async function requireEventorAdmin(req: Request, res: Response): Promise<boolean
 
 function sendError(res: Response, error: unknown): void {
   if (error instanceof EventorApiError) {
-    res.status(error.statusCode).json({ success: false, error: error.message });
+    const statusCode =
+      error.statusCode === 504 ? 504 : error.statusCode >= 500 ? 502 : 400;
+    res.status(statusCode).json({ success: false, error: error.message });
     return;
   }
   if (error instanceof TypeError) {
@@ -182,8 +188,6 @@ export default async function handler(req: Request, res: Response): Promise<void
     res.status(405).json({ success: false, error: 'Method not allowed.' });
     return;
   }
-  if (!(await requireEventorAdmin(req, res))) return;
-
   const body =
     typeof req.body === 'object' && req.body !== null && !Array.isArray(req.body)
       ? (req.body as Record<string, unknown>)
@@ -191,6 +195,16 @@ export default async function handler(req: Request, res: Response): Promise<void
   const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
   const action = typeof body.action === 'string' ? body.action : '';
   const orgId = typeof body.orgId === 'string' ? body.orgId.trim() : '';
+  if (action !== 'test' && action !== 'import') {
+    res.status(400).json({ success: false, error: 'Ogiltig Eventor-åtgärd.' });
+    return;
+  }
+  if (
+    (action === 'import' || (action === 'test' && isAdminInitialized)) &&
+    !(await requireEventorAdmin(req, res))
+  ) {
+    return;
+  }
   if (!apiKey) {
     res.status(400).json({ success: false, error: 'Eventor API-nyckel saknas.' });
     return;
@@ -229,11 +243,6 @@ export default async function handler(req: Request, res: Response): Promise<void
         orgId: org?.orgId ?? orgId,
         ...(org ? { orgName: org.orgName } : {}),
       });
-      return;
-    }
-
-    if (action !== 'import') {
-      res.status(400).json({ success: false, error: 'Ogiltig Eventor-åtgärd.' });
       return;
     }
 

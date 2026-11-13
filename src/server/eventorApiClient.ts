@@ -18,32 +18,6 @@ export const EVENTOR_TIMEOUT_MESSAGE =
 
 const EVENTOR_REQUEST_TIMEOUT_MS = 10_000;
 
-function getEventorErrorDetail(
-  body: string,
-  statusText: string,
-  apiKey: string
-): string {
-  try {
-    const payload = JSON.parse(body) as {
-      error?: unknown;
-      message?: unknown;
-      detail?: unknown;
-    };
-    for (const value of [payload.error, payload.message, payload.detail]) {
-      if (typeof value === 'string' && value.trim()) {
-        return value.trim().split(apiKey).join('[redacted]').slice(0, 500);
-      }
-    }
-  } catch {
-    // Eventor commonly returns XML or plain-text errors.
-  }
-  const text = body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  return (text || statusText || 'Okänt fel från Eventor.')
-    .split(apiKey)
-    .join('[redacted]')
-    .slice(0, 500);
-}
-
 export async function fetchFromEventorApi(
   endpointPath: string,
   config: EventorApiConfig,
@@ -68,12 +42,9 @@ export async function fetchFromEventorApi(
       /^\s*(?:<!doctype\s+html|<(?:html|head|body|title|meta|script)\b)/i.test(body);
 
     if (!response.ok || (requireStatus200 && response.status !== 200)) {
-      const detail = isHtml
-        ? ''
-        : getEventorErrorDetail(body, response.statusText, config.apiKey);
       throw new EventorApiError(
         response.ok ? 502 : response.status,
-        `Eventor svarade inte korrekt (HTTP ${response.status})${detail ? `: ${detail}` : ''}`
+        `Eventor svarade med HTTP ${response.status} (${response.statusText})`
       );
     }
 
