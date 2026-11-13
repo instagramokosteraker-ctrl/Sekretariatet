@@ -23,7 +23,7 @@ describe('fetchFromEventorApi', () => {
         })
       ).rejects.toMatchObject({
         statusCode: 401,
-        message: 'Eventor svarade med HTTP 401 (Unauthorized)',
+        message: 'Eventor svarade med HTTP 401: Unauthorized',
       } satisfies Partial<EventorApiError>);
     } finally {
       vi.unstubAllGlobals();

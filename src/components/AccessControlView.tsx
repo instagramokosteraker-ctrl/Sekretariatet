@@ -70,6 +70,7 @@ import {
   applyClubThemeToDocument,
   processClubLogoFile,
 } from '../utils/clubTheme';
+import type { ParsedEventorXml } from '../utils/eventorXml';
 
 interface AccessControlViewProps {
   view?: 'events' | 'admin';
@@ -106,6 +107,10 @@ interface AccessControlViewProps {
     standings: SeriesStandingsBundle[]
   ) => void;
   onUpdateClubSettings?: (settings: ClubSettings) => void;
+  onImportEventorXmlFallback: (
+    parsed: ParsedEventorXml,
+    fileName: string
+  ) => Promise<string>;
 }
 
 type AdminWorkspaceTab =
@@ -145,6 +150,7 @@ export function AccessControlView({
   onOpenPublicEvent,
   onApplySeriesScoringUpdate,
   onUpdateClubSettings,
+  onImportEventorXmlFallback,
 }: AccessControlViewProps) {
   const [subTab, setSubTab] = useState<AdminWorkspaceTab>(
     view === 'events' ? 'events' : 'admins'
@@ -2284,7 +2290,11 @@ export function AccessControlView({
 
       {view === 'admin' && subTab === 'drift_monitor' && <LiveIntegrityMonitorView />}
 
-      {view === 'admin' && subTab === 'eventor' && <EventorIntegrationSettingsView />}
+      {view === 'admin' && subTab === 'eventor' && (
+        <EventorIntegrationSettingsView
+          onImportEventorXmlFallback={onImportEventorXmlFallback}
+        />
+      )}
 
       {/* =====================================================================
           TAB 3: KLUBBPROFIL, LOGOTYP, GRUNDUTSEENDE & SWISH

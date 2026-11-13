@@ -149,7 +149,11 @@ import { AccessControlView } from './components/AccessControlView';
 import { applyClubThemeToDocument } from './utils/clubTheme';
 import { readEventorLocalConfig } from './utils/eventorLocalConfig';
 import { EventorNetworkError, fetchEventorXml } from './utils/eventorClient';
-import { parseEventorXml, type ParsedEventorXml } from './utils/eventorXml';
+import {
+  parseEventorXml,
+  type ParsedEventorRunner,
+  type ParsedEventorXml,
+} from './utils/eventorXml';
 import {
   buildEffectiveCourseImportBatch,
   parseIofXmlDocument,
@@ -2144,6 +2148,58 @@ export default function App() {
     };
   };
 
+  const handleImportEventorRunnerDbFile = async (
+    parsedRunners: ParsedEventorRunner[]
+  ): Promise<number> => {
+    const eventorConfig = readEventorLocalConfig();
+    const updatedAt = new Date().toISOString();
+    const runners: RunnerDbEntry[] = parsedRunners.map((runner) => ({
+      id: String(runner.siNumber),
+      siNumber: runner.siNumber,
+      cardSeries: inferCardSeries(runner.siNumber),
+      fullName: runner.fullName,
+      club: runner.club,
+      birthYear: runner.birthYear,
+      defaultClassName: runner.defaultClassName,
+      eventorPersonId: runner.eventorPersonId,
+      eventorOrgId: runner.eventorOrgId || eventorConfig.orgId || '',
+      source: 'EVENTOR_XML',
+      updatedAt,
+    }));
+    await saveRunnerDbEntriesToFirestore(runners);
+    setRunnerDb((current) => {
+      const importedSiNumbers = new Set(runners.map((runner) => runner.siNumber));
+      return [
+        ...runners,
+        ...current.filter((runner) => !importedSiNumbers.has(runner.siNumber)),
+      ];
+    });
+    return runners.length;
+  };
+
+  const handleImportEventorXmlFallback = async (
+    parsed: ParsedEventorXml,
+    fileName: string
+  ): Promise<string> => {
+    if (parsed.rootTag === 'CompetitorList') {
+      const importedCount = await handleImportEventorRunnerDbFile(
+        parsed.runnerDbEntries
+      );
+      return `Importerade ${importedCount} löpare från "${fileName}" till Löpardatabasen.`;
+    }
+    if (parsed.rootTag !== 'EventList' && parsed.rootTag !== 'EntryList') {
+      throw new Error(
+        'Välj en Eventor IOF EventList, EntryList eller CompetitorList XML-fil.'
+      );
+    }
+    const result = await handleCreateEventorCompetition(
+      parsed,
+      'EVENTOR_XML',
+      fileName
+    );
+    return `Skapade tävlingen "${result.name}" från "${fileName}": +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`;
+  };
+
   // Testbench: build authentic 0xEF (SI10/SIAC), 0xE1 (SI6), or 0xB1 (SI5) binary frames, decode them, and send via offlineReadoutQueue!
   const handleSimulateFullReadout = async (params: {
     protocolKind?: 'SI10_EF' | 'SI6_E1' | 'SI5_B1';
@@ -3284,25 +3340,7 @@ export default function App() {
                     }
                   }}
                   onCreateEventorCompetition={handleCreateEventorCompetition}
-                  onImportEventorRunnerDb={async (parsedRunners) => {
-                    const eventorConfig = readEventorLocalConfig();
-                    const updatedAt = new Date().toISOString();
-                    const runners: RunnerDbEntry[] = parsedRunners.map((runner) => ({
-                      id: String(runner.siNumber),
-                      siNumber: runner.siNumber,
-                      cardSeries: inferCardSeries(runner.siNumber),
-                      fullName: runner.fullName,
-                      club: runner.club,
-                      birthYear: runner.birthYear,
-                      defaultClassName: runner.defaultClassName,
-                      eventorPersonId: runner.eventorPersonId,
-                      eventorOrgId: runner.eventorOrgId || eventorConfig.orgId || '',
-                      source: 'EVENTOR_XML',
-                      updatedAt,
-                    }));
-                    await saveRunnerDbEntriesToFirestore(runners);
-                    return runners.length;
-                  }}
+                  onImportEventorRunnerDb={handleImportEventorRunnerDbFile}
                   onImportIofBatch={async (batch, options) => {
                     if (!auth.currentUser && !options?.firestoreOnly) {
                       const res = await apiFetch('/api/import/batch', {
@@ -4737,6 +4775,7 @@ export default function App() {
                   onUpdateClubSettings={(settings) => {
                     setClubSettings(settings);
                   }}
+                  onImportEventorXmlFallback={handleImportEventorXmlFallback}
                 />
               )}
 

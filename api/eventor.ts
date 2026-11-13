@@ -1,115 +1,42 @@
 import type { Request, Response } from 'express';
 import {
-  cert,
-  getApps,
-  initializeApp,
-} from 'firebase-admin/app';
-import {
-  readFirestoreRole,
-  verifyFirebaseIdToken,
-} from '../src/server/firebaseTokenAuth';
-import { getParsedServiceAccount } from '../src/server/firebaseServiceAccount';
-import {
   EventorApiError,
   fetchFromEventorApi,
 } from '../src/server/eventorApiClient';
 import {
-  parseEventorClassesXml,
-  parseEventorEntriesXml,
-  parseEventorEventXml,
-  parseEventorOrgXml,
-} from '../src/server/eventorXml';
+  readFirestoreRole,
+  verifyFirebaseIdToken,
+} from '../src/server/firebaseTokenAuth';
 
 const EVENTOR_API_BASE_URL = 'https://eventor.orientering.se/api';
 const FIREBASE_PROJECT_ID = 'ai-studio-applet-webapp-72c01';
 const FIRESTORE_DATABASE_ID =
   'ai-studio-kopiaavoksekreta-4d24d0cc-1fd7-4b98-ba1a-8c6f95c187df';
-const FIREBASE_ADMIN_APP_NAME = 'passersi-eventor-api';
+const RESOURCES = {
+  'import-event': ['event', 'classes', 'entries'],
+  'sync-club': ['organization', 'competitors'],
+} as const;
 
-try {
-  if (
-    process.env.FIREBASE_SERVICE_ACCOUNT &&
-    !getApps().some((candidate) => candidate.name === FIREBASE_ADMIN_APP_NAME)
-  ) {
-    const serviceAccount = getParsedServiceAccount();
-    if (!serviceAccount) {
-      throw new Error('FIREBASE_SERVICE_ACCOUNT is empty.');
-    }
-    initializeApp(
-      {
-        projectId: FIREBASE_PROJECT_ID,
-        credential: cert(serviceAccount),
-      },
-      FIREBASE_ADMIN_APP_NAME
-    );
-  }
-} catch (error) {
-  console.error('Firebase Admin initialization error:', error);
-}
-const isAdminInitialized = getApps().length > 0;
+type EventorAction = 'test' | 'import-event' | 'sync-club';
+type EventorResource = (typeof RESOURCES)[keyof typeof RESOURCES][number];
 
-function getHeader(req: Request, name: string): string | undefined {
-  const value = req.headers[name.toLowerCase()];
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function normalizeOrigin(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    return new URL(value.includes('://') ? value : `https://${value}`).origin;
-  } catch {
-    return null;
-  }
-}
-
-function isAllowedOrigin(origin: string, req: Request): boolean {
-  const parsedOrigin = normalizeOrigin(origin);
-  if (!parsedOrigin) return false;
-
-  const host = getHeader(req, 'host');
-  const forwardedProto = getHeader(req, 'x-forwarded-proto')
-    ?.split(',')[0]
-    .trim();
-  const requestOrigin = host
-    ? normalizeOrigin(`${forwardedProto || (process.env.VERCEL ? 'https' : 'http')}://${host}`)
-    : null;
-  if (parsedOrigin === requestOrigin) return true;
-
-  const configuredOrigins = [
-    process.env.APP_ORIGIN,
-    process.env.VERCEL_PROJECT_PRODUCTION_URL,
-    process.env.VERCEL_URL,
-    process.env.VERCEL_BRANCH_URL,
-  ]
-    .map(normalizeOrigin)
-    .filter((value): value is string => value !== null);
-  return configuredOrigins.includes(parsedOrigin);
-}
-
-function applyCors(req: Request, res: Response): boolean {
-  const origin = getHeader(req, 'origin');
-  if (!origin) return true;
-  if (!isAllowedOrigin(origin, req)) {
-    res.status(403).json({ success: false, error: 'Origin is not allowed.' });
-    return false;
-  }
-
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+function applyCorsHeaders(res: Response): void {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, x-passersi-token'
+    'Content-Type, Authorization, ApiKey'
   );
-  res.setHeader('Access-Control-Max-Age', '600');
-  return true;
+}
+
+function getBearerToken(req: Request): string {
+  const authorization = req.headers.authorization;
+  const value = Array.isArray(authorization) ? authorization[0] : authorization;
+  return value?.startsWith('Bearer ') ? value.slice(7).trim() : '';
 }
 
 async function requireEventorAdmin(req: Request, res: Response): Promise<boolean> {
-  const rawToken =
-    getHeader(req, 'x-passersi-token') || getHeader(req, 'authorization');
-  const token =
-    rawToken?.startsWith('Bearer ') ? rawToken.slice(7).trim() : rawToken?.trim();
+  const token = getBearerToken(req);
   if (!token) {
     res.status(401).json({
       success: false,
@@ -156,6 +83,77 @@ async function requireEventorAdmin(req: Request, res: Response): Promise<boolean
   return true;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function getApiBaseUrl(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') {
+    return EVENTOR_API_BASE_URL;
+  }
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== 'https:' ||
+      url.hostname.toLowerCase() !== 'eventor.orientering.se' ||
+      url.port ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function isAction(value: unknown): value is EventorAction {
+  return value === 'test' || value === 'import-event' || value === 'sync-club';
+}
+
+function isResourceForAction(
+  action: 'import-event' | 'sync-club',
+  resource: unknown
+): resource is EventorResource {
+  return (
+    typeof resource === 'string' &&
+    (RESOURCES[action] as readonly string[]).includes(resource)
+  );
+}
+
+function getEventorPath(
+  action: 'import-event' | 'sync-club',
+  resource: EventorResource,
+  eventId: string,
+  orgId: string
+): string {
+  if (action === 'import-event') {
+    const encodedEventId = encodeURIComponent(eventId);
+    switch (resource) {
+      case 'event':
+        return `/event/${encodedEventId}`;
+      case 'classes':
+        return `/eventclasses?eventId=${encodedEventId}`;
+      case 'entries':
+        return `/entries?eventId=${encodedEventId}`;
+    }
+  }
+
+  switch (resource) {
+    case 'organization':
+      return '/organisation/apiKey';
+    case 'competitors':
+      return `/competitors?organisationId=${encodeURIComponent(orgId)}&includeContactDetails=false`;
+  }
+  throw new Error('Ogiltig Eventor-resurs för åtgärden.');
+}
+
 function sendError(res: Response, error: unknown): void {
   if (error instanceof EventorApiError) {
     const statusCode =
@@ -178,9 +176,9 @@ function sendError(res: Response, error: unknown): void {
 }
 
 export default async function handler(req: Request, res: Response): Promise<void> {
-  if (!applyCors(req, res)) return;
+  applyCorsHeaders(res);
   if (req.method === 'OPTIONS') {
-    res.status(204).end();
+    res.status(200).end();
     return;
   }
   if (req.method !== 'POST') {
@@ -188,21 +186,14 @@ export default async function handler(req: Request, res: Response): Promise<void
     res.status(405).json({ success: false, error: 'Method not allowed.' });
     return;
   }
-  const body =
-    typeof req.body === 'object' && req.body !== null && !Array.isArray(req.body)
-      ? (req.body as Record<string, unknown>)
-      : {};
+  if (!(await requireEventorAdmin(req, res))) return;
+
+  const body = asRecord(req.body);
+  const params = asRecord(body.params);
   const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
-  const action = typeof body.action === 'string' ? body.action : '';
-  const orgId = typeof body.orgId === 'string' ? body.orgId.trim() : '';
-  if (action !== 'test' && action !== 'import') {
+  const action = body.action;
+  if (!isAction(action)) {
     res.status(400).json({ success: false, error: 'Ogiltig Eventor-åtgärd.' });
-    return;
-  }
-  if (
-    (action === 'import' || (action === 'test' && isAdminInitialized)) &&
-    !(await requireEventorAdmin(req, res))
-  ) {
     return;
   }
   if (!apiKey) {
@@ -213,80 +204,70 @@ export default async function handler(req: Request, res: Response): Promise<void
     res.status(400).json({ success: false, error: 'API-nyckeln är för lång.' });
     return;
   }
-  const eventorConfig = { apiKey, baseUrl: EVENTOR_API_BASE_URL };
 
+  const baseUrl = getApiBaseUrl(params.baseUrl);
+  if (!baseUrl) {
+    res.status(400).json({
+      success: false,
+      error: 'Eventor Base URL måste använda https://eventor.orientering.se.',
+    });
+    return;
+  }
+  const eventorConfig = { apiKey, baseUrl };
   try {
     if (action === 'test') {
-      if (orgId && !/^\d{1,32}$/.test(orgId)) {
-        res.status(400).json({
-          success: false,
-          error: 'Organisations-ID måste bestå av 1–32 siffror.',
-        });
-        return;
-      }
-      const orgXml = await fetchFromEventorApi(
+      const xml = await fetchFromEventorApi(
         '/organisation/apiKey',
         eventorConfig,
         true
       );
-      const org = parseEventorOrgXml(orgXml);
-      if (org && orgId && org.orgId !== orgId) {
-        res.status(400).json({
-          success: false,
-          error: `API-nyckeln hör till organisation ${org.orgId} (${org.orgName}), inte angivet organisations-ID ${orgId}.`,
-        });
-        return;
-      }
       res.status(200).json({
         success: true,
-        message: 'Anslutning lyckades!',
-        orgId: org?.orgId ?? orgId,
-        ...(org ? { orgName: org.orgName } : {}),
+        message: 'Anslutning till Eventor lyckades!',
+        xml,
       });
       return;
     }
 
+    const resource = params.resource;
+    if (!isResourceForAction(action, resource)) {
+      res.status(400).json({
+        success: false,
+        error: 'Ogiltig Eventor-resurs för åtgärden.',
+      });
+      return;
+    }
     const eventId =
       typeof body.eventId === 'string' || typeof body.eventId === 'number'
         ? String(body.eventId).trim()
         : '';
-    if (!/^\d{1,32}$/.test(eventId)) {
+    const orgId = typeof params.orgId === 'string' ? params.orgId.trim() : '';
+    if (action === 'import-event' && !/^\d{1,32}$/.test(eventId)) {
       res.status(400).json({
         success: false,
         error: 'Ange ett giltigt Eventor-tävlings-ID.',
       });
       return;
     }
-
-    const encodedEventId = encodeURIComponent(eventId);
-    const [eventXml, classesXml, entriesXml] = await Promise.all([
-      fetchFromEventorApi(`/event/${encodedEventId}`, eventorConfig, true),
-      fetchFromEventorApi(
-        `/eventclasses?eventId=${encodedEventId}`,
-        eventorConfig,
-        true
-      ),
-      fetchFromEventorApi(
-        `/entries?eventId=${encodedEventId}`,
-        eventorConfig,
-        true
-      ),
-    ]);
-    const event = parseEventorEventXml(eventXml, eventId);
-    if (!event) {
-      res.status(502).json({
+    if (
+      action === 'sync-club' &&
+      resource === 'competitors' &&
+      !/^\d{1,32}$/.test(orgId)
+    ) {
+      res.status(400).json({
         success: false,
-        error: 'Eventor returnerade inte läsbara tävlingsuppgifter.',
+        error: 'Ange ett giltigt Eventor Organisations-ID.',
       });
       return;
     }
-    const classIdToName = parseEventorClassesXml(classesXml);
-    res.status(200).json({
-      success: true,
-      event,
-      classes: Array.from(classIdToName, ([id, name]) => ({ id, name })),
-      entries: parseEventorEntriesXml(entriesXml, classIdToName),
-    });
+
+    const xml = await fetchFromEventorApi(
+      getEventorPath(action, resource, eventId, orgId),
+      eventorConfig,
+      true
+    );
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.status(200).send(xml);
   } catch (error) {
     sendError(res, error);
   }

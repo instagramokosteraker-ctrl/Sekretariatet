@@ -1,19 +1,38 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle2, KeyRound, RefreshCw, Save } from 'lucide-react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  KeyRound,
+  RefreshCw,
+  Save,
+  Upload,
+} from 'lucide-react';
 import {
   DEFAULT_EVENTOR_BASE_URL,
   readEventorLocalConfig,
   saveEventorLocalConfig,
 } from '../utils/eventorLocalConfig';
-import { fetchEventorXml } from '../utils/eventorClient';
-import { parseEventorXml } from '../utils/eventorXml';
+import { EventorNetworkError, fetchEventorXml } from '../utils/eventorClient';
+import {
+  parseEventorXml,
+  type ParsedEventorXml,
+} from '../utils/eventorXml';
 
 interface Notice {
   ok: boolean;
   message: string;
 }
 
-export function EventorIntegrationSettingsView() {
+interface EventorIntegrationSettingsViewProps {
+  onImportEventorXmlFallback: (
+    parsed: ParsedEventorXml,
+    fileName: string
+  ) => Promise<string>;
+}
+
+export function EventorIntegrationSettingsView({
+  onImportEventorXmlFallback,
+}: EventorIntegrationSettingsViewProps) {
   const [apiKey, setApiKey] = useState('');
   const [orgId, setOrgId] = useState('');
   const [baseUrl, setBaseUrl] = useState(DEFAULT_EVENTOR_BASE_URL);
@@ -21,6 +40,8 @@ export function EventorIntegrationSettingsView() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [fileFallbackAvailable, setFileFallbackAvailable] = useState(false);
+  const [fileDragging, setFileDragging] = useState(false);
 
   useEffect(() => {
     try {
@@ -67,6 +88,7 @@ export function EventorIntegrationSettingsView() {
   const testConnection = async () => {
     setBusy(true);
     setNotice(null);
+    setFileFallbackAvailable(false);
     try {
       const config = readEventorLocalConfig();
       if (!config.apiKey.trim()) {
@@ -94,7 +116,7 @@ export function EventorIntegrationSettingsView() {
       }
       setNotice({
         ok: true,
-        message: `Anslutning lyckades!\nKlubb: ${organization.orgName}\nOrganisation-ID: ${organization.orgId}`,
+        message: `Anslutning till Eventor lyckades!\nKlubb: ${organization.orgName}\nOrganisation-ID: ${organization.orgId}`,
       });
     } catch (error) {
       setNotice({
@@ -103,6 +125,31 @@ export function EventorIntegrationSettingsView() {
           error instanceof Error
             ? error.message
             : 'Anslutningen till Eventor misslyckades.',
+      });
+      setFileFallbackAvailable(error instanceof EventorNetworkError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importXmlFallback = async (file: File) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      if (!file.name.toLowerCase().endsWith('.xml')) {
+        throw new Error('Välj en XML-fil som har hämtats från Eventor.');
+      }
+      const parsed = parseEventorXml(await file.text());
+      const message = await onImportEventorXmlFallback(parsed, file.name);
+      setNotice({ ok: true, message });
+      setFileFallbackAvailable(false);
+    } catch (error) {
+      setNotice({
+        ok: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Kunde inte importera Eventor XML-filen.',
       });
     } finally {
       setBusy(false);
@@ -197,6 +244,49 @@ export function EventorIntegrationSettingsView() {
           Testa anslutning
         </button>
       </div>
+
+      {fileFallbackAvailable && (
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            setFileDragging(true);
+          }}
+          onDragLeave={() => setFileDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setFileDragging(false);
+            const file = event.dataTransfer.files[0];
+            if (!busy && file) void importXmlFallback(file);
+          }}
+          className={`rounded-lg border border-dashed p-3 space-y-2 ${
+            fileDragging
+              ? 'border-red-500 bg-red-50 dark:bg-red-950/30'
+              : 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950/60'
+          }`}
+        >
+          <p className="text-xs text-slate-700 dark:text-slate-300">
+            Ladda upp Eventor IOF XML-fil
+          </p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Stöder EventList, EntryList och CompetitorList. Filen parsas i webbläsaren och sparas direkt i Firestore.
+          </p>
+          <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 rounded-lg cursor-pointer">
+            <Upload className="w-3.5 h-3.5" />
+            {busy ? 'Importerar...' : 'Välj XML-fil eller släpp den här'}
+            <input
+              type="file"
+              accept=".xml,text/xml,application/xml"
+              disabled={busy}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void importXmlFallback(file);
+                event.target.value = '';
+              }}
+              className="hidden"
+            />
+          </label>
+        </div>
+      )}
 
       <div className="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-1 text-xs text-slate-600 dark:text-slate-400">
         <p>

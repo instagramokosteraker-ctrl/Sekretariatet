@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/eventor.ts": {
+      "maxDuration": 15
+    }
+  },
   "rewrites": [
     {
       "source": "/api/:path((?!eventor(?:/|$)).*)",

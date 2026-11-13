@@ -44,7 +44,7 @@ export async function fetchFromEventorApi(
     if (!response.ok || (requireStatus200 && response.status !== 200)) {
       throw new EventorApiError(
         response.ok ? 502 : response.status,
-        `Eventor svarade med HTTP ${response.status} (${response.statusText})`
+        `Eventor svarade med HTTP ${response.status}: ${response.statusText}`
       );
     }
 
