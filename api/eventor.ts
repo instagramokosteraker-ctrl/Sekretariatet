@@ -1,8 +1,14 @@
 import type { Request, Response } from 'express';
 import {
+  cert,
+  getApps,
+  initializeApp,
+} from 'firebase-admin/app';
+import {
   readFirestoreRole,
   verifyFirebaseIdToken,
 } from '../src/server/firebaseTokenAuth';
+import { getParsedServiceAccount } from '../src/server/firebaseServiceAccount';
 import {
   EventorApiError,
   fetchFromEventorApi,
@@ -18,6 +24,28 @@ const EVENTOR_API_BASE_URL = 'https://eventor.orientering.se/api';
 const FIREBASE_PROJECT_ID = 'ai-studio-applet-webapp-72c01';
 const FIRESTORE_DATABASE_ID =
   'ai-studio-kopiaavoksekreta-4d24d0cc-1fd7-4b98-ba1a-8c6f95c187df';
+const FIREBASE_ADMIN_APP_NAME = 'passersi-eventor-api';
+
+try {
+  if (
+    process.env.FIREBASE_SERVICE_ACCOUNT &&
+    !getApps().some((candidate) => candidate.name === FIREBASE_ADMIN_APP_NAME)
+  ) {
+    const serviceAccount = getParsedServiceAccount();
+    if (!serviceAccount) {
+      throw new Error('FIREBASE_SERVICE_ACCOUNT is empty.');
+    }
+    initializeApp(
+      {
+        projectId: FIREBASE_PROJECT_ID,
+        credential: cert(serviceAccount),
+      },
+      FIREBASE_ADMIN_APP_NAME
+    );
+  }
+} catch (error) {
+  console.error('Firebase Admin initialization error:', error);
+}
 
 function getHeader(req: Request, name: string): string | undefined {
   const value = req.headers[name.toLowerCase()];

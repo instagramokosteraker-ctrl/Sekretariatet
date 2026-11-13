@@ -11,9 +11,9 @@ import {
   getApps,
   initializeApp,
   type Credential,
-  type ServiceAccount,
 } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getParsedServiceAccount } from './src/server/firebaseServiceAccount';
 import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
@@ -548,14 +548,15 @@ const hasAdminCredentials = Boolean(
 
 let isAdminInitialized = false;
 try {
-  if (!getApps().length) {
+  const existingAdminApp = getApps().find(
+    (candidate) => candidate.name === FIREBASE_ADMIN_APP_NAME
+  );
+  if (!existingAdminApp) {
     let credential: Credential | undefined;
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-      const serviceAccount = JSON.parse(
-        process.env.FIREBASE_SERVICE_ACCOUNT
-      ) as ServiceAccount & { private_key?: string };
-      if (typeof serviceAccount.private_key === 'string') {
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+      const serviceAccount = getParsedServiceAccount();
+      if (!serviceAccount) {
+        throw new Error('FIREBASE_SERVICE_ACCOUNT is empty.');
       }
       credential = cert(serviceAccount);
     } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
@@ -574,7 +575,9 @@ try {
       );
     }
   }
-  isAdminInitialized = getApps().length > 0;
+  isAdminInitialized = getApps().some(
+    (candidate) => candidate.name === FIREBASE_ADMIN_APP_NAME
+  );
 } catch (err) {
   recordInitializationError(err);
   console.error('Firebase Admin initialization error:', err);

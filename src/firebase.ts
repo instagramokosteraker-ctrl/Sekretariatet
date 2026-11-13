@@ -6201,11 +6201,17 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999 || !fullName) {
     throw new Error('Ange ett giltigt SI-bricknummer och löparens namn.');
   }
+  if (params.competitors.some((candidate) => candidate.siNumber === siNumber)) {
+    throw new Error(`SI-bricka ${siNumber} är redan anmäld på tävlingen.`);
+  }
 
   const competitorSnapshots = await getDocs(
     collection(db, 'competitions', competitionId, 'competitors')
   );
   const existingCompetitors = competitorSnapshots.docs.map((snapshot) => snapshot.data());
+  if (existingCompetitors.some((candidate) => candidate.siNumber === siNumber)) {
+    throw new Error(`SI-bricka ${siNumber} är redan anmäld på tävlingen.`);
+  }
 
   const classId = sanitizeFirestoreId(
     params.payload.classId || params.classes[0]?.id || 'cls_open',
@@ -6321,29 +6327,256 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   if (!currentUser) {
     throw new Error('Direktanmäla kräver ett inloggat administratörskonto.');
   }
-  const response = await fetch(
-    `/api/firestore/competitions/${encodeURIComponent(competitionId)}/competitors/${encodeURIComponent(competitorId)}/create`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${await currentUser.getIdToken()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ competitor: mutableCompetitor, runnerCandidate }),
-    }
-  );
-  const result = (await response.json().catch(() => ({}))) as {
-    error?: unknown;
-    runnerDbEntry?: RunnerDbEntry | null;
+  const writeDirectlyToFirestore = async (): Promise<RunnerDbEntry | null> => {
+    const actorUid = currentUser.uid;
+    const actorAdminRef = doc(db, 'admins', ownerUid);
+    const competitorRef = doc(
+      db,
+      'competitions',
+      competitionId,
+      'competitors',
+      competitorId
+    );
+    const assignmentRef = doc(
+      db,
+      'competitions',
+      competitionId,
+      'siCardAssignments',
+      String(siNumber)
+    );
+    const runnerRef = doc(db, 'runnerDb', String(siNumber));
+
+    return runTransaction(db, async (transaction) => {
+      const [
+        transactionCompetition,
+        existingCompetitor,
+        existingAssignment,
+        actorAdmin,
+        existingRunner,
+      ] = await Promise.all([
+        transaction.get(competitionRef),
+        transaction.get(competitorRef),
+        transaction.get(assignmentRef),
+        isBootstrapAdmin ? Promise.resolve(null) : transaction.get(actorAdminRef),
+        runnerCandidate ? transaction.get(runnerRef) : Promise.resolve(null),
+      ]);
+
+      if (!transactionCompetition.exists()) {
+        throw new Error('Tävlingen hittades inte i Firestore.');
+      }
+      const transactionCompetitionData = transactionCompetition.data();
+      const adminRole = isBootstrapAdmin
+        ? 'SUPER_ADMIN'
+        : actorAdmin?.data()?.role;
+      const isTransactionSuperAdmin = adminRole === 'SUPER_ADMIN';
+      if (adminRole !== 'RACE_ADMIN' && !isTransactionSuperAdmin) {
+        throw new Error('Ditt Google-konto saknar administratörsbehörighet för direktanmälan.');
+      }
+      if (
+        !isTransactionSuperAdmin &&
+        transactionCompetitionData.ownerUid !== actorUid
+      ) {
+        throw new Error('Ditt konto äger inte den här tävlingen.');
+      }
+      if (
+        transactionCompetitionData.status === 'COMPLETED' &&
+        !isTransactionSuperAdmin
+      ) {
+        throw new Error('Det går inte att direktanmäla till en avslutad tävling.');
+      }
+
+      const existingCompetitorData = existingCompetitor.data();
+      const existingAssignmentData = existingAssignment.data();
+      if (
+        existingCompetitor.exists() &&
+        existingAssignment.exists() &&
+        existingCompetitorData?.competitionId === competitionId &&
+        existingCompetitorData?.competitorId === competitorId &&
+        existingCompetitorData?.siNumber === siNumber &&
+        existingCompetitorData?.ownerUid === actorUid &&
+        existingAssignmentData?.competitorId === competitorId &&
+        existingAssignmentData?.competitorDocumentId === competitorId &&
+        existingAssignmentData?.state === 'ACTIVE' &&
+        existingAssignmentData?.ownerUid === actorUid
+      ) {
+        return null;
+      }
+      if (existingCompetitor.exists()) {
+        throw new Error('Deltagarens dokument-ID används redan.');
+      }
+      if (existingAssignment.exists()) {
+        throw new Error(`SI-bricka ${siNumber} är redan tilldelad.`);
+      }
+
+      const currentCompetitorCount = Number(
+        transactionCompetitionData.competitorCount || 0
+      );
+      const currentFinishedCount = Number(
+        transactionCompetitionData.finishedCount || 0
+      );
+      if (
+        !Number.isInteger(currentCompetitorCount) ||
+        currentCompetitorCount < 0 ||
+        !Number.isInteger(currentFinishedCount) ||
+        currentFinishedCount < 0
+      ) {
+        throw new Error('Tävlingsräknarna är ogiltiga.');
+      }
+
+      const serverTime = serverTimestamp();
+      transaction.set(assignmentRef, {
+        competitionId,
+        siNumber,
+        cardSeries: competitor.cardSeries,
+        competitorId,
+        competitorDocumentId: competitorId,
+        state: 'ACTIVE',
+        assignmentVersion: 1,
+        source: 'DIRECT_ENTRY',
+        ownerUid: actorUid,
+        schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
+        createdAt: serverTime,
+        updatedAt: serverTime,
+      });
+      transaction.set(competitorRef, {
+        competitorId,
+        competitionId,
+        ...mutableCompetitor,
+        ownerUid: actorUid,
+        createdAt: serverTime,
+        billingFieldsUpdatedAt: serverTime,
+        updatedAt: serverTime,
+      });
+
+      const nextCompetitorCount = currentCompetitorCount + 1;
+      transaction.update(competitionRef, {
+        competitorCount: nextCompetitorCount,
+        finishedCount: Math.min(
+          nextCompetitorCount,
+          currentFinishedCount +
+            (competitor.status === 'OK' || competitor.status === 'MP' ? 1 : 0)
+        ),
+        updatedAt: serverTime,
+      });
+
+      let savedRunnerDbEntry: RunnerDbEntry | null = null;
+      const runnerData = existingRunner?.data();
+      const sameRunner =
+        typeof runnerData?.fullName === 'string' &&
+        runnerData.fullName.trim().toLowerCase() === fullName.toLowerCase();
+      if (existingRunner && runnerCandidate && (!existingRunner.exists() || sameRunner)) {
+        const nextRunnerData = {
+          cardSeries: competitor.cardSeries,
+          fullName: competitor.fullName.slice(0, 120),
+          club: competitor.club.slice(0, 100),
+          birthYear:
+            typeof runnerData?.birthYear === 'number' ? runnerData.birthYear : null,
+          defaultClassName: runnerCandidate.defaultClassName.slice(0, 80),
+          eventorPersonId:
+            typeof runnerData?.eventorPersonId === 'string'
+              ? runnerData.eventorPersonId
+              : '',
+          eventorOrgId:
+            typeof runnerData?.eventorOrgId === 'string'
+              ? runnerData.eventorOrgId
+              : '',
+          source: runnerData?.source || 'LEARNED_ENTRY',
+          updatedAtIso: nowIso,
+        };
+        if (existingRunner.exists()) {
+          transaction.update(runnerRef, {
+            ...nextRunnerData,
+            updatedAt: serverTime,
+          });
+        } else {
+          transaction.set(runnerRef, {
+            runnerId: String(siNumber),
+            siNumber,
+            ...nextRunnerData,
+            source: 'LEARNED_ENTRY',
+            ownerUid: actorUid,
+            createdAt: serverTime,
+            updatedAt: serverTime,
+          });
+        }
+        savedRunnerDbEntry = {
+          id: String(siNumber),
+          siNumber,
+          ...nextRunnerData,
+          source: nextRunnerData.source as RunnerDbEntry['source'],
+          updatedAt: nowIso,
+        };
+      }
+
+      return savedRunnerDbEntry;
+    });
   };
-  if (!response.ok) {
-    throw new Error(
-      typeof result.error === 'string'
-        ? result.error
-        : 'Deltagaren kunde inte skapas.'
+
+  const fallbackToClientFirestore = async (apiFailure: string): Promise<void> => {
+    try {
+      runnerDbEntry = await writeDirectlyToFirestore();
+    } catch (error) {
+      const fallbackMessage =
+        error instanceof Error ? error.message : 'Okänt Firestore-fel.';
+      throw new Error(
+        `${apiFailure} Direkt Firestore-sparning misslyckades: ${fallbackMessage}`
+      );
+    }
+  };
+
+  const requestBody = JSON.stringify({
+    competitor: mutableCompetitor,
+    runnerCandidate,
+  });
+  let response: Response | null = null;
+  try {
+    response = await fetch(
+      `/api/firestore/competitions/${encodeURIComponent(competitionId)}/competitors/${encodeURIComponent(competitorId)}/create`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${await currentUser.getIdToken()}`,
+          'Content-Type': 'application/json',
+        },
+        body: requestBody,
+      }
+    );
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    await fallbackToClientFirestore(
+      'Backend-API:t kunde inte nås.'
     );
   }
-  runnerDbEntry = result.runnerDbEntry ?? null;
+
+  if (response) {
+    const result = (await response.json().catch(() => ({}))) as {
+      error?: unknown;
+      message?: unknown;
+      runnerDbEntry?: RunnerDbEntry | null;
+    };
+    const apiMessage =
+      typeof result.error === 'string'
+        ? result.error
+        : typeof result.message === 'string'
+          ? result.message
+          : 'Deltagaren kunde inte skapas.';
+    if (!response.ok) {
+      if (
+        response.status === 404 ||
+        response.status === 405 ||
+        response.status >= 500 ||
+        apiMessage.includes('API server initialization failed')
+      ) {
+        await fallbackToClientFirestore(
+          `Backend-API:t svarade HTTP ${response.status}: ${apiMessage}.`
+        );
+      } else {
+        throw new Error(apiMessage);
+      }
+    } else {
+      runnerDbEntry = result.runnerDbEntry ?? null;
+    }
+  }
 
   return { competitor, runnerDbEntry };
 }

@@ -285,7 +285,7 @@ export function EntriesRegistrationView({
     } else {
       if (isLinkingUnknown) onClearPendingUnknown();
       setSuccessNotice(
-        `${fullName.trim()} anmäld med SI ${formatSiNumber(parsedSi)}${
+        `Anmälan sparad i Firestore. ${fullName.trim()} anmäld med SI ${formatSiNumber(parsedSi)}${
           isLinkingUnknown
             ? ' — sparade stämplingar validerades direkt!'
             : isBorrowedCard || isRentalCard
