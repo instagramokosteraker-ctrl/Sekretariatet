@@ -5928,197 +5928,89 @@ export async function submitReadoutToFirestore(
     JSON.stringify(receipt.punchTimes) === JSON.stringify(commonReceipt.punchTimes) &&
     receipt.rawHex === commonReceipt.rawHex;
 
-  if (autoCreatedFromRunnerDb && runner && updatedCompetitor && validation) {
+  if (
+    autoCreatedFromRunnerDb &&
+    runner &&
+    runnerDbMatch &&
+    updatedCompetitor &&
+    validation
+  ) {
     const competitorId = sanitizeFirestoreId(runner.id, 'cmp');
-    const competitorRef = doc(
-      db,
-      'competitions',
-      competitionId,
-      'competitors',
-      competitorId
-    );
     let assignmentResult = 'PENDING';
     let createdCompetitor = updatedCompetitor;
-    let receiptStatus: 'UNKNOWN' | 'PROCESSED' | null = null;
     try {
-      const mutationResult = await runAtomicSIAssignmentMutation(
+      const response = await fetch(
+        `/api/firestore/competitions/${encodeURIComponent(competitionId)}/readouts/${encodeURIComponent(clientReadoutId)}/auto-create`,
         {
-          intent: 'CREATE_COMPETITOR',
-          competitor: { competitionId, competitorId },
-          assignment: { requestedSiNumber: siNumber },
-        },
-        async ({
-          transaction,
-          competitionData,
-          assignmentSnapshots,
-          result: transactionContext,
-        }) => {
-          const existingReceipt = await transaction.get(receiptRef);
-          if (existingReceipt.exists()) {
-            const existing = existingReceipt.data();
-            if (!receiptMatchesPayload(existing)) {
-              throw new Error('Readout-ID:t används för en annan avläsning.');
-            }
-            assignmentResult = 'IDEMPOTENT_REPLAY';
-            receiptStatus = existing.status === 'UNKNOWN' ? 'UNKNOWN' : 'PROCESSED';
-            return 'NOT_APPLICABLE';
-          }
-
-          if (competitionData.status === 'COMPLETED') {
-            throw new Error('Tävlingen är avslutad och tar inte emot fler avläsningar.');
-          }
-
-          const assignmentSnapshot = assignmentSnapshots.get(siNumber);
-          const runnerRef = doc(db, 'runnerDb', String(siNumber));
-          const runnerSnapshot = await transaction.get(runnerRef);
-          const runnerData = runnerSnapshot.exists() ? runnerSnapshot.data() : null;
-          const assignmentConflict = Boolean(assignmentSnapshot?.exists());
-          const duplicateCompetitor = transactionContext.duplicateCandidateDetected;
-          const duplicateCheckFailed =
-            transactionContext.duplicateCandidateQueryError !== null;
-          const identitySourceMatches =
-            runnerData !== null &&
-            Number(runnerData.siNumber) === siNumber &&
-            runnerData.fullName === runnerDbMatch?.fullName &&
-            runnerData.club === runnerDbMatch?.club &&
-            runnerData.cardSeries === runnerDbMatch?.cardSeries;
-
-          if (
-            !runnerSnapshot.exists() ||
-            !identitySourceMatches ||
-            assignmentConflict ||
-            duplicateCompetitor ||
-            duplicateCheckFailed ||
-            transactionContext.competitorExists
-          ) {
-            assignmentResult = assignmentConflict
-              ? 'CONFLICT_EXISTING_ASSIGNMENT'
-              : duplicateCompetitor
-                ? 'CONFLICT_DUPLICATE_COMPETITOR'
-                : duplicateCheckFailed
-                  ? 'CONFLICT_DUPLICATE_CHECK_FAILED'
-                  : !identitySourceMatches
-                  ? 'CONFLICT_RUNNER_DB_CHANGED'
-                  : 'CONFLICT_COMPETITOR_ID_EXISTS';
-            transaction.set(receiptRef, {
-              ...commonReceipt,
-              status: 'UNKNOWN',
-              competitorId: '',
-            });
-            receiptStatus = 'UNKNOWN';
-            return 'NOT_APPLICABLE';
-          }
-
-          const observedMaxBib = Math.max(
-            400,
-            ...event.competitors.map((candidate) => Number(candidate.bib) || 0)
-          );
-          const competitorCount = Math.max(
-            0,
-            Number(competitionData.competitorCount) || 0
-          );
-          const bib =
-            Math.max(observedMaxBib, 400) +
-            Math.max(0, competitorCount - event.competitors.length) +
-            1;
-          if (bib > 99999) {
-            throw new Error('Tävlingens startnummer har nått den tillåtna maxgränsen.');
-          }
-          createdCompetitor = { ...updatedCompetitor, bib };
-          const newIdentity = getCompetitorSIAssignmentIdentity(
-            competitionId,
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${await current.getIdToken()}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
             competitorId,
-            {
-              competitionId,
-              competitorId,
-              siNumber,
-              cardSeries: createdCompetitor.cardSeries,
-              ownerUid,
-            }
-          );
-          transaction.set(competitorRef, {
-            competitorId,
-            competitionId,
-            bib,
-            fullName: createdCompetitor.fullName.slice(0, 120),
-            club: createdCompetitor.club.slice(0, 100) || 'Klubblös',
-            classId: createdCompetitor.classId,
             siNumber,
-            cardSeries: newIdentity.cardSeries,
-            isRentalCard: false,
-            rentalReturned: false,
-            feePaid: false,
-            status: createdCompetitor.status,
-            allocatedStartSec: encodeNullableSec(createdCompetitor.allocatedStartSec),
-            checkTimeSec: encodeNullableSec(createdCompetitor.checkTimeSec),
-            startTimeSec: encodeNullableSec(createdCompetitor.startTimeSec),
-            finishTimeSec: encodeNullableSec(createdCompetitor.finishTimeSec),
-            manualFinishTimeSec: encodeNullableSec(createdCompetitor.manualFinishTimeSec),
-            runningTimeSec: encodeNullableSec(createdCompetitor.runningTimeSec),
-            readoutAtIso: createdCompetitor.readoutAt || '',
-            punchCodes: punches.map((punch) => punch.code),
-            punchTimes: punches.map((punch) => punch.timeSec),
-            ownerUid: newIdentity.ownerUid,
-            readoutReceiptId: clientReadoutId,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          transaction.set(getCompetitionSICardAssignmentRef(competitionId, siNumber), {
-            competitionId,
-            siNumber,
-            cardSeries: newIdentity.cardSeries,
-            competitorId,
-            competitorDocumentId: competitorId,
-            state: 'ACTIVE',
-            assignmentVersion: 1,
-            source: 'READOUT',
-            ownerUid: newIdentity.ownerUid,
-            schemaVersion: SI_CARD_ASSIGNMENT_SCHEMA_VERSION,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          const nextCompetitorCount = competitorCount + 1;
-          transaction.update(competitionRef, {
-            competitorCount: nextCompetitorCount,
-            finishedCount: Math.min(
-              nextCompetitorCount,
-              (Number(competitionData.finishedCount) || 0) + 1
-            ),
-            updatedAt: serverTimestamp(),
-          });
-          transaction.set(receiptRef, {
-            ...commonReceipt,
-            status: 'PROCESSED',
-            competitorId,
-          });
-          assignmentResult = 'CREATED';
-          receiptStatus = 'PROCESSED';
-          return 'CREATED';
+            cardSeries: readout.cardSeries,
+            stationCode: commonReceipt.stationCode,
+            checkTimeSec: commonReceipt.checkTimeSec,
+            startTimeSec: commonReceipt.startTimeSec,
+            finishTimeSec: commonReceipt.finishTimeSec,
+            punchCodes: commonReceipt.punchCodes,
+            punchTimes: commonReceipt.punchTimes,
+            rawHex: commonReceipt.rawHex,
+            expectedRunnerDb: {
+              fullName: runnerDbMatch.fullName,
+              club: runnerDbMatch.club,
+              cardSeries: runnerDbMatch.cardSeries,
+            },
+            competitor: {
+              classId: updatedCompetitor.classId,
+              status: updatedCompetitor.status,
+              checkTimeSec: encodeNullableSec(updatedCompetitor.checkTimeSec),
+              startTimeSec: encodeNullableSec(updatedCompetitor.startTimeSec),
+              finishTimeSec: encodeNullableSec(updatedCompetitor.finishTimeSec),
+              runningTimeSec: encodeNullableSec(updatedCompetitor.runningTimeSec),
+              readoutAtIso: updatedCompetitor.readoutAt || '',
+            },
+          }),
         }
       );
-      if (mutationResult.status !== 'COMMITTED') {
-        throw new Error('Tävlingen hittades inte i Firestore för automatisk anmälan.');
+      const responseBody = (await response.json().catch(() => ({}))) as {
+        error?: unknown;
+        status?: unknown;
+        competitorId?: unknown;
+        bib?: unknown;
+        replayed?: unknown;
+      };
+      if (!response.ok) {
+        throw new Error(
+          typeof responseBody.error === 'string'
+            ? responseBody.error
+            : 'Tävlingen kunde inte skapa deltagaren från avläsningen.'
+        );
       }
-      if (receiptStatus === null) {
-        const committedReceipt = await getDoc(receiptRef);
-        if (!committedReceipt.exists()) {
-          throw new Error('Avläsningen saknar en bekräftad Firestore-kvittens.');
-        }
-        receiptStatus =
-          committedReceipt.data().status === 'UNKNOWN' ? 'UNKNOWN' : 'PROCESSED';
+      if (
+        responseBody.status !== 'PROCESSED' &&
+        responseBody.status !== 'UNKNOWN'
+      ) {
+        throw new Error('Servern returnerade ett ogiltigt avläsningsresultat.');
       }
-      const log =
-        assignmentResult.startsWith('CONFLICT') ? console.warn : console.info;
-      log(
+      assignmentResult =
+        responseBody.status === 'UNKNOWN'
+          ? 'CONFLICT_TRUSTED_VALIDATION'
+          : responseBody.replayed === true
+            ? 'IDEMPOTENT_REPLAY'
+            : 'CREATED';
+      console.info(
         `[READOUT_AUTOCREATE_MIGRATION] ${JSON.stringify({
           competitorId,
           siNumber,
           assignmentResult,
-          transactionResult: mutationResult.status,
-          receiptResult: receiptStatus,
+          transactionResult: 'COMMITTED',
+          receiptResult: responseBody.status,
         })}`
       );
-      if (receiptStatus === 'UNKNOWN') {
+      if (responseBody.status === 'UNKNOWN') {
         return {
           unknownCardReadout: {
             siNumber,
@@ -6129,6 +6021,19 @@ export async function submitReadoutToFirestore(
           },
         };
       }
+      if (
+        responseBody.competitorId !== competitorId ||
+        !Number.isInteger(responseBody.bib)
+      ) {
+        throw new Error('Serverns bekräftade deltagaridentitet är ogiltig.');
+      }
+      createdCompetitor = {
+        ...updatedCompetitor,
+        bib: Number(responseBody.bib),
+        fullName: runnerDbMatch.fullName.slice(0, 120),
+        club: runnerDbMatch.club.slice(0, 100) || 'Klubblös',
+        cardSeries: runnerDbMatch.cardSeries,
+      };
       return { competitor: createdCompetitor };
     } catch (error) {
       console.error(

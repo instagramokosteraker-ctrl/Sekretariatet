@@ -654,14 +654,6 @@ service cloud.firestore {
         (!('lastValidatedAt' in data) || data.lastValidatedAt == null || data.lastValidatedAt is timestamp);
     }
 
-    function activeAssignmentMatchesCompetitor(competitionId, assignment, competitor) {
-      return competitor.siNumber == assignment.siNumber &&
-        competitor.competitorId == assignment.competitorId &&
-        competitor.competitionId == competitionId &&
-        competitor.cardSeries == assignment.cardSeries &&
-        competitor.ownerUid == assignment.ownerUid;
-    }
-
     function hasMatchingActiveAssignmentAfter(competitionId, competitorId, competitor) {
       let assignmentPath =
         /databases/$(database)/documents/competitions/$(competitionId)/siCardAssignments/$(competitor.siNumber);
@@ -688,87 +680,6 @@ service cloud.firestore {
       return hasOfficialRole('READOUT') ||
         hasOfficialRole('FOREST') ||
         hasOfficialRole('SPEAKER');
-    }
-
-    function processedReadoutReceiptMatchesCompetitor(competitor, receipt) {
-      return receipt.status == 'PROCESSED' &&
-        receipt.competitorId == competitor.competitorId &&
-        receipt.siNumber == competitor.siNumber &&
-        receipt.cardSeries == competitor.cardSeries &&
-        receipt.ownerUid == request.auth.uid;
-    }
-
-    function hasProcessedReadoutReceiptAfter(competitionId, competitor) {
-      let receiptPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/readoutReceipts/$(competitor.readoutReceiptId);
-      return isValidId(competitor.readoutReceiptId) &&
-        existsAfter(receiptPath) &&
-        processedReadoutReceiptMatchesCompetitor(
-          competitor,
-          getAfter(receiptPath).data
-        );
-    }
-
-    function runnerDbMatchesReadoutCompetitor(competitor, runnerDbEntry) {
-      return competitor.fullName == runnerDbEntry.fullName &&
-        (
-          competitor.club == runnerDbEntry.club ||
-          (
-            runnerDbEntry.club == '' &&
-            competitor.club == 'Klubblös'
-          )
-        ) &&
-        competitor.cardSeries == runnerDbEntry.cardSeries;
-    }
-
-    function readoutCompetitorMatchesRunnerDbData(competitionId, competitor) {
-      return competitor.competitionId == competitionId &&
-        readoutCompetitorIdentityMatchesRunnerDbData(competitionId, competitor);
-    }
-
-    function readoutCompetitorIdentityMatchesRunnerDbData(competitionId, competitor) {
-      let runnerDbPath =
-        /databases/$(database)/documents/runnerDb/$(string(competitor.siNumber));
-      return hasProcessedReadoutReceiptAfter(competitionId, competitor) &&
-        exists(runnerDbPath) &&
-        runnerDbMatchesReadoutCompetitor(
-          competitor,
-          get(runnerDbPath).data
-        );
-    }
-
-    function readoutCompetitorMatchesRunnerDb(competitionId, competitorId) {
-      let competitorPath =
-        /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
-      return canCreateReadoutCompetitor() &&
-        isValidId(competitorId) &&
-        existsAfter(competitorPath) &&
-        readoutCompetitorMatchesRunnerDbData(
-          competitionId,
-          getAfter(competitorPath).data
-        );
-    }
-
-    function activeReadoutAssignmentCreateMatchesCompetitor(
-      competitionId,
-      assignment,
-      competitor
-    ) {
-      return activeAssignmentMatchesCompetitor(
-          competitionId,
-          assignment,
-          competitor
-        ) &&
-        (
-          isAdmin() ||
-          (
-            assignment.ownerUid == request.auth.uid &&
-            canCreateReadoutCompetitor() &&
-            assignment.source == 'READOUT' &&
-            assignment.state == 'ACTIVE' &&
-            readoutCompetitorIdentityMatchesRunnerDbData(competitionId, competitor)
-          )
-        );
     }
 
     // =========================================================================
@@ -1295,17 +1206,6 @@ service cloud.firestore {
           (
             canCreateReadoutCompetitor() &&
             existing().status != 'COMPLETED' &&
-            incoming().competitorCount == existing().competitorCount + 1 &&
-            incoming().finishedCount == existing().finishedCount + 1 &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'competitorCount',
-              'finishedCount',
-              'updatedAt'
-            ])
-          ) ||
-          (
-            canCreateReadoutCompetitor() &&
-            existing().status != 'COMPLETED' &&
             incoming().finishedCount >= existing().finishedCount &&
             incoming().finishedCount <= existing().finishedCount + 1 &&
             incoming().diff(existing()).affectedKeys().hasOnly([
@@ -1367,23 +1267,20 @@ service cloud.firestore {
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
           isValidId(siNumber) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+              isAdmin() ||
+              isSuperAdmin()
+            ) &&
+            assignmentCreateOwnerMatchesCompetitorAfter(competitionId, incoming())
+          ) &&
           isValidSICardAssignmentForCreate(incoming()) &&
           incoming().competitionId == competitionId &&
           incoming().siNumber == int(siNumber) &&
           incoming().createdAt == request.time &&
-          incoming().updatedAt == request.time &&
-          parentCompetitionExists(competitionId) &&
-          (
-            (
-              (
-                parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
-                isAdmin() ||
-                isSuperAdmin()
-              ) &&
-              assignmentCreateOwnerMatchesCompetitorAfter(competitionId, incoming())
-            ) ||
-            hasOfficialRole('READOUT')
-          );
+          incoming().updatedAt == request.time;
 
         allow update: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1618,24 +1515,21 @@ service cloud.firestore {
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
           isValidId(competitorId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            (
+              parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
+              isAdmin() ||
+              isSuperAdmin()
+            ) &&
+            hasMatchingActiveAssignmentAfter(competitionId, competitorId, incoming())
+          ) &&
           isValidCloudCompetitor(incoming()) &&
           incoming().competitorId == competitorId &&
           incoming().competitionId == competitionId &&
           incoming().ownerUid == request.auth.uid &&
           incoming().createdAt == request.time &&
-          incoming().updatedAt == request.time &&
-          parentCompetitionExists(competitionId) &&
-          (
-            (
-              (
-                parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
-                isAdmin() ||
-                isSuperAdmin()
-              ) &&
-              hasMatchingActiveAssignmentAfter(competitionId, competitorId, incoming())
-            ) ||
-            canCreateReadoutCompetitor()
-          );
+          incoming().updatedAt == request.time;
 
         allow update: if (
           isVerifiedUser() &&

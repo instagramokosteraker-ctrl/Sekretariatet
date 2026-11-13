@@ -21,6 +21,10 @@ import {
   CompetitorCreationError,
 } from './src/server/competitorCreation';
 import {
+  createReadoutCompetitorFromRunnerDb,
+  ReadoutAutoCreateError,
+} from './src/server/readoutAutocreate';
+import {
   declareCompetitorMutation,
   runCompetitorMutation,
   runCompetitorMutations,
@@ -3109,6 +3113,11 @@ async function startServer() {
     const permissions: Array<{ method: string; path: RegExp; roles: OfficialRole[] }> = [
       { method: 'POST', path: /^\/online-punch$/, roles: ['START', 'READOUT', 'FOREST'] },
       { method: 'POST', path: /^\/readout$/, roles: ['READOUT', 'FOREST', 'SPEAKER'] },
+      {
+        method: 'POST',
+        path: /^\/firestore\/competitions\/[^/]+\/readouts\/[^/]+\/auto-create$/,
+        roles: ['READOUT', 'FOREST', 'SPEAKER'],
+      },
       { method: 'POST', path: /^\/draw\/class$/, roles: ['START'] },
       { method: 'POST', path: /^\/competitors$/, roles: ['START', 'READOUT'] },
       { method: 'PUT', path: /^\/competitors\/[^/]+$/, roles: ['START', 'READOUT', 'FOREST'] },
@@ -4745,6 +4754,45 @@ async function startServer() {
       error: 'Legacy competitor mutation routes are disabled. Use the Firestore-authoritative application.',
     });
   };
+
+  app.post(
+    '/api/firestore/competitions/:competitionId/readouts/:receiptId/auto-create',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (
+        !sessionUser ||
+        (sessionUser.sessionKind !== 'ADMIN' &&
+          !['READOUT', 'FOREST', 'SPEAKER'].includes(sessionUser.officialRole))
+      ) {
+        res.status(403).json({ error: 'A readout official or club administrator is required.' });
+        return;
+      }
+      if (!seasonDb.eventor.autoCreateFromRunnerDbOnReadout) {
+        res.status(409).json({ error: 'READOUT auto-create is disabled.' });
+        return;
+      }
+
+      try {
+        const result = await createReadoutCompetitorFromRunnerDb(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid },
+          req.params.competitionId,
+          req.params.receiptId,
+          req.body
+        );
+        res.status(result.replayed ? 200 : 201).json(result);
+      } catch (error) {
+        if (error instanceof ReadoutAutoCreateError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Trusted readout auto-create failed:', error);
+        res.status(500).json({ error: 'The readout competitor could not be created.' });
+      }
+    }
+  );
 
   app.post(
     '/api/firestore/competitions/:competitionId/competitors/:competitorId/create',

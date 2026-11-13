@@ -737,8 +737,9 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: serverTimestamp(),
       }
     );
-    await assertSucceeds(readoutAutocreateBatch.commit());
-    await assertSucceeds(
+    // READOUT auto-create now goes through the trusted transaction endpoint.
+    await assertFails(readoutAutocreateBatch.commit());
+    await assertFails(
       readoutCtx.firestore().doc('competitions/evt_live').update({
         competitorCount: 11,
         finishedCount: 6,
