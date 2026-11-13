@@ -5,6 +5,7 @@ import {
   formatDurationMmSs,
   formatSecondsAsClock,
 } from '../services/sportidentProtocol';
+import { sortCompetitorsByResult } from '../utils/resultSorting';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 
@@ -329,54 +330,17 @@ export function SplitsAnalysisTable({
             ? legColumns
             : legColumns.filter((col) => radioControlCodes.has(col.code));
 
-          let displayRows = [
-            ...officialTimed,
-            ...inClass.filter((c) => !officialTimed.some((t) => t.id === c.id)),
-          ];
-          const timedRunnerOrder = new Map(
-            officialTimed.map((runner, index) => [runner.id, index])
+          const sortMode =
+            activeSortOrder === null
+              ? { kind: 'default' as const }
+              : activeSortOrder === -1
+                ? { kind: 'bom' as const }
+                : { kind: 'leg' as const, order: activeSortOrder };
+          let displayRows = sortCompetitorsByResult(
+            inClass,
+            officialTimed.map((runner) => runner.id),
+            sortMode
           );
-          const leadingMpControlCount = new Map(
-            inClass
-              .filter((runner) => runner.status === 'MP')
-              .map((runner) => {
-                let count = 0;
-                for (const split of [...(runner.validation?.splits ?? [])].sort(
-                  (a, b) => a.order - b.order
-                )) {
-                  if (split.controlCode === 999) break;
-                  if (split.status === 'BROKEN_CTRL') continue;
-                  if (split.status !== 'OK') break;
-                  count += 1;
-                }
-                return [runner.id, count] as const;
-              })
-          );
-          const resultGroup = (runner: Competitor) => {
-            if (timedRunnerOrder.has(runner.id)) return 0;
-            if (runner.status === 'MP') return 2;
-            if (runner.status === 'DNF') return 3;
-            if (runner.status === 'DNS') return 4;
-            return 1;
-          };
-          const compareResultPriority = (a: Competitor, b: Competitor) => {
-            const groupDiff = resultGroup(a) - resultGroup(b);
-            if (groupDiff !== 0) return groupDiff;
-            if (resultGroup(a) === 0) {
-              return (
-                (timedRunnerOrder.get(a.id) ?? 0) -
-                (timedRunnerOrder.get(b.id) ?? 0)
-              );
-            }
-            if (resultGroup(a) === 2) {
-              return (
-                (leadingMpControlCount.get(b.id) ?? 0) -
-                (leadingMpControlCount.get(a.id) ?? 0)
-              );
-            }
-            return 0;
-          };
-          displayRows = [...displayRows].sort(compareResultPriority);
 
           const controlResults = new Map<
             number,
@@ -464,30 +428,6 @@ export function SplitsAnalysisTable({
                 ])
               )
             );
-          }
-
-          if (activeSortOrder !== null) {
-            if (activeSortOrder === -1) {
-              displayRows = [...displayRows].sort((a, b) => {
-                const priorityDiff = compareResultPriority(a, b);
-                if (priorityDiff !== 0) return priorityDiff;
-                const ba = a.validation?.totalTimeLossSec ?? 999999;
-                const bb = b.validation?.totalTimeLossSec ?? 999999;
-                return ba - bb;
-              });
-            } else {
-              displayRows = [...displayRows].sort((a, b) => {
-                const priorityDiff = compareResultPriority(a, b);
-                if (priorityDiff !== 0) return priorityDiff;
-                const la =
-                  a.validation?.splits.find((s) => s.order === activeSortOrder)?.legSec ??
-                  999999;
-                const lb =
-                  b.validation?.splits.find((s) => s.order === activeSortOrder)?.legSec ??
-                  999999;
-                return la - lb;
-              });
-            }
           }
 
           return (

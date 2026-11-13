@@ -493,6 +493,32 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
     };
+    const incompleteImportedCompetitor: Record<string, unknown> = {
+      ...initialCompetitor,
+      competitorId: 'cmp_import_missing_fee',
+      siNumber: 8500199,
+    };
+    delete incompleteImportedCompetitor.feePaid;
+    const incompleteImportBatch = writeBatch(raceAdminCtx.firestore());
+    incompleteImportBatch.set(
+      doc(
+        raceAdminCtx.firestore(),
+        'competitions/evt_live/competitors/cmp_import_missing_fee'
+      ),
+      incompleteImportedCompetitor
+    );
+    incompleteImportBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500199'),
+      {
+        ...siCardAssignment,
+        competitorId: 'cmp_import_missing_fee',
+        competitorDocumentId: 'cmp_import_missing_fee',
+        siNumber: 8500199,
+        source: 'IMPORT',
+      }
+    );
+    await assertFails(incompleteImportBatch.commit());
+
     const initialCompetitorBatch = writeBatch(raceAdminCtx.firestore());
     initialCompetitorBatch.set(
       doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid'),

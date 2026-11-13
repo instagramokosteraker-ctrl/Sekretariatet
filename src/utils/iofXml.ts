@@ -722,6 +722,7 @@ export function parseRunnerDbCsvOrXml(rawText: string): {
   club: string;
   birthYear?: number | null;
   defaultClassName?: string | null;
+  eventorPersonId?: string | null;
 }[] {
   const trimmed = rawText.trim();
   if (!trimmed) return [];
@@ -738,6 +739,7 @@ export function parseRunnerDbCsvOrXml(rawText: string): {
     club: string;
     birthYear?: number | null;
     defaultClassName?: string | null;
+    eventorPersonId?: string | null;
   }[] = [];
 
   for (const line of lines) {

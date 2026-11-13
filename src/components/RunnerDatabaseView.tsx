@@ -28,6 +28,7 @@ interface RunnerDatabaseViewProps {
       club: string;
       birthYear?: number | null;
       defaultClassName?: string | null;
+      eventorPersonId?: string | null;
     }[],
     source: RunnerDbSource
   ) => Promise<{ importedCount: number; totalRunnerDb: number }>;

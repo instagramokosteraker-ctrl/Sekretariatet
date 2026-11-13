@@ -76,6 +76,21 @@ function textFrom(parent: ParentNode, names: string[]): string {
   return firstElement(parent, names)?.textContent?.trim() ?? '';
 }
 
+function directClassName(element: Element): string {
+  const directChildText = (names: string[]) =>
+    Array.from(element.children)
+      .find(
+        (child) =>
+          names.includes(localName(child)) && Boolean(child.textContent?.trim())
+      )
+      ?.textContent?.trim() ?? '';
+
+  return (
+    directChildText(['Name', 'ClassName']) ||
+    directChildText(['ClassShortName'])
+  );
+}
+
 function parseDocument(xml: string): Document {
   if (/<!DOCTYPE|<!ENTITY/i.test(xml)) {
     throw new Error('Eventor XML-filer får inte innehålla DTD- eller entitetsdeklarationer.');
@@ -156,7 +171,7 @@ function parseClasses(document: ParentNode | null): ParsedEventorClass[] {
   const classesById = new Map<string, ParsedEventorClass>();
   for (const element of classElements) {
     const id = textFrom(element, ['EventClassId', 'Id']);
-    const name = textFrom(element, ['Name', 'ClassShortName']);
+    const name = directClassName(element);
     if (!name) continue;
     const key = id || name;
     if (!classesById.has(key)) {
@@ -212,7 +227,7 @@ function parsePersonEntry(
     : textFrom(element, ['EventClassId']);
   const className = (
     (classId ? classNames.get(classId) : '') ||
-    (entryClass ? textFrom(entryClass, ['Name', 'ClassShortName']) : '') ||
+    (entryClass ? directClassName(entryClass) : '') ||
     'Öppen Motion'
   ).slice(0, 80);
 

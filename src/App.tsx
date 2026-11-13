@@ -2166,15 +2166,13 @@ export default function App() {
       source: 'EVENTOR_XML',
       updatedAt,
     }));
-    await saveRunnerDbEntriesToFirestore(runners);
+    const savedRunners = await saveRunnerDbEntriesToFirestore(runners);
     setRunnerDb((current) => {
-      const importedSiNumbers = new Set(runners.map((runner) => runner.siNumber));
-      return [
-        ...runners,
-        ...current.filter((runner) => !importedSiNumbers.has(runner.siNumber)),
-      ];
+      const byId = new Map(current.map((runner) => [runner.id, runner]));
+      savedRunners.forEach((runner) => byId.set(runner.id, runner));
+      return Array.from(byId.values());
     });
-    return runners.length;
+    return savedRunners.length;
   };
 
   const handleImportEventorXmlFallback = async (
@@ -3284,7 +3282,15 @@ export default function App() {
                           updatedAt,
                         })
                       );
-                      await saveRunnerDbEntriesToFirestore(runnerDbEntries);
+                      const syncedRunnerDbEntries =
+                        await saveRunnerDbEntriesToFirestore(runnerDbEntries);
+                      setRunnerDb((current) => {
+                        const byId = new Map(current.map((runner) => [runner.id, runner]));
+                        syncedRunnerDbEntries.forEach((runner) =>
+                          byId.set(runner.id, runner)
+                        );
+                        return Array.from(byId.values());
+                      });
                       setEventor((current) => ({
                         ...current,
                         apiKeyConfigured: true,
@@ -3294,7 +3300,7 @@ export default function App() {
                       }));
                       return {
                         ok: true,
-                        message: `Synkade ${runnerDbEntries.length} klubbmedlemmar med SI-brickor från ${organization.orgName}.`,
+                        message: `Synkade ${syncedRunnerDbEntries.length} klubbmedlemmar med SI-brickor från ${organization.orgName}.`,
                       };
                     } catch (error) {
                       return {
@@ -3976,7 +3982,8 @@ export default function App() {
                           birthYear: runner.birthYear ?? existing?.birthYear ?? null,
                           defaultClassName:
                             runner.defaultClassName ?? existing?.defaultClassName ?? null,
-                          eventorPersonId: existing?.eventorPersonId ?? null,
+                          eventorPersonId:
+                            runner.eventorPersonId ?? existing?.eventorPersonId ?? null,
                           eventorOrgId: existing?.eventorOrgId ?? null,
                           source,
                           updatedAt: new Date().toISOString(),

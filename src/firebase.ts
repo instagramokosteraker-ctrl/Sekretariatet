@@ -35,6 +35,7 @@ import {
   normalizeSeriesScoringSettings,
 } from './services/seriesStandings';
 import { getChangedSnapshotFields } from './utils/competitorSnapshotGuard';
+import { reconcileEventorRunnerDbEntries } from './utils/eventorRunnerSync';
 import firebaseConfig from '../firebase-applet-config.json';
 import type {
   CardPunch,
@@ -2017,6 +2018,7 @@ async function writeImportedCompetitorWithAssignment(params: {
           competitorId,
           competitionId,
           ownerUid: params.ownerUid,
+          feePaid: false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -3188,6 +3190,7 @@ export async function saveCompetitionImportToFirestore(params: {
 
   const operations: Array<{
     ref: DocumentReference;
+    path: string;
     existing: boolean;
     mutable: Record<string, unknown>;
     createData: Record<string, unknown>;
@@ -3212,7 +3215,13 @@ export async function saveCompetitionImportToFirestore(params: {
       throw new Error('Importerad data tillhör ett annat konto.');
     }
     const existingData = snap.exists() ? snap.data() : undefined;
-    operations.push({ ref, existing: snap.exists(), mutable, createData });
+    operations.push({
+      ref,
+      path: `competitions/${competitionId}/${collectionName}/${id}`,
+      existing: snap.exists(),
+      mutable,
+      createData,
+    });
     return { existing: snap.exists(), existingData };
   };
 
@@ -3350,10 +3359,17 @@ export async function saveCompetitionImportToFirestore(params: {
       updatedAtIso: runner.updatedAt,
     };
     if (snap.exists()) {
-      operations.push({ ref, existing: true, mutable, createData: {} });
+      operations.push({
+        ref,
+        path: `runnerDb/${id}`,
+        existing: true,
+        mutable,
+        createData: {},
+      });
     } else {
       operations.push({
         ref,
+        path: `runnerDb/${id}`,
         existing: false,
         mutable,
         createData: {
@@ -3379,19 +3395,36 @@ export async function saveCompetitionImportToFirestore(params: {
         batch.set(operation.ref, operation.createData);
       }
     }
-    await batch.commit();
+    try {
+      await batch.commit();
+    } catch (error) {
+      console.error('Firestore import batch commit failed:', {
+        paths: operations.slice(offset, offset + 400).map((operation) => operation.path),
+        error,
+      });
+      throw error;
+    }
   }
   for (const competitor of competitorWrites) {
-    await writeImportedCompetitorWithAssignment({
-      competitionId,
-      competitorId: competitor.competitorId,
-      ownerUid,
-      isSuperAdmin,
-      siNumber: competitor.siNumber,
-      cardSeries: competitor.cardSeries,
-      assignmentSource: 'IMPORT',
-      mutable: competitor.mutable,
-    });
+    try {
+      await writeImportedCompetitorWithAssignment({
+        competitionId,
+        competitorId: competitor.competitorId,
+        ownerUid,
+        isSuperAdmin,
+        siNumber: competitor.siNumber,
+        cardSeries: competitor.cardSeries,
+        assignmentSource: 'IMPORT',
+        mutable: competitor.mutable,
+      });
+    } catch (error) {
+      console.error('Firestore imported competitor transaction failed:', {
+        competitorPath: `competitions/${competitionId}/competitors/${competitor.competitorId}`,
+        assignmentPath: `competitions/${competitionId}/siCardAssignments/${competitor.siNumber}`,
+        error,
+      });
+      throw error;
+    }
   }
 
   if (params.replaceCoursesAndClasses) {
@@ -5260,7 +5293,7 @@ function runnerDbFirestoreFields(runner: RunnerDbEntry) {
 
 export async function saveRunnerDbEntriesToFirestore(
   runners: RunnerDbEntry[]
-): Promise<void> {
+): Promise<RunnerDbEntry[]> {
   const current = await ensureRunnerDbAdmin();
   const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
   const isBootstrapAdmin = BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(
@@ -5270,9 +5303,32 @@ export async function saveRunnerDbEntriesToFirestore(
     ? null
     : await getDoc(doc(db, 'admins', ownerUid));
   const isSuperAdmin = isBootstrapAdmin || adminSnap?.data()?.role === 'SUPER_ADMIN';
-  for (let offset = 0; offset < runners.length; offset += 400) {
+  const hasEventorEntries = runners.some(
+    (runner) => runner.source === 'EVENTOR_API' || runner.source === 'EVENTOR_XML'
+  );
+  let entriesToSave = runners;
+  if (hasEventorEntries) {
+    const snapshot = await getDocs(collection(db, 'runnerDb'));
+    const existingEntries = snapshot.docs.flatMap((runnerDoc) => {
+      const data = runnerDoc.data() as Record<string, unknown>;
+      const runner = parseRunnerDbDocument(runnerDoc.id, data);
+      if (!runner) return [];
+      const legacyPersonId =
+        typeof data.eventorId === 'string' ? data.eventorId.trim() : '';
+      return [
+        {
+          ...runner,
+          eventorPersonId: runner.eventorPersonId?.trim() || legacyPersonId || null,
+        },
+      ];
+    });
+    entriesToSave = reconcileEventorRunnerDbEntries(runners, existingEntries);
+  }
+
+  const savedEntries: RunnerDbEntry[] = [];
+  for (let offset = 0; offset < entriesToSave.length; offset += 400) {
     const batch = writeBatch(db);
-    for (const runner of runners.slice(offset, offset + 400)) {
+    for (const runner of entriesToSave.slice(offset, offset + 400)) {
       if (
         !Number.isInteger(runner.siNumber) ||
         runner.siNumber < 1 ||
@@ -5323,9 +5379,11 @@ export async function saveRunnerDbEntriesToFirestore(
         },
         { merge: true }
       );
+      savedEntries.push(runner);
     }
     await batch.commit();
   }
+  return savedEntries;
 }
 
 export async function saveLearnedRunnerDbEntryToFirestore(
