@@ -1,4 +1,3 @@
-import { auth } from '../firebase';
 import type { EventorLocalConfig } from './eventorLocalConfig';
 import { DEFAULT_EVENTOR_BASE_URL } from './eventorLocalConfig';
 
@@ -12,31 +11,28 @@ export class EventorNetworkError extends Error {
 }
 
 type ProxyAction = 'test' | 'import-event' | 'sync-club';
-type ProxyResource = 'event' | 'classes' | 'entries' | 'organization' | 'competitors';
-
 interface EventorProxyRequest {
   action: ProxyAction;
-  resource?: ProxyResource;
+  url: string;
   eventId?: string;
-  params?: { resource?: ProxyResource; orgId?: string };
 }
 
 function getProxyRequest(path: string, isClubSync: boolean): EventorProxyRequest {
   const cleanPath = path.replace(/^\/+/, '');
   if (cleanPath === 'organisation/apiKey') {
     return isClubSync
-      ? { action: 'sync-club', resource: 'organization' }
-      : { action: 'test' };
+      ? { action: 'sync-club', url: cleanPath }
+      : { action: 'test', url: cleanPath };
   }
   if (cleanPath.startsWith('competitors?')) {
-    return { action: 'sync-club', resource: 'competitors' };
+    return { action: 'sync-club', url: cleanPath };
   }
 
   const eventMatch = cleanPath.match(/^event\/(\d{1,32})$/);
   if (eventMatch) {
     return {
       action: 'import-event',
-      resource: 'event',
+      url: cleanPath,
       eventId: eventMatch[1],
     };
   }
@@ -44,7 +40,7 @@ function getProxyRequest(path: string, isClubSync: boolean): EventorProxyRequest
   if (classesMatch) {
     return {
       action: 'import-event',
-      resource: 'classes',
+      url: cleanPath,
       eventId: classesMatch[1],
     };
   }
@@ -52,7 +48,7 @@ function getProxyRequest(path: string, isClubSync: boolean): EventorProxyRequest
   if (entriesMatch) {
     return {
       action: 'import-event',
-      resource: 'entries',
+      url: cleanPath,
       eventId: entriesMatch[1],
     };
   }
@@ -72,6 +68,7 @@ function validateBaseUrl(baseUrl: string): string {
     url.port ||
     url.username ||
     url.password ||
+    url.pathname.replace(/\/+$/, '') !== '/api' ||
     url.search ||
     url.hash
   ) {
@@ -82,8 +79,7 @@ function validateBaseUrl(baseUrl: string): string {
 
 async function postToEventorProxy(
   request: EventorProxyRequest,
-  config: EventorLocalConfig,
-  idToken: string | null
+  config: EventorLocalConfig
 ): Promise<string> {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
@@ -91,60 +87,40 @@ async function postToEventorProxy(
     PROXY_REQUEST_TIMEOUT_MS
   );
   try {
+    const apiBaseUrl = validateBaseUrl(config.baseUrl);
     const response = await fetch('/api/eventor', {
       method: 'POST',
       headers: {
-        ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
         'Content-Type': 'application/json',
       },
+      // The server restricts this URL to Eventor's API origin and /api path.
       body: JSON.stringify({
         apiKey: config.apiKey.trim(),
         action: request.action,
         ...(request.eventId ? { eventId: request.eventId } : {}),
-        params: {
-          resource: request.resource,
-          orgId: config.orgId.trim(),
-          baseUrl: validateBaseUrl(config.baseUrl),
-        },
+        url: new URL(request.url, `${apiBaseUrl}/`).toString(),
       }),
       signal: controller.signal,
     });
 
-    if (request.action === 'test') {
-      const result = (await response.json().catch(() => null)) as
-        | { success?: unknown; error?: unknown; xml?: unknown }
-        | null;
-      if (!response.ok || result?.success !== true) {
-        const message =
-          typeof result?.error === 'string'
-            ? result.error
-            : `Eventor-proxyn svarade med HTTP ${response.status}.`;
-        if (response.status === 502 || response.status === 504) {
-          throw new EventorNetworkError(message);
-        }
-        throw new Error(message);
-      }
-      if (typeof result.xml !== 'string') {
-        throw new Error('Eventor-proxyn returnerade inte organisations-XML.');
-      }
-      return result.xml;
+    const result = (await response.json().catch(() => null)) as
+      | { success?: unknown; error?: unknown; xml?: unknown }
+      | null;
+    if (!response.ok || result?.success !== true) {
+      const message =
+        typeof result?.error === 'string'
+          ? result.error
+          : `Eventor-proxyn returnerade ett ogiltigt svar (HTTP ${response.status}).`;
+      throw new EventorNetworkError(
+        `${message} Ladda upp Eventor IOF XML-fil.`
+      );
     }
-
-    const xml = await response.text();
-    if (!response.ok) {
-      let message = `Eventor-proxyn svarade med HTTP ${response.status}.`;
-      try {
-        const result = JSON.parse(xml) as { error?: unknown };
-        if (typeof result.error === 'string') message = result.error;
-      } catch {
-        // Keep the HTTP diagnostic when the proxy did not return JSON.
-      }
-      if (response.status === 502 || response.status === 504) {
-        throw new EventorNetworkError(message);
-      }
-      throw new Error(message);
+    if (typeof result.xml !== 'string') {
+      throw new EventorNetworkError(
+        'Eventor-proxyn returnerade inte XML. Ladda upp Eventor IOF XML-fil.'
+      );
     }
-    return xml;
+    return result.xml;
   } catch (error) {
     if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
       throw new EventorNetworkError(
@@ -174,15 +150,7 @@ export async function fetchEventorXml(
 
   const isClubSync = paths.some((path) => path.replace(/^\/+/, '').startsWith('competitors?'));
   const requests = paths.map((path) => getProxyRequest(path, isClubSync));
-  const currentUser = auth.currentUser;
-  const requiresAuthentication = requests.some(
-    (request) => request.action !== 'test'
-  );
-  if (!currentUser && requiresAuthentication) {
-    throw new Error('Du behöver vara inloggad som administratör.');
-  }
-  const idToken = currentUser ? await currentUser.getIdToken() : null;
   return Promise.all(
-    requests.map((request) => postToEventorProxy(request, config, idToken))
+    requests.map((request) => postToEventorProxy(request, config))
   );
 }
