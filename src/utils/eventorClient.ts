@@ -17,6 +17,11 @@ interface EventorProxyRequest {
   eventId?: string;
 }
 
+function sanitizeEventId(value: string | null | undefined): string | null {
+  const eventId = value?.trim() ?? '';
+  return /^\d{1,32}$/.test(eventId) ? eventId : null;
+}
+
 function getProxyRequest(path: string, isClubSync: boolean): EventorProxyRequest {
   const cleanPath = path.replace(/^\/+/, '');
   if (cleanPath === 'organisation/apiKey') {
@@ -28,29 +33,36 @@ function getProxyRequest(path: string, isClubSync: boolean): EventorProxyRequest
     return { action: 'sync-club', url: cleanPath };
   }
 
-  const eventMatch = cleanPath.match(/^event\/(\d{1,32})$/);
+  const eventMatch = cleanPath.match(/^event\/([^/?]+)$/);
   if (eventMatch) {
+    const eventId = sanitizeEventId(eventMatch[1]);
+    if (!eventId) throw new Error('Ange ett giltigt numeriskt Eventor-tävlings-ID.');
     return {
       action: 'import-event',
-      url: cleanPath,
-      eventId: eventMatch[1],
+      url: `event/${encodeURIComponent(eventId)}`,
+      eventId,
     };
   }
-  const classesMatch = cleanPath.match(/^eventclasses\?eventId=(\d{1,32})$/);
-  if (classesMatch) {
+  const [resource, query = ''] = cleanPath.split('?', 2);
+  const eventId = sanitizeEventId(new URLSearchParams(query).get('eventId'));
+  if (resource === 'eventclasses' && eventId) {
     return {
       action: 'import-event',
-      url: cleanPath,
-      eventId: classesMatch[1],
+      url: `eventclasses?eventId=${encodeURIComponent(eventId)}`,
+      eventId,
     };
   }
-  const entriesMatch = cleanPath.match(/^entries\?eventId=(\d{1,32})$/);
-  if (entriesMatch) {
+  if (resource === 'entries' && eventId) {
     return {
       action: 'import-event',
-      url: cleanPath,
-      eventId: entriesMatch[1],
+      url: `entries?eventId=${encodeURIComponent(
+        eventId
+      )}&includeDisqualified=true`,
+      eventId,
     };
+  }
+  if (resource === 'eventclasses' || resource === 'entries') {
+    throw new Error('Ange ett giltigt numeriskt Eventor-tävlings-ID.');
   }
   throw new Error('Ogiltig Eventor-förfrågan.');
 }
@@ -82,12 +94,15 @@ async function postToEventorProxy(
   config: EventorLocalConfig
 ): Promise<string> {
   const controller = new AbortController();
+  let targetUrl = '';
   const timeoutId = window.setTimeout(
     () => controller.abort(),
     PROXY_REQUEST_TIMEOUT_MS
   );
   try {
     const apiBaseUrl = validateBaseUrl(config.baseUrl);
+    targetUrl = new URL(request.url, `${apiBaseUrl}/`).toString();
+    console.log('Fetching Eventor URL via proxy:', targetUrl);
     const response = await fetch('/api/eventor', {
       method: 'POST',
       headers: {
@@ -98,7 +113,7 @@ async function postToEventorProxy(
         apiKey: config.apiKey.trim(),
         action: request.action,
         ...(request.eventId ? { eventId: request.eventId } : {}),
-        url: new URL(request.url, `${apiBaseUrl}/`).toString(),
+        url: targetUrl,
       }),
       signal: controller.signal,
     });
@@ -112,25 +127,25 @@ async function postToEventorProxy(
           ? result.error
           : `Eventor-proxyn returnerade ett ogiltigt svar (HTTP ${response.status}).`;
       throw new EventorNetworkError(
-        `${message} Ladda upp Eventor IOF XML-fil.`
+        `${message} Begärd Eventor-URL: ${targetUrl}. Ladda upp Eventor IOF XML-fil.`
       );
     }
     if (typeof result.xml !== 'string') {
       throw new EventorNetworkError(
-        'Eventor-proxyn returnerade inte XML. Ladda upp Eventor IOF XML-fil.'
+        `Eventor-proxyn returnerade inte XML för ${targetUrl}. Ladda upp Eventor IOF XML-fil.`
       );
     }
     return result.xml;
   } catch (error) {
     if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
       throw new EventorNetworkError(
-        'Eventor-proxyn svarade inte inom 18 sekunder. Ladda upp Eventor IOF XML-fil.'
+        `Eventor-proxyn svarade inte inom 18 sekunder. Begärd Eventor-URL: ${targetUrl}. Ladda upp Eventor IOF XML-fil.`
       );
     }
     if (error instanceof EventorNetworkError) throw error;
     if (error instanceof TypeError) {
       throw new EventorNetworkError(
-        'Kunde inte nå Eventor-proxyn (nätverk). Ladda upp Eventor IOF XML-fil.'
+        `Kunde inte nå Eventor-proxyn (nätverk) för ${targetUrl}. Ladda upp Eventor IOF XML-fil.`
       );
     }
     throw error;
