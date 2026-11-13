@@ -1505,6 +1505,34 @@ service cloud.firestore {
       // in the same commit; unrelated readout/status fields keep their existing
       // role checks and do not run assignment uniqueness queries.
       match /competitors/{competitorId} {
+        function isAllowedReadoutUpdate() {
+          let changed = incoming().diff(existing()).affectedKeys();
+          return (
+            changed.hasOnly([
+              'status',
+              'checkTimeSec',
+              'startTimeSec',
+              'finishTimeSec',
+              'runningTimeSec',
+              'readoutAtIso',
+              'punchCodes',
+              'punchTimes',
+              'updatedAt'
+            ]) &&
+            changed.hasAny(['readoutAtIso']) &&
+            canCreateReadoutCompetitor()
+          ) || (
+            changed.hasOnly([
+              'rentalReturned',
+              'billingFieldsUpdatedAt',
+              'updatedAt'
+            ]) &&
+            changed.hasAll(['rentalReturned', 'billingFieldsUpdatedAt']) &&
+            incoming().billingFieldsUpdatedAt == request.time &&
+            hasOfficialRole('READOUT')
+          );
+        }
+
         allow get: if isValidId(competitionId) &&
           isValidId(competitorId) &&
           parentCompetitionExists(competitionId);
@@ -1546,7 +1574,7 @@ service cloud.firestore {
           (
             (existing().ownerUid == request.auth.uid || isAdmin()) ||
             isSuperAdmin() ||
-            canCreateReadoutCompetitor()
+            isAllowedReadoutUpdate()
           )
         );
 

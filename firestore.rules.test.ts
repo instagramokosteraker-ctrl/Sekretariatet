@@ -800,8 +800,45 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .firestore()
         .doc('competitions/evt_live/competitors/cmp_valid')
         .update({
+          billingFieldsUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({
           rentalReturned: false,
           status: 'OK',
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ status: 'DNS', updatedAt: serverTimestamp() })
+    );
+    await assertFails(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({ siNumber: 8500199, updatedAt: serverTimestamp() })
+    );
+    await assertSucceeds(
+      readoutCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .update({
+          status: 'OK',
+          checkTimeSec: 36000,
+          startTimeSec: 36100,
+          finishTimeSec: 37500,
+          runningTimeSec: 1400,
+          readoutAtIso: new Date().toISOString(),
+          punchCodes: [31],
+          punchTimes: [36500],
           updatedAt: serverTimestamp(),
         })
     );
