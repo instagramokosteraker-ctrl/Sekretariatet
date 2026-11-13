@@ -79,6 +79,7 @@ interface EntriesRegistrationViewProps {
         finishTimeSec?: number | null;
         punches?: CardPunch[];
       };
+      runnerProfileId?: string | null;
     }
   ) => Promise<string | null>;
   onUpdateCompetitor: (id: string, patch: Partial<Competitor>) => Promise<void>;
@@ -109,6 +110,7 @@ export function EntriesRegistrationView({
 }: EntriesRegistrationViewProps) {
   const [siInput, setSiInput] = useState('');
   const [fullName, setFullName] = useState('');
+  const [selectedRunner, setSelectedRunner] = useState<RunnerDbEntry | null>(null);
   const [nameSuggestionOpen, setNameSuggestionOpen] = useState(false);
   const [activeNameSuggestionIndex, setActiveNameSuggestionIndex] = useState(0);
   const [club, setClub] = useState('');
@@ -195,9 +197,13 @@ export function EntriesRegistrationView({
       }
       return;
     }
+    if (selectedRunner && selectedRunner.id !== matchedRunnerFromDb.id) return;
     if (lastAutoFilledSiRef.current === matchedRunnerFromDb.siNumber) return;
 
     lastAutoFilledSiRef.current = matchedRunnerFromDb.siNumber;
+    setSelectedRunner((current) =>
+      current && current.id !== matchedRunnerFromDb.id ? current : matchedRunnerFromDb
+    );
     setFullName(matchedRunnerFromDb.fullName);
     setClub(matchedRunnerFromDb.club);
     setIsRentalCard(false);
@@ -211,7 +217,7 @@ export function EntriesRegistrationView({
         setClassId(targetCls.id);
       }
     }
-  }, [matchedRunnerFromDb, numericSiInput, classes]);
+  }, [matchedRunnerFromDb, numericSiInput, classes, selectedRunner]);
 
   // Populate SI-number when captured on USB station in Registration mode
   const lastHandledCaptureAtRef = useRef<number>(0);
@@ -224,6 +230,9 @@ export function EntriesRegistrationView({
     setSiInput(String(capturedCard.siNumber));
     const found = runnerDb.find((r) => r.siNumber === capturedCard.siNumber);
     if (found) {
+      setSelectedRunner((current) =>
+        current && current.id !== found.id ? current : found
+      );
       setSuccessNotice(
         `SI-bricka ${formatSiNumber(capturedCard.siNumber)} avläst — hämtade ${found.fullName} (${found.club}) automatiskt från Löpardatabasen!`
       );
@@ -274,6 +283,7 @@ export function EntriesRegistrationView({
       classId: classId || classes[0]?.id,
       isRentalCard,
       isBorrowedCard,
+      runnerProfileId: selectedRunner?.id ?? null,
       feePaid: feeTrackingEnabled ? feePaid : false,
       allocatedStartSec: allocSec,
       pendingReadout: isLinkingUnknown ? pendingUnknownReadout : undefined,
@@ -294,6 +304,7 @@ export function EntriesRegistrationView({
         }`
       );
       lastAutoFilledSiRef.current = null;
+      setSelectedRunner(null);
       setSiInput('');
       setFullName('');
       setClub('');
@@ -317,6 +328,7 @@ export function EntriesRegistrationView({
   }, [competitors, search]);
 
   const selectNameSuggestion = (runner: RunnerDbEntry) => {
+    setSelectedRunner(runner);
     setFullName(runner.fullName);
     setClub(runner.club);
     setNameSuggestionOpen(false);
@@ -505,8 +517,19 @@ export function EntriesRegistrationView({
               inputMode="numeric"
               value={siInput}
               onChange={(e) => {
+                const nextValue = e.target.value;
                 lastAutoFilledSiRef.current = null;
-                setSiInput(e.target.value);
+                setSiInput(nextValue);
+                const nextSiNumber = Number(nextValue.replace(/\D/g, ''));
+                const matchedRunner = runnerDb.find(
+                  (runner) => runner.siNumber === nextSiNumber
+                );
+                if (
+                  matchedRunner &&
+                  (!selectedRunner || selectedRunner.id === matchedRunner.id)
+                ) {
+                  setSelectedRunner(matchedRunner);
+                }
               }}
               placeholder="t.ex. 8540219"
               className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
@@ -537,6 +560,9 @@ export function EntriesRegistrationView({
               onBlur={() => setNameSuggestionOpen(false)}
               onKeyDown={handleNameInputKeyDown}
               onChange={(e) => {
+                if (e.target.value !== selectedRunner?.fullName) {
+                  setSelectedRunner(null);
+                }
                 setFullName(e.target.value);
                 setNameSuggestionOpen(true);
                 setActiveNameSuggestionIndex(0);

@@ -123,6 +123,148 @@ emulatorDescribe('createCompetitorWithAssignment', () => {
     }
   });
 
+  it('moves a selected runner profile to the new SI number when it is not borrowed', async () => {
+    const suffix = randomUUID().replace(/-/g, '');
+    const competitionId = `evt_${suffix}`;
+    const competitorId = `cmp_${suffix}`;
+    const ownerUid = `usr_${suffix}`;
+    const previousSiNumber = createInput.siNumber + 1;
+    const competitionRef = firestore.collection('competitions').doc(competitionId);
+    const adminRef = firestore.collection('admins').doc(ownerUid);
+    const previousRunnerRef = firestore
+      .collection('runnerDb')
+      .doc(String(previousSiNumber));
+    const nextRunnerRef = firestore
+      .collection('runnerDb')
+      .doc(String(createInput.siNumber));
+
+    await adminRef.set({ uid: ownerUid, role: 'RACE_ADMIN' });
+    await competitionRef.set({
+      competitionId,
+      ownerUid,
+      status: 'LIVE',
+      competitorCount: 0,
+      finishedCount: 0,
+    });
+    await previousRunnerRef.set({
+      runnerId: String(previousSiNumber),
+      siNumber: previousSiNumber,
+      fullName: createInput.fullName,
+      club: createInput.club,
+      cardSeries: createInput.cardSeries,
+      birthYear: 2000,
+      defaultClassName: 'Open',
+      eventorPersonId: '',
+      eventorOrgId: '',
+      source: 'EVENTOR_API',
+      ownerUid,
+    });
+
+    try {
+      const result = await createCompetitorWithAssignment(
+        firestore,
+        { uid: ownerUid },
+        competitionId,
+        competitorId,
+        createInput,
+        {
+          fullName: createInput.fullName,
+          club: createInput.club,
+          cardSeries: createInput.cardSeries,
+          defaultClassName: 'Open',
+        },
+        String(previousSiNumber)
+      );
+
+      expect((await previousRunnerRef.get()).exists).toBe(false);
+      expect((await nextRunnerRef.get()).data()).toMatchObject({
+        runnerId: String(createInput.siNumber),
+        siNumber: createInput.siNumber,
+        fullName: createInput.fullName,
+        birthYear: 2000,
+        source: 'EVENTOR_API',
+      });
+      expect(result.runnerDbEntry).toMatchObject({
+        id: String(createInput.siNumber),
+        siNumber: createInput.siNumber,
+        fullName: createInput.fullName,
+      });
+      expect(result.previousRunnerSiNumber).toBe(previousSiNumber);
+    } finally {
+      await firestore.recursiveDelete(competitionRef);
+      await previousRunnerRef.delete();
+      await nextRunnerRef.delete();
+      await adminRef.delete();
+    }
+  });
+
+  it('keeps the selected runner profile unchanged when the card is borrowed', async () => {
+    const suffix = randomUUID().replace(/-/g, '');
+    const competitionId = `evt_${suffix}`;
+    const competitorId = `cmp_${suffix}`;
+    const ownerUid = `usr_${suffix}`;
+    const previousSiNumber = createInput.siNumber + 1;
+    const competitionRef = firestore.collection('competitions').doc(competitionId);
+    const adminRef = firestore.collection('admins').doc(ownerUid);
+    const previousRunnerRef = firestore
+      .collection('runnerDb')
+      .doc(String(previousSiNumber));
+    const nextRunnerRef = firestore
+      .collection('runnerDb')
+      .doc(String(createInput.siNumber));
+
+    await adminRef.set({ uid: ownerUid, role: 'RACE_ADMIN' });
+    await competitionRef.set({
+      competitionId,
+      ownerUid,
+      status: 'LIVE',
+      competitorCount: 0,
+      finishedCount: 0,
+    });
+    await previousRunnerRef.set({
+      runnerId: String(previousSiNumber),
+      siNumber: previousSiNumber,
+      fullName: createInput.fullName,
+      club: createInput.club,
+      cardSeries: createInput.cardSeries,
+      defaultClassName: 'Open',
+      source: 'EVENTOR_API',
+      ownerUid,
+    });
+
+    try {
+      const result = await createCompetitorWithAssignment(
+        firestore,
+        { uid: ownerUid },
+        competitionId,
+        competitorId,
+        createInput,
+        {
+          fullName: createInput.fullName,
+          club: createInput.club,
+          cardSeries: createInput.cardSeries,
+          defaultClassName: 'Open',
+        },
+        String(previousSiNumber),
+        true
+      );
+
+      expect((await previousRunnerRef.get()).data()).toMatchObject({
+        runnerId: String(previousSiNumber),
+        siNumber: previousSiNumber,
+        fullName: createInput.fullName,
+      });
+      expect((await nextRunnerRef.get()).exists).toBe(false);
+      expect(result.runnerDbEntry).toBeNull();
+      expect(result.previousRunnerSiNumber).toBeNull();
+    } finally {
+      await firestore.recursiveDelete(competitionRef);
+      await previousRunnerRef.delete();
+      await nextRunnerRef.delete();
+      await adminRef.delete();
+    }
+  });
+
   it('rejects assignments with mismatched owner, competitor, document, or SI identity', async () => {
     const cases = [
       {

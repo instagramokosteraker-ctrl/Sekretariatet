@@ -60,19 +60,16 @@ interface CompetitionSettingsViewProps {
       organizer: string | null;
       date: string | null;
     };
-    importBatch?: {
-      courses: ParsedIofCourse[];
-      classes: ParsedIofClassAssignment[];
-      entries: { fullName: string; club: string; className: string; siNumber: number }[];
-      runnerDbEntries: {
-        siNumber: number;
-        fullName: string;
-        club: string;
-        birthYear?: number | null;
-        defaultClassName?: string | null;
-        eventorPersonId?: string | null;
-      }[];
-    };
+    parsed?: ParsedEventorXml;
+  }>;
+  onCreateEventorCompetition: (
+    parsed: ParsedEventorXml,
+    source: 'EVENTOR_API' | 'EVENTOR_XML',
+    fallbackName: string
+  ) => Promise<{
+    name: string;
+    addedClasses: number;
+    addedEntries: number;
   }>;
   onImportIofBatch: (batch: {
     courses: ParsedIofCourse[];
@@ -106,6 +103,7 @@ export function CompetitionSettingsView({
   onUpdateEventorSettings,
   onSyncEventorClub,
   onImportEventorEvent,
+  onCreateEventorCompetition,
   onImportIofBatch,
   onImportEventorRunnerDb,
 }: CompetitionSettingsViewProps) {
@@ -213,19 +211,15 @@ export function CompetitionSettingsView({
         setEventorFileFallbackMode(res.fallbackAvailable ? 'event' : null);
         return;
       }
-      if (res.event && res.importBatch) {
-        const importResult = await onImportIofBatch(res.importBatch, {
-          firestoreOnly: true,
-        });
-        const metadataPatch: Partial<CompetitionMeta> = { name: res.event.name };
-        if (res.event.organizer) metadataPatch.organizer = res.event.organizer;
-        if (res.event.date && /^\d{4}-\d{2}-\d{2}$/.test(res.event.date)) {
-          metadataPatch.date = res.event.date;
-        }
-        await onUpdateCompetition(metadataPatch, { firestoreOnly: true });
+      if (res.parsed) {
+        const importResult = await onCreateEventorCompetition(
+          res.parsed,
+          'EVENTOR_API',
+          res.event?.name || eventorEventId.trim()
+        );
         setEventorFeedback({
           ok: true,
-          msg: `Hämtade "${res.event.name}" från Eventor: +${importResult.addedClasses} klasser och +${importResult.addedEntries} anmälda deltagare.`,
+          msg: `Skapade tävlingen "${importResult.name}" från Eventor: +${importResult.addedClasses} klasser och +${importResult.addedEntries} anmälda deltagare.`,
         });
         return;
       }
@@ -268,41 +262,14 @@ export function CompetitionSettingsView({
         if (parsed.entries.length === 0) {
           throw new Error('XML-filen innehåller ingen Eventor-anmälningslista.');
         }
-        const importResult = await onImportIofBatch(
-          {
-            courses: [],
-            classes: parsed.classes.map((eventClass) => ({
-              name: eventClass.name,
-              classFormat: 'STANDARD',
-            })),
-            entries: parsed.entries.map((entry) => ({
-              fullName: entry.fullName,
-              club: entry.club,
-              className: entry.className,
-              siNumber: entry.siNumber,
-            })),
-            runnerDbEntries: parsed.runnerDbEntries.map((runner) => ({
-              siNumber: runner.siNumber,
-              fullName: runner.fullName,
-              club: runner.club,
-              birthYear: runner.birthYear,
-              defaultClassName: runner.defaultClassName,
-              eventorPersonId: runner.eventorPersonId,
-            })),
-          },
-          { firestoreOnly: true }
+        const importResult = await onCreateEventorCompetition(
+          parsed,
+          'EVENTOR_XML',
+          file.name
         );
-        if (parsed.event?.name) {
-          const metadataPatch: Partial<CompetitionMeta> = { name: parsed.event.name };
-          if (parsed.event.organizer) metadataPatch.organizer = parsed.event.organizer;
-          if (parsed.event.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.event.date)) {
-            metadataPatch.date = parsed.event.date;
-          }
-          await onUpdateCompetition(metadataPatch, { firestoreOnly: true });
-        }
         setEventorFeedback({
           ok: true,
-          msg: `Importerade "${parsed.event?.name || file.name}" till Firestore: +${importResult.addedClasses} klasser och +${importResult.addedEntries} deltagare.`,
+          msg: `Skapade tävlingen "${importResult.name}" från XML-filen: +${importResult.addedClasses} klasser och +${importResult.addedEntries} deltagare.`,
         });
       }
       setEventorFileFallbackMode(null);
@@ -332,41 +299,14 @@ export function CompetitionSettingsView({
       return;
     }
 
-    const result = await onImportIofBatch(
-      {
-        courses: [],
-        classes: parsed.classes.map((eventClass) => ({
-          name: eventClass.name,
-          classFormat: 'STANDARD',
-        })),
-        entries: parsed.entries.map((entry) => ({
-          fullName: entry.fullName,
-          club: entry.club,
-          className: entry.className,
-          siNumber: entry.siNumber,
-        })),
-        runnerDbEntries: parsed.runnerDbEntries.map((runner) => ({
-          siNumber: runner.siNumber,
-          fullName: runner.fullName,
-          club: runner.club,
-          birthYear: runner.birthYear,
-          defaultClassName: runner.defaultClassName,
-          eventorPersonId: runner.eventorPersonId,
-        })),
-      },
-      { firestoreOnly: true }
+    const result = await onCreateEventorCompetition(
+      parsed,
+      'EVENTOR_XML',
+      sourceName
     );
-    if (parsed.event?.name) {
-      const metadataPatch: Partial<CompetitionMeta> = { name: parsed.event.name };
-      if (parsed.event.organizer) metadataPatch.organizer = parsed.event.organizer;
-      if (parsed.event.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.event.date)) {
-        metadataPatch.date = parsed.event.date;
-      }
-      await onUpdateCompetition(metadataPatch, { firestoreOnly: true });
-    }
     setXmlFeedback({
       ok: true,
-      msg: `Importerade "${parsed.event?.name || sourceName}" till Firestore: +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`,
+      msg: `Skapade tävlingen "${result.name}" från "${sourceName}": +${result.addedClasses} klasser och +${result.addedEntries} deltagare.`,
     });
   };
 
@@ -413,7 +353,40 @@ export function CompetitionSettingsView({
     try {
       const doc = parseIofXmlDocument(sampleXml);
       if (doc.type !== 'CourseData') {
-        await importParsedEventorXml(parseEventorXml(sampleXml), label);
+        const parsed = parseEventorXml(sampleXml);
+        if (parsed.rootTag === 'CompetitorList') {
+          const importedCount = await onImportEventorRunnerDb(parsed.runnerDbEntries);
+          setXmlFeedback({
+            ok: true,
+            msg: `Laddade ${label}: ${importedCount} löpare till Löpardatabasen.`,
+          });
+          return;
+        }
+        const res = await onImportIofBatch({
+          courses: [],
+          classes: parsed.classes.map((eventClass) => ({
+            name: eventClass.name,
+            classFormat: 'STANDARD',
+          })),
+          entries: parsed.entries.map((entry) => ({
+            fullName: entry.fullName,
+            club: entry.club,
+            className: entry.className,
+            siNumber: entry.siNumber,
+          })),
+          runnerDbEntries: parsed.runnerDbEntries.map((runner) => ({
+            siNumber: runner.siNumber,
+            fullName: runner.fullName,
+            club: runner.club,
+            birthYear: runner.birthYear,
+            defaultClassName: runner.defaultClassName,
+            eventorPersonId: runner.eventorPersonId,
+          })),
+        });
+        setXmlFeedback({
+          ok: true,
+          msg: `Laddade ${label}: +${res.addedClasses} klasser, +${res.addedEntries} anmälda (${res.syncedRunnerDb ?? 0} i löpardatabasen).`,
+        });
         return;
       }
       const effectiveBatch = buildEffectiveCourseImportBatch(doc, {

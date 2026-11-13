@@ -6258,6 +6258,7 @@ export async function submitReadoutToFirestore(
 export async function saveDirectCompetitionEntryToFirestore(params: {
   competitionId: string;
   payload: Partial<Competitor> & {
+    runnerProfileId?: string | null;
     pendingReadout?: {
       checkTimeSec?: number | null;
       startTimeSec?: number | null;
@@ -6269,7 +6270,11 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   classes: CompClass[];
   courses: Course[];
   emergency: EmergencySettings;
-}): Promise<{ competitor: Competitor; runnerDbEntry: RunnerDbEntry | null }> {
+}): Promise<{
+  competitor: Competitor;
+  runnerDbEntry: RunnerDbEntry | null;
+  previousRunnerSiNumber: number | null;
+}> {
   const current = await ensureValidFirestoreUser();
   if (
     !current ||
@@ -6421,6 +6426,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     punchTimes: rawPunches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
   };
   let runnerDbEntry: RunnerDbEntry | null = null;
+  let previousRunnerSiNumber: number | null = null;
   const runnerCandidate =
     !competitor.isRentalCard && !competitor.isBorrowedCard
       ? {
@@ -6430,11 +6436,26 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
           defaultClassName: targetClass?.name || '',
         }
       : null;
+  const runnerProfileId =
+    runnerCandidate && params.payload.runnerProfileId
+        ? String(Number(params.payload.runnerProfileId))
+        : null;
+  if (
+    runnerProfileId &&
+    (!/^\d{1,8}$/.test(runnerProfileId) ||
+        Number(runnerProfileId) < 1 ||
+        Number(runnerProfileId) > 99999999)
+  ) {
+    throw new Error('Vald löparprofil har ett ogiltigt SI-bricknummer.');
+  }
   const currentUser = auth.currentUser;
   if (!currentUser) {
     throw new Error('Direktanmäla kräver ett inloggat administratörskonto.');
   }
-  const writeDirectlyToFirestore = async (): Promise<RunnerDbEntry | null> => {
+  const writeDirectlyToFirestore = async (): Promise<{
+    runnerDbEntry: RunnerDbEntry | null;
+    previousRunnerSiNumber: number | null;
+  }> => {
     const actorUid = currentUser.uid;
     const actorAdminRef = doc(db, 'admins', ownerUid);
     const competitorRef = doc(
@@ -6452,6 +6473,9 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       String(siNumber)
     );
     const runnerRef = doc(db, 'runnerDb', String(siNumber));
+    const runnerProfileRef = runnerProfileId
+      ? doc(db, 'runnerDb', runnerProfileId)
+      : runnerRef;
 
     return runTransaction(db, async (transaction) => {
       const [
@@ -6460,12 +6484,14 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         existingAssignment,
         actorAdmin,
         existingRunner,
+        selectedRunner,
       ] = await Promise.all([
         transaction.get(competitionRef),
         transaction.get(competitorRef),
         transaction.get(assignmentRef),
         isBootstrapAdmin ? Promise.resolve(null) : transaction.get(actorAdminRef),
         runnerCandidate ? transaction.get(runnerRef) : Promise.resolve(null),
+        runnerCandidate ? transaction.get(runnerProfileRef) : Promise.resolve(null),
       ]);
 
       if (!transactionCompetition.exists()) {
@@ -6506,13 +6532,26 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         existingAssignmentData?.state === 'ACTIVE' &&
         existingAssignmentData?.ownerUid === actorUid
       ) {
-        return null;
+        return {
+          runnerDbEntry: null,
+          previousRunnerSiNumber: null,
+        };
       }
       if (existingCompetitor.exists()) {
         throw new Error('Deltagarens dokument-ID används redan.');
       }
       if (existingAssignment.exists()) {
         throw new Error(`SI-bricka ${siNumber} är redan tilldelad.`);
+      }
+      if (runnerProfileId && !selectedRunner?.exists()) {
+        throw new Error('Den valda löparprofilen hittades inte i Löpardatabasen.');
+      }
+      if (
+        runnerProfileId &&
+        runnerProfileId !== String(siNumber) &&
+        existingRunner?.exists()
+      ) {
+        throw new Error(`SI-bricka ${siNumber} tillhör redan en annan löparprofil.`);
       }
 
       const currentCompetitorCount = Number(
@@ -6567,11 +6606,15 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       });
 
       let savedRunnerDbEntry: RunnerDbEntry | null = null;
-      const runnerData = existingRunner?.data();
+      const runnerData = selectedRunner?.data();
       const sameRunner =
         typeof runnerData?.fullName === 'string' &&
         runnerData.fullName.trim().toLowerCase() === fullName.toLowerCase();
-      if (existingRunner && runnerCandidate && (!existingRunner.exists() || sameRunner)) {
+      if (
+        existingRunner &&
+        runnerCandidate &&
+        (runnerProfileId !== null || !existingRunner.exists() || sameRunner)
+      ) {
         const nextRunnerData = {
           cardSeries: competitor.cardSeries,
           fullName: competitor.fullName.slice(0, 120),
@@ -6590,7 +6633,17 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
           source: runnerData?.source || 'LEARNED_ENTRY',
           updatedAtIso: nowIso,
         };
-        if (existingRunner.exists()) {
+        if (runnerProfileId && runnerProfileId !== String(siNumber)) {
+          transaction.set(runnerRef, {
+            runnerId: String(siNumber),
+            siNumber,
+            ...nextRunnerData,
+            ownerUid: runnerData?.ownerUid || actorUid,
+            createdAt: serverTime,
+            updatedAt: serverTime,
+          });
+          transaction.delete(runnerProfileRef);
+        } else if (existingRunner.exists()) {
           transaction.update(runnerRef, {
             ...nextRunnerData,
             updatedAt: serverTime,
@@ -6615,13 +6668,21 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         };
       }
 
-      return savedRunnerDbEntry;
+      return {
+        runnerDbEntry: savedRunnerDbEntry,
+        previousRunnerSiNumber:
+          runnerProfileId && runnerProfileId !== String(siNumber)
+            ? Number(runnerProfileId)
+            : null,
+      };
     });
   };
 
   const fallbackToClientFirestore = async (apiFailure: string): Promise<void> => {
     try {
-      runnerDbEntry = await writeDirectlyToFirestore();
+      const result = await writeDirectlyToFirestore();
+      runnerDbEntry = result.runnerDbEntry;
+      previousRunnerSiNumber = result.previousRunnerSiNumber;
     } catch (error) {
       const fallbackMessage =
         error instanceof Error ? error.message : 'Okänt Firestore-fel.';
@@ -6634,6 +6695,8 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   const requestBody = JSON.stringify({
     competitor: mutableCompetitor,
     runnerCandidate,
+    runnerProfileId,
+    isBorrowedCard: competitor.isBorrowedCard,
   });
   let response: Response | null = null;
   try {
@@ -6660,6 +6723,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       error?: unknown;
       message?: unknown;
       runnerDbEntry?: RunnerDbEntry | null;
+      previousRunnerSiNumber?: number | null;
     };
     const apiMessage =
       typeof result.error === 'string'
@@ -6682,10 +6746,11 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       }
     } else {
       runnerDbEntry = result.runnerDbEntry ?? null;
+      previousRunnerSiNumber = result.previousRunnerSiNumber ?? null;
     }
   }
 
-  return { competitor, runnerDbEntry };
+  return { competitor, runnerDbEntry, previousRunnerSiNumber };
 }
 
 export async function loadPublicRaceFromFirestore(
@@ -7068,6 +7133,7 @@ export interface CreateCompetitionInFirestoreParams {
   seriesName?: string;
   allowSelfRegistration?: boolean;
   feeTrackingEnabled?: boolean;
+  activateOnCreate?: boolean;
   courses?: Course[];
   classes?: CompClass[];
 }
@@ -7230,7 +7296,7 @@ export async function createCompetitionInFirestore(
       const currentIds = Array.isArray(existingClub.competitionIds) ? existingClub.competitionIds : [];
       const updatedIds = Array.from(new Set([competitionId, ...currentIds])).slice(0, 100);
       await updateDoc(clubRef, {
-        activeEventId: competitionId,
+        ...(params.activateOnCreate === false ? {} : { activeEventId: competitionId }),
         competitionIds: updatedIds,
         demoCleared: false,
         swishNumber: deleteField(),
@@ -7245,7 +7311,7 @@ export async function createCompetitionInFirestore(
         defaultDirectEntryFeeSek: 0,
         rentalCardFeeSek: 0,
         missingRentalFeeSek: 0,
-        activeEventId: competitionId,
+        activeEventId: params.activateOnCreate === false ? '' : competitionId,
         demoCleared: true,
         competitionIds: [competitionId],
         ownerUid,

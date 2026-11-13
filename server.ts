@@ -4484,7 +4484,9 @@ async function startServer() {
           req.params.competitionId,
           req.params.competitorId,
           req.body?.competitor,
-          req.body?.runnerCandidate
+          req.body?.runnerCandidate,
+          req.body?.runnerProfileId,
+          req.body?.isBorrowedCard
         );
         res.status(201).json(result);
       } catch (error) {

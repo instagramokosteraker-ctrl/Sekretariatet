@@ -36,6 +36,7 @@ export interface TrustedRunnerDbCandidate {
 
 export interface CompetitorCreationResult {
   runnerDbEntry: Record<string, unknown> | null;
+  previousRunnerSiNumber: number | null;
 }
 
 export class CompetitorCreationError extends Error {
@@ -162,19 +163,39 @@ function validateRunnerCandidate(value: unknown): TrustedRunnerDbCandidate | nul
   };
 }
 
+function validateRunnerProfileId(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const siNumber =
+    typeof value === 'string' && /^\d{1,8}$/.test(value) ? Number(value) : value;
+  if (!isBoundedInteger(siNumber, 1, 99999999)) {
+    throw new CompetitorCreationError(400, 'Runner profile ID is invalid.');
+  }
+  return String(siNumber);
+}
+
 export async function createCompetitorWithAssignment(
   firestore: Firestore,
   actor: CompetitorCreationActor,
   competitionIdInput: string,
   competitorIdInput: string,
   inputInput: unknown,
-  runnerCandidateInput: unknown
+  runnerCandidateInput: unknown,
+  runnerProfileIdInput: unknown = null,
+  isBorrowedCardInput: unknown = false
 ): Promise<CompetitorCreationResult> {
   const competitionId = requireId(competitionIdInput, 'competition ID');
   const competitorId = requireId(competitorIdInput, 'competitor ID');
   const actorUid = requireId(actor.uid, 'user ID');
   const input = validateCreateInput(inputInput);
   const runnerCandidate = validateRunnerCandidate(runnerCandidateInput);
+  if (typeof isBorrowedCardInput !== 'boolean') {
+    throw new CompetitorCreationError(400, 'Borrowed card flag is invalid.');
+  }
+  const shouldUpdateRunnerDb =
+    !input.isRentalCard && !isBorrowedCardInput && runnerCandidate !== null;
+  const runnerProfileId = shouldUpdateRunnerDb
+    ? validateRunnerProfileId(runnerProfileIdInput)
+    : null;
 
   const fullName = input.fullName.trim().slice(0, 120);
   const club = input.club.trim().slice(0, 100) || 'Klubblös';
@@ -186,6 +207,9 @@ export async function createCompetitorWithAssignment(
     .doc(String(assignmentSiNumber));
   const adminRef = firestore.collection('admins').doc(actorUid);
   const runnerRef = firestore.collection('runnerDb').doc(String(assignmentSiNumber));
+  const runnerProfileRef = runnerProfileId
+    ? firestore.collection('runnerDb').doc(runnerProfileId)
+    : runnerRef;
   const duplicatesQuery = competitionRef
     .collection('competitors')
     .where('siNumber', '==', assignmentSiNumber);
@@ -198,14 +222,18 @@ export async function createCompetitorWithAssignment(
       adminSnapshot,
       duplicateCompetitorsSnapshot,
       runnerSnapshot,
+      runnerProfileSnapshot,
     ] = await Promise.all([
       transaction.get(competitionRef),
       transaction.get(competitorRef),
       transaction.get(assignmentRef),
       transaction.get(adminRef),
       transaction.get(duplicatesQuery),
-      !input.isRentalCard && runnerCandidate
+      shouldUpdateRunnerDb
         ? transaction.get(runnerRef)
+        : Promise.resolve(null),
+      shouldUpdateRunnerDb
+        ? transaction.get(runnerProfileRef)
         : Promise.resolve(null),
     ]);
 
@@ -234,6 +262,19 @@ export async function createCompetitorWithAssignment(
       throw new CompetitorCreationError(
         409,
         `SI card ${assignmentSiNumber} is already used in this competition.`
+      );
+    }
+    if (runnerProfileId && !runnerProfileSnapshot?.exists) {
+      throw new CompetitorCreationError(409, 'The selected runner profile was not found.');
+    }
+    if (
+      runnerProfileId &&
+      runnerProfileId !== String(assignmentSiNumber) &&
+      runnerSnapshot?.exists
+    ) {
+      throw new CompetitorCreationError(
+        409,
+        `SI card ${assignmentSiNumber} already belongs to another runner profile.`
       );
     }
 
@@ -327,14 +368,14 @@ export async function createCompetitorWithAssignment(
     });
 
     let runnerDbEntry: Record<string, unknown> | null = null;
-    const runnerData = runnerSnapshot?.data();
+    const runnerData = runnerProfileSnapshot?.data();
     const sameRunner =
       typeof runnerData?.fullName === 'string' &&
       runnerData.fullName.trim().toLowerCase() === fullName.toLowerCase();
     if (
       runnerSnapshot &&
       runnerCandidate &&
-      (!runnerSnapshot.exists || sameRunner)
+      (runnerProfileId !== null || !runnerSnapshot.exists || sameRunner)
     ) {
       const nextRunnerData = {
         cardSeries: input.cardSeries,
@@ -352,7 +393,17 @@ export async function createCompetitorWithAssignment(
         source: runnerData?.source || 'LEARNED_ENTRY',
         updatedAtIso: nowIso,
       };
-      if (runnerSnapshot.exists) {
+      if (runnerProfileId && runnerProfileId !== String(assignmentSiNumber)) {
+        transaction.create(runnerRef, {
+          runnerId: String(assignmentSiNumber),
+          siNumber: assignmentSiNumber,
+          ...nextRunnerData,
+          ownerUid: actorUid,
+          createdAt: serverTimestamp,
+          updatedAt: serverTimestamp,
+        });
+        transaction.delete(runnerProfileRef);
+      } else if (runnerSnapshot.exists) {
         transaction.update(runnerRef, {
           ...nextRunnerData,
           updatedAt: serverTimestamp,
@@ -376,6 +427,12 @@ export async function createCompetitorWithAssignment(
       };
     }
 
-    return { runnerDbEntry };
+    return {
+      runnerDbEntry,
+      previousRunnerSiNumber:
+        runnerProfileId && runnerProfileId !== String(assignmentSiNumber)
+          ? Number(runnerProfileId)
+          : null,
+    };
   });
 }

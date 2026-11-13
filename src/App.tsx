@@ -51,6 +51,7 @@ import type {
   RawSIFrameLog,
   RocIntegrationStatus,
   RunnerDbEntry,
+  RunnerDbSource,
   RunnerStatus,
   SeriesStandingsBundle,
   SICardSeries,
@@ -148,7 +149,7 @@ import { AccessControlView } from './components/AccessControlView';
 import { applyClubThemeToDocument } from './utils/clubTheme';
 import { readEventorLocalConfig } from './utils/eventorLocalConfig';
 import { EventorNetworkError, fetchEventorXml } from './utils/eventorClient';
-import { parseEventorXml } from './utils/eventorXml';
+import { parseEventorXml, type ParsedEventorXml } from './utils/eventorXml';
 import {
   buildEffectiveCourseImportBatch,
   parseIofXmlDocument,
@@ -1683,13 +1684,20 @@ export default function App() {
         )
       );
       const savedRunner = saved.runnerDbEntry;
-      if (savedRunner) {
+      if (savedRunner || saved.previousRunnerSiNumber !== null) {
         setRunnerDb((current) => {
-          const existingIndex = current.findIndex(
+          const retained =
+            saved.previousRunnerSiNumber === null
+              ? current
+              : current.filter(
+                  (runner) => runner.siNumber !== saved.previousRunnerSiNumber
+                );
+          if (!savedRunner) return retained;
+          const existingIndex = retained.findIndex(
             (runner) => runner.siNumber === savedRunner.siNumber
           );
-          if (existingIndex < 0) return [savedRunner, ...current];
-          return current.map((runner, index) =>
+          if (existingIndex < 0) return [savedRunner, ...retained];
+          return retained.map((runner, index) =>
             index === existingIndex ? savedRunner : runner
           );
         });
@@ -1950,6 +1958,190 @@ export default function App() {
     } finally {
       setCreateEvtBusy(false);
     }
+  };
+
+  const handleCreateEventorCompetition = async (
+    parsed: ParsedEventorXml,
+    source: Extract<RunnerDbSource, 'EVENTOR_API' | 'EVENTOR_XML'>,
+    fallbackName: string
+  ): Promise<{ name: string; addedClasses: number; addedEntries: number }> => {
+    const now = Date.now();
+    const competitionId = `evt-${now}-${Math.random().toString(36).slice(2, 8)}`;
+    const shortCode = `ev${now.toString(36).slice(-4)}${Math.random().toString(36).slice(2, 5)}`;
+    const name = parsed.event?.name?.trim() || fallbackName.replace(/\.xml$/i, '').trim();
+    const date =
+      parsed.event?.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.event.date)
+        ? parsed.event.date
+        : getStockholmTodayIso();
+    const zeroTimeStr = '18:00:00';
+    const zeroTimeSec = parseTimeToSec(zeroTimeStr);
+    const classNames = new Map<string, string>();
+    for (const eventClass of parsed.classes) {
+      const className = eventClass.name.trim().slice(0, 80);
+      if (className) classNames.set(className.toLocaleLowerCase(), className);
+    }
+    for (const entry of parsed.entries) {
+      const className = entry.className.trim().slice(0, 80);
+      if (className) classNames.set(className.toLocaleLowerCase(), className);
+    }
+    if (classNames.size === 0) {
+      classNames.set('öppen', 'Öppen');
+    }
+
+    const classes: CompClass[] = Array.from(classNames.values()).map((className, index) => ({
+      id: `evtcls-${now}-${index + 1}`,
+      name: className,
+      courseId: null,
+      classFormat: 'STANDARD',
+      forkCourseIds: [],
+      allowDirectEntry: true,
+      freeStart: true,
+      autoMatchCourse: true,
+      feeSek: clubSettings.defaultDirectEntryFeeSek,
+    }));
+    const classIdByName = new Map(
+      classes.map((eventClass) => [eventClass.name.toLocaleLowerCase(), eventClass.id])
+    );
+    const seenSiNumbers = new Set<number>();
+    for (const entry of parsed.entries) {
+      if (entry.siNumber > 0) {
+        if (seenSiNumbers.has(entry.siNumber)) {
+          throw new Error(`Eventor-importen innehåller SI-bricka ${entry.siNumber} flera gånger.`);
+        }
+        seenSiNumbers.add(entry.siNumber);
+      }
+    }
+
+    const competitors: Competitor[] = parsed.entries.map((entry, index) => {
+      const bib = index + 1;
+      const siNumber =
+        Number.isSafeInteger(entry.siNumber) && entry.siNumber > 0
+          ? entry.siNumber
+          : 8_900_000 + bib;
+      return {
+        id: `evtcmp-${now}-${bib}`,
+        bib,
+        fullName: entry.fullName.trim(),
+        club: entry.club.trim(),
+        classId: classIdByName.get(entry.className.trim().toLocaleLowerCase()) ?? classes[0].id,
+        siNumber,
+        cardSeries: entry.siNumber > 0 ? inferCardSeries(siNumber) : 'SI-Card 10',
+        isRentalCard: !(entry.siNumber > 0),
+        rentalReturned: false,
+        status: 'REGISTERED',
+        allocatedStartSec: null,
+        checkTimeSec: null,
+        startTimeSec: null,
+        finishTimeSec: null,
+        runningTimeSec: null,
+        lastSeenControl: null,
+        lastSeenTimeSec: null,
+        readoutAt: null,
+        radioSplits: [],
+        cardPunches: [],
+        validation: null,
+      };
+    });
+    const runnerEntriesBySi = new Map<number, RunnerDbEntry>();
+    for (const runner of parsed.runnerDbEntries) {
+      if (!Number.isSafeInteger(runner.siNumber) || runner.siNumber <= 0) continue;
+      runnerEntriesBySi.set(runner.siNumber, {
+        id: `si-${runner.siNumber}`,
+        siNumber: runner.siNumber,
+        cardSeries: inferCardSeries(runner.siNumber),
+        fullName: runner.fullName,
+        club: runner.club,
+        birthYear: runner.birthYear,
+        defaultClassName: runner.defaultClassName,
+        eventorPersonId: runner.eventorPersonId,
+        eventorOrgId:
+          runner.eventorOrgId ||
+          parsed.organization?.orgId ||
+          readEventorLocalConfig().orgId ||
+          clubSettings.eventorOrgId ||
+          null,
+        source,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    const competition: CompetitionMeta = {
+      id: competitionId,
+      shortCode,
+      name: name || `Eventor ${parsed.event?.eventId || fallbackName}`,
+      organizer: parsed.event?.organizer || clubSettings.clubName || 'OK Österåker',
+      date,
+      status: 'UPCOMING',
+      zeroTimeStr,
+      zeroTimeSec,
+      arenaInfo: '',
+      seriesName: '',
+      allowSelfRegistration: true,
+    };
+
+    await createCompetitionInFirestore({
+      competitionId,
+      shortCode,
+      name: competition.name,
+      organizer: competition.organizer,
+      date: competition.date,
+      status: competition.status,
+      zeroTimeStr,
+      zeroTimeSec,
+      allowSelfRegistration: true,
+      activateOnCreate: false,
+      courses: [],
+      classes,
+    });
+    try {
+      await saveCompetitionImportToFirestore({
+        competitionId,
+        courses: [],
+        classes,
+        competitors,
+        runnerDbEntries: Array.from(runnerEntriesBySi.values()),
+        competitorCount: competitors.length,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Tävlingen "${competition.name}" skapades men importen misslyckades. Den tidigare aktiva tävlingen är oförändrad. ${detail}`
+      );
+    }
+    try {
+      await activateCompetitionInFirestore(competitionId);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Tävlingen "${competition.name}" importerades men kunde inte aktiveras. Den tidigare aktiva tävlingen är oförändrad. ${detail}`
+      );
+    }
+
+    setCompetition(competition);
+    setActiveEventId(competitionId);
+    setCourses([]);
+    setClasses(classes);
+    setCompetitors(competitors);
+    setIsEmptySeason(false);
+    setCompetitionsList((previous) => [
+      {
+        ...competition,
+        id: competitionId,
+        shortCode,
+        status: 'UPCOMING',
+        arenaInfo: '',
+        competitorCount: competitors.length,
+        finishedCount: 0,
+        classCount: classes.length,
+      },
+      ...previous.filter((item) => item.id !== competitionId),
+    ]);
+    setSelectedRunnerId(null);
+    setPendingUnknownReadout(null);
+    return {
+      name: competition.name,
+      addedClasses: classes.length,
+      addedEntries: competitors.length,
+    };
   };
 
   // Testbench: build authentic 0xEF (SI10/SIAC), 0xE1 (SI6), or 0xB1 (SI5) binary frames, decode them, and send via offlineReadoutQueue!
@@ -3081,27 +3273,7 @@ export default function App() {
                         ok: true,
                         message: 'Tävlingen hämtades från Eventor.',
                         event: data.event,
-                        importBatch: {
-                          courses: [],
-                          classes: data.classes.map((eventClass) => ({
-                            name: eventClass.name,
-                            classFormat: 'STANDARD' as const,
-                          })),
-                          entries: data.entries.map((entry) => ({
-                            fullName: entry.fullName,
-                            club: entry.club,
-                            className: entry.className,
-                            siNumber: entry.siNumber,
-                          })),
-                          runnerDbEntries: data.runnerDbEntries.map((runner) => ({
-                            siNumber: runner.siNumber,
-                            fullName: runner.fullName,
-                            club: runner.club,
-                            birthYear: runner.birthYear,
-                            defaultClassName: runner.defaultClassName,
-                            eventorPersonId: runner.eventorPersonId,
-                          })),
-                        },
+                        parsed: data,
                       };
                     } catch (error) {
                       return {
@@ -3111,6 +3283,7 @@ export default function App() {
                       };
                     }
                   }}
+                  onCreateEventorCompetition={handleCreateEventorCompetition}
                   onImportEventorRunnerDb={async (parsedRunners) => {
                     const eventorConfig = readEventorLocalConfig();
                     const updatedAt = new Date().toISOString();
@@ -3583,13 +3756,21 @@ export default function App() {
                         )
                       );
                       const savedRunner = saved.runnerDbEntry;
-                      if (savedRunner) {
+                      if (savedRunner || saved.previousRunnerSiNumber !== null) {
                         setRunnerDb((current) => {
-                          const existingIndex = current.findIndex(
+                          const retained =
+                            saved.previousRunnerSiNumber === null
+                              ? current
+                              : current.filter(
+                                  (runner) =>
+                                    runner.siNumber !== saved.previousRunnerSiNumber
+                                );
+                          if (!savedRunner) return retained;
+                          const existingIndex = retained.findIndex(
                             (runner) => runner.siNumber === savedRunner.siNumber
                           );
-                          if (existingIndex < 0) return [savedRunner, ...current];
-                          return current.map((runner, index) =>
+                          if (existingIndex < 0) return [savedRunner, ...retained];
+                          return retained.map((runner, index) =>
                             index === existingIndex ? savedRunner : runner
                           );
                         });
