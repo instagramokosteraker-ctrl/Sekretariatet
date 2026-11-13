@@ -490,10 +490,15 @@ service cloud.firestore {
           'punchCodes',
           'punchTimes',
           'ownerUid',
+          'schemaVersion',
           'createdAt',
           'billingFieldsUpdatedAt',
           'updatedAt'
         ]) &&
+        (
+          !data.keys().hasAny(['schemaVersion']) ||
+          data.schemaVersion == 1
+        ) &&
         (
           !data.keys().hasAny(['billingFieldsUpdatedAt']) ||
           data.billingFieldsUpdatedAt is timestamp

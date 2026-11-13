@@ -2018,6 +2018,7 @@ async function writeImportedCompetitorWithAssignment(params: {
           competitorId,
           competitionId,
           ownerUid: params.ownerUid,
+          schemaVersion: 1,
           feePaid: false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),

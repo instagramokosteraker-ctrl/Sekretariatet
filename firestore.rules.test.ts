@@ -490,6 +490,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         punchCodes: [],
         punchTimes: [],
         ownerUid: 'race_admin_1',
+        schemaVersion: 1,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
     };
@@ -518,6 +519,31 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       }
     );
     await assertFails(incompleteImportBatch.commit());
+
+    const invalidCompetitorVersionBatch = writeBatch(raceAdminCtx.firestore());
+    invalidCompetitorVersionBatch.set(
+      doc(
+        raceAdminCtx.firestore(),
+        'competitions/evt_live/competitors/cmp_import_invalid_schema'
+      ),
+      {
+        ...initialCompetitor,
+        competitorId: 'cmp_import_invalid_schema',
+        siNumber: 8500198,
+        schemaVersion: 2,
+      }
+    );
+    invalidCompetitorVersionBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500198'),
+      {
+        ...siCardAssignment,
+        competitorId: 'cmp_import_invalid_schema',
+        competitorDocumentId: 'cmp_import_invalid_schema',
+        siNumber: 8500198,
+        source: 'IMPORT',
+      }
+    );
+    await assertFails(invalidCompetitorVersionBatch.commit());
 
     const initialCompetitorBatch = writeBatch(raceAdminCtx.firestore());
     initialCompetitorBatch.set(

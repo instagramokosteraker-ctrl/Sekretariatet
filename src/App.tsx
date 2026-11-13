@@ -2106,6 +2106,7 @@ export default function App() {
         competitorCount: competitors.length,
       });
     } catch (error) {
+      console.error('Firestore import commit failed:', error);
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Tävlingen "${competition.name}" skapades men importen misslyckades. Den tidigare aktiva tävlingen är oförändrad. ${detail}`
