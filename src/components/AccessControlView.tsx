@@ -94,6 +94,7 @@ interface AccessControlViewProps {
   currentUser: AuthSessionUser;
   onApplyStateSnapshot: (snap: MeosAppState) => void;
   onActivateCompetition: (eventId: string) => Promise<boolean>;
+  onDeleteCompetition: (eventId: string) => Promise<{ warning?: string }>;
   onUpdateCompetitionMeta: (
     eventId: string,
     patch: {
@@ -148,6 +149,7 @@ export function AccessControlView({
   currentUser,
   onApplyStateSnapshot,
   onActivateCompetition,
+  onDeleteCompetition,
   onUpdateCompetitionMeta,
   onUpdateRentalReturned,
   onOpenCreateCompetition,
@@ -1691,6 +1693,33 @@ export function AccessControlView({
     }
   }
 
+  const handleDeleteEvent = async (ev: CompetitionSummary) => {
+    const confirmed = window.confirm(
+      `Radera "${ev.name}" permanent? Alla tävlingens banor, klasser, deltagare, SI-tilldelningar, kvitton och stationer tas bort. Åtgärden kan inte ångras.`
+    );
+    if (!confirmed) return;
+
+    setEventBusyId(ev.id);
+    setEventsNotice(null);
+    try {
+      const result = await onDeleteCompetition(ev.id);
+      await loadCloudCompetitions();
+      setEventsNotice({
+        ok: true,
+        msg: result.warning
+          ? `Tävlingen raderades. ${result.warning}`
+          : 'Tävlingen och dess tillhörande data raderades.',
+      });
+    } catch (error) {
+      setEventsNotice({
+        ok: false,
+        msg: error instanceof Error ? error.message : 'Kunde inte radera tävlingen.',
+      });
+    } finally {
+      setEventBusyId(null);
+    }
+  };
+
   return (
     <div className="space-y-3.5">
       {/* Top Header & Segmented Admin Navigation */}
@@ -1831,10 +1860,6 @@ export function AccessControlView({
                   <span>Ny tävling</span>
                 </button>
               </div>
-            </div>
-
-            <div className="px-4 py-2 text-xs text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-900/80">
-              Radering och rensning av tävlingar är tillfälligt avstängd tills SI-tilldelningar kan hanteras atomiskt.
             </div>
 
             {eventsNotice && (
@@ -2047,6 +2072,18 @@ export function AccessControlView({
                           >
                             <Copy className="w-3 h-3" />
                             <span className="hidden sm:inline">Kopia</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleDeleteEvent(ev)}
+                            title="Radera tävling och all tillhörande data"
+                            aria-label={`Radera ${ev.name}`}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/70 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md whitespace-nowrap shrink-0 disabled:opacity-50"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span className="hidden sm:inline">Radera</span>
                           </button>
 
                         </div>

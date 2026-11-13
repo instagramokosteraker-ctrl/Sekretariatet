@@ -1512,6 +1512,63 @@ export default function App() {
     }
   };
 
+  const handleDeleteCompetition = async (
+    eventId: string
+  ): Promise<{ warning?: string }> => {
+    const response = await apiFetch(
+      `/api/firestore/competitions/${encodeURIComponent(eventId)}/delete`,
+      { method: 'POST' }
+    );
+    const result = await readApiResponseJson<{ warning?: string }>(
+      response,
+      'Kunde inte radera tävlingen.'
+    );
+
+    const remainingCompetitions = competitionsList.filter(
+      (item) => item.id !== eventId
+    );
+    firestoreCompetitionsRef.current = remainingCompetitions;
+    setCompetitionsList(remainingCompetitions);
+
+    let warning = result.warning;
+    if (activeEventId === eventId) {
+      const nextCompetition = remainingCompetitions[0];
+      if (nextCompetition) {
+        const activated = await handleActivateCompetition(nextCompetition.id);
+        if (!activated) {
+          warning = [
+            warning,
+            'En annan tävling kunde inte aktiveras automatiskt.',
+          ]
+            .filter(Boolean)
+            .join(' ');
+        }
+      } else {
+        setActiveEventId('');
+        setCompetition({
+          id: '',
+          shortCode: '',
+          status: 'UPCOMING',
+          name: 'Ingen aktiv tävling',
+          organizer: 'OK Österåker',
+          date: getStockholmTodayIso(),
+          zeroTimeStr: '18:00:00',
+          zeroTimeSec: 18 * 3600,
+        });
+        setCourses([]);
+        setClasses([]);
+        setStations([]);
+        setCompetitors([]);
+        setEvents([]);
+        setEmergency({ brokenControls: [], controlTimeOffsets: {} });
+        setIsEmptySeason(true);
+        setIsFreshColdStart(false);
+      }
+    }
+
+    return warning ? { warning } : {};
+  };
+
   const handleUpdateCompetitionMetadata = async (
     eventId: string,
     patch: {
@@ -4360,6 +4417,7 @@ export default function App() {
                   currentUser={authSession.user}
                   onApplyStateSnapshot={applySnapshot}
                   onActivateCompetition={handleActivateCompetition}
+                  onDeleteCompetition={handleDeleteCompetition}
                   onUpdateCompetitionMeta={handleUpdateCompetitionMetadata}
                   onUpdateRentalReturned={updateRentalReturnedFromOverview}
                   onOpenCreateCompetition={() => {

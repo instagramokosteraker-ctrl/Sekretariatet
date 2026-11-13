@@ -1762,11 +1762,11 @@ async function commitQueuedBatchOps(ops: QueuedBatchOp[]): Promise<void> {
 }
 
 /**
- * Competition deletion is disabled until all SI assignments can be resolved atomically.
+ * Direct client deletion stays prohibited; use the authenticated server transaction.
  */
 export async function deleteCompetitionFromFirestore(_rawCompetitionId: string): Promise<void> {
   throw new Error(
-    'Radering av tävlingar är tillfälligt avstängd tills SI-tilldelningar kan hanteras atomiskt.'
+    'Tävlingar måste raderas via den betrodda servertransaktionen.'
   );
 }
 

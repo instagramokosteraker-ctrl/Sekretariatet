@@ -67,22 +67,36 @@ export function EventorIntegrationSettingsView() {
     setBusy(true);
     setNotice(null);
     try {
+      const config = readEventorLocalConfig();
+      if (!config.apiKey.trim()) {
+        throw new Error('Spara en Eventor API-nyckel lokalt innan du testar anslutningen.');
+      }
+      if (!config.orgId.trim()) {
+        throw new Error('Spara ett Eventor Organisations-ID lokalt innan du testar anslutningen.');
+      }
+
       const response = await apiFetch('/api/eventor/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey, orgId, baseUrl }),
+        body: JSON.stringify(config),
       });
       const data = await readApiResponseJson<{
-        connected?: boolean;
+        success?: boolean;
+        message?: string;
         orgId?: string;
         orgName?: string;
       }>(
         response,
         'Anslutningen till Eventor misslyckades. Kontrollera serveranslutningen och försök igen.'
       );
+      if (!data.success) {
+        throw new Error(data.message || 'Eventor kunde inte bekräfta anslutningen.');
+      }
       setNotice({
         ok: true,
-        message: `Ansluten till Eventor\nKlubb: ${data.orgName}\nOrganisation-ID: ${data.orgId}`,
+        message: data.orgName
+          ? `${data.message || 'Anslutning lyckades'}\nKlubb: ${data.orgName}\nOrganisation-ID: ${data.orgId || config.orgId}`
+          : data.message || 'Anslutning lyckades',
       });
     } catch (error) {
       setNotice({

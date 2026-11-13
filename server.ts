@@ -25,6 +25,10 @@ import {
   ReadoutAutoCreateError,
 } from './src/server/readoutAutocreate';
 import {
+  deleteCompetitionWithAssignments,
+  CompetitionDeletionError,
+} from './src/server/competitionDeletion';
+import {
   declareCompetitorMutation,
   runCompetitorMutation,
   runCompetitorMutations,
@@ -4776,6 +4780,55 @@ async function startServer() {
     }
   );
 
+  app.post(
+    '/api/firestore/competitions/:competitionId/delete',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (!sessionUser) {
+        res.status(401).json({ error: 'Authentication is required.' });
+        return;
+      }
+
+      try {
+        const result = await deleteCompetitionWithAssignments(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid },
+          req.params.competitionId
+        );
+
+        let warning: string | undefined;
+        if (
+          seasonDb.eventsMap[req.params.competitionId] ||
+          seasonDb.activeEventId === req.params.competitionId
+        ) {
+          delete seasonDb.eventsMap[req.params.competitionId];
+          if (seasonDb.activeEventId === req.params.competitionId) {
+            seasonDb.activeEventId = Object.keys(seasonDb.eventsMap)[0] ?? '';
+          }
+          try {
+            persistUserMutation();
+            broadcastFullState();
+          } catch (error) {
+            console.error('Competition deleted from Firestore but mirror sync failed:', error);
+            warning =
+              'Tävlingen raderades i Firestore, men den lokala kompatibilitetsspeglingen kunde inte uppdateras.';
+          }
+        }
+
+        res.json({ ...result, ...(warning ? { warning } : {}) });
+      } catch (error) {
+        if (error instanceof CompetitionDeletionError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Trusted competition deletion failed:', error);
+        res.status(500).json({ error: 'The competition could not be deleted.' });
+      }
+    }
+  );
+
   // Keep these terminal handlers before the legacy route bodies so they cannot fall through.
   app.post('/api/competitors', rejectLegacyCompetitorMutation);
   app.put('/api/competitors/:id', rejectLegacyCompetitorMutation);
@@ -5847,26 +5900,44 @@ async function startServer() {
 
   app.post('/api/eventor/test', async (req, res) => {
     if (!requireEventorAdminRequest(req, res)) return;
+    let config: EventorConfig;
     try {
-      const config = getEventorConfigFromRequest(req.body);
-      const orgXml = await fetchFromEventorApi('/organisation/apiKey', config);
-      const org = parseEventorOrgXml(orgXml);
-      if (!org) {
-        res.status(502).json({ error: 'Eventor svarade, men klubbinformationen kunde inte tolkas.' });
-        return;
-      }
-      if (org.orgId !== config.orgId) {
-        res.status(400).json({
-          error: `API-nyckeln hör till organisation ${org.orgId} (${org.orgName}), inte angivet organisations-ID ${config.orgId}.`,
-        });
-        return;
-      }
-      res.json({ connected: true, orgId: org.orgId, orgName: org.orgName });
+      config = getEventorConfigFromRequest(req.body);
     } catch (err: unknown) {
       res.status(400).json({
-        error: err instanceof Error ? err.message : 'Kunde inte testa anslutningen till Eventor.',
+        error: err instanceof Error ? err.message : 'Ogiltiga Eventor-inställningar.',
       });
+      return;
     }
+
+    let orgXml: string;
+    try {
+      orgXml = await fetchFromEventorApi('/organisation/apiKey', config);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Okänt fel.';
+      const isNetworkError = err instanceof TypeError;
+      res.status(isNetworkError ? 502 : 400).json({
+        error: isNetworkError
+          ? `Kunde inte nå Eventor API: ${message}`
+          : message,
+      });
+      return;
+    }
+
+    const org = parseEventorOrgXml(orgXml);
+    if (org && org.orgId !== config.orgId) {
+      res.status(400).json({
+        error: `API-nyckeln hör till organisation ${org.orgId} (${org.orgName}), inte angivet organisations-ID ${config.orgId}.`,
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: 'Anslutning lyckades',
+      orgId: org?.orgId ?? config.orgId,
+      ...(org ? { orgName: org.orgName } : {}),
+    });
   });
 
   app.get('/api/eventor/status', (req, res) => {

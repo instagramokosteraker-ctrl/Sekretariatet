@@ -1,8 +1,8 @@
 # PasserSI — project status handoff
 
-**Prepared:** 2026-11-13  
+**Prepared:** 2026-11-13 12:33 CET
 **Repository:** `instagramokosteraker-ctrl/Sekretariatet`  
-**Branch / HEAD:** `main` / `e0e5744`  
+**Branch / HEAD:** `main` / `3062f59`
 **Purpose:** Give a new AI a concise, evidence-based picture of implementation and operational readiness.
 
 ## Executive status
@@ -28,12 +28,12 @@ The following are **repository-level implementation claims**, not production dep
 - Atomic SI assignment/competitor mutations cover create, reassignment, card-series changes, retirement, and deletion. Standalone assignment create/retire exports were removed; relevant paths reread and validate competitor/assignment identity and ownership within transactions.
 - Trusted backend transaction paths were added for competitor creation and READOUT auto-create. READOUT auto-create pairs competitor, assignment, receipt, and counters. Assignment retirement is required to pair with the competitor lifecycle change.
 - Import/snapshot creation uses assignment-aware per-competitor transactions; identity-changing imports are rejected or redirected to canonical paths. These multi-record operations are atomic per competitor, not as one whole batch.
-- Cloud hydration and restore fence competitor identity changes. Unsafe legacy competitor CRUD, Eventor event import, competition deletion, reset, and demo-clear paths are disabled or return HTTP 410.
+- Cloud hydration and restore fence competitor identity changes. Unsafe legacy competitor CRUD and Eventor event import remain disabled; single-competition deletion now uses an authenticated owner/SUPER_ADMIN transaction that removes direct child records and SI assignments atomically. Bulk reset and demo-clear remain disabled.
 - Repository Firestore Rules encode paired competitor/assignment changes and parity checks. READOUT competitor updates use narrow field allowlists; competition list permissions were tightened in later work.
 - Google authentication replaces PIN/offline-code login.
-- Admin UI includes the read-only V2 integrity monitor, periodic scans, alert dismissal/clear controls, and handling for the six previously reported ownerUid cases. Alert dismissal is component state (not durable across remounts). Suppressing an alert in UI is **not** evidence that the underlying data discrepancy was corrected or formally dispositioned.
+- Admin UI includes the read-only V2 integrity monitor, periodic scans, individual and bulk alert dismissal, and handling for the six previously reported ownerUid cases. Dismissed alert keys now persist in browser `localStorage`. Suppressing an alert in UI is **not** evidence that the underlying data discrepancy was corrected or formally dispositioned.
 
-Detailed implementation references: [ASSIGNMENT_BOUNDARY_HARDENING.md](./ASSIGNMENT_BOUNDARY_HARDENING.md), [SERVER_SIDE_ENFORCEMENT_PHASE2_COMPETITOR_CREATE.md](./SERVER_SIDE_ENFORCEMENT_PHASE2_COMPETITOR_CREATE.md), [SERVER_SIDE_ENFORCEMENT_PHASE3_READOUT.md](./SERVER_SIDE_ENFORCEMENT_PHASE3_READOUT.md), [READOUT_FIELD_PERMISSION_REMEDIATION.md](./READOUT_FIELD_PERMISSION_REMEDIATION.md), and [EVENTOR_IOF_IMPORT_MIGRATION.md](./EVENTOR_IOF_IMPORT_MIGRATION.md).
+Detailed implementation references: [ASSIGNMENT_BOUNDARY_HARDENING.md](./ASSIGNMENT_BOUNDARY_HARDENING.md), [SERVER_SIDE_ENFORCEMENT_PHASE2_COMPETITOR_CREATE.md](./SERVER_SIDE_ENFORCEMENT_PHASE2_COMPETITOR_CREATE.md), [SERVER_SIDE_ENFORCEMENT_PHASE3_READOUT.md](./SERVER_SIDE_ENFORCEMENT_PHASE3_READOUT.md), [READOUT_FIELD_PERMISSION_REMEDIATION.md](./READOUT_FIELD_PERMISSION_REMEDIATION.md), [EVENTOR_IOF_IMPORT_MIGRATION.md](./EVENTOR_IOF_IMPORT_MIGRATION.md), and [COMPETITION_DELETION_MIGRATION.md](./COMPETITION_DELETION_MIGRATION.md).
 
 ## Outstanding production and assurance blockers
 
@@ -45,9 +45,9 @@ See [DEPLOYED_RULE_CLOSURE.md](./DEPLOYED_RULE_CLOSURE.md), [DEPLOYED_RULE_DIFF.
 
 ### 2. Firestore Rules regression suite — not green
 
-The latest task handoff reports that the suite progressed through earlier assertion failures and still failed at a **standalone SI-number update denial assertion** (the current test source has a corresponding assertion near `firestore.rules.test.ts` line 1320). This was not rerun for this handoff; treat it as the last reported failure, not a freshly verified result. Some older analysis files refer to earlier failures (assignment retirement, READOUT fields, or competition listing) and have been superseded by later changes.
+The latest recorded run of `runFirestoreRulesDirtyDozenSuite()` exited `0`, and the standalone SI-number update assertion passed. A focused assertion verifies that this update is denied by the Rules condition rather than by the expression ceiling. However, the run still logged **18 Rules expression-limit diagnostics on other paths**. Therefore the suite is not clean and must not be presented as a fully trustworthy, warning-free PASS. Older analysis files refer to earlier failures (assignment retirement, READOUT fields, or competition listing) and have been superseded by later changes.
 
-The user-provided environment report said Java 21, Firebase CLI 15.35.0, Firebase configs, and a working emulator were available. Older readiness documents say the emulator/CLI were unavailable on their assessment date. The suite's present result and current environment should be verified before relying on either set of claims. Previous emulator runs also encountered Rules expression-limit errors on some paths.
+The user-provided environment report said Java 21, Firebase CLI 15.35.0, Firebase configs, and a working emulator were available. Older readiness documents say the emulator/CLI were unavailable on their assessment date. Previous emulator runs also encountered Rules expression-limit errors on some paths.
 
 Rules test artifacts include [firestore.rules.test.ts](./firestore.rules.test.ts), [FIRESTORE_RULES_FAILURE_ANALYSIS_NEXT2.md](./FIRESTORE_RULES_FAILURE_ANALYSIS_NEXT2.md), and [READOUT_FIELD_PERMISSION_REMEDIATION.md](./READOUT_FIELD_PERMISSION_REMEDIATION.md). They have different dates and describe different stages; inspect current test source and run output before selecting the next fix.
 
@@ -65,31 +65,36 @@ Repository writers are substantially inventoried and routed through intended bou
 
 No evidence is recorded for the required concurrency, retry, timeout, rollback, bootstrap-race, and partial-import recovery tests. Rules do not constrain Admin SDK writers. See [TRUSTED_WRITER_CLOSURE.md](./TRUSTED_WRITER_CLOSURE.md), [CONCURRENCY_VALIDATION.md](./CONCURRENCY_VALIDATION.md), [RECOVERY_VALIDATION.md](./RECOVERY_VALIDATION.md), and [READINESS_EXECUTION_PLAN.md](./READINESS_EXECUTION_PLAN.md).
 
-## Latest worktree change: Eventor settings local to device
+## Recent application work and current worktree
 
-The current worktree contains uncommitted Eventor settings changes:
+### Committed
 
-- API key, organization ID, and base URL are loaded/saved in browser `localStorage`.
-- Explicit connection-test and club-sync requests send the local settings to the authenticated backend; backend Eventor config Firestore read/write and migration routes were removed.
-- Existing legacy Firestore documents were not deleted; no production deployment or migration was performed.
-- Related docs and `.env.example` were updated.
-- **Latest verification:** `npm run build` PASS; `npm run lint` PASS. Build emitted existing Vite `__dirname` and large-chunk warnings. Blueprint JSON and `git diff --check` passed.
+- Eventor API key, organization ID, and base URL are managed in browser `localStorage`; Eventor requests send them to authenticated backend routes. The Eventor integration no longer depends on a private Firestore config document. Existing legacy Firestore documents were not deleted.
+- The Drift-larm has five-minute read-only scans, individual/bulk alert dismissal, a “show dismissed” toggle, and persistence of dismissed finding keys across reloads.
+- These are client/repository changes, not evidence that production data was changed or audited.
 
-These changes are in the working tree, not committed. Current modified/untracked files at handoff time:
+The separate Club Profile `eventorOrgId` field remains part of existing club settings/workflows. Do not change that shared field without clarifying scope.
 
-`.env.example`, `EVENTOR_IOF_IMPORT_MIGRATION.md`, `MIGRATION-STATUS.md`, `README.md`, `SEASONDB_RETIREMENT_PLAN.md`, `TRUSTED_WRITER_ASSURANCE.md`, `firebase-blueprint.json`, `server.ts`, `src/App.tsx`, `src/components/AccessControlView.tsx`, `src/components/EventorIntegrationSettingsView.tsx`, and new `src/utils/eventorLocalConfig.ts`.
+### Uncommitted Eventor connection-test change
 
-The separate Club Profile `eventorOrgId` field remains part of existing club settings and workflows; the Eventor integration view no longer writes it. Clarify before broadening scope or changing that shared field.
+Current worktree modifications are limited to `server.ts` and `src/components/EventorIntegrationSettingsView.tsx`.
+
+- The “Testa anslutning” action now reads the saved local configuration and sends `{ apiKey, orgId, baseUrl }` to `/api/eventor/test`; unsaved edits are not silently tested.
+- The backend test route reads configuration from `req.body`, calls Eventor `/organisation/apiKey` with the `ApiKey` header, returns a success/message on an HTTP-success response, still checks a parsed organization ID when available, and reports network errors clearly.
+- **Verification after these edits:** `npm run build` PASS and `npm run lint` PASS. Build reported the existing Vite `__dirname` notice and large-chunk warning. The Rules suite was not rerun for this UI/server-only change.
+
+## Recent deployment attempt
+
+A user-authorized `firebase deploy --only firestore:rules --project ai-studio-applet-webapp-72c01` attempt stopped before publishing because Firebase CLI was not authenticated (`Failed to authenticate, have you run firebase login?`). No production Rules were deployed. Do not retry unless separately authorized and authenticated; the Rules suite still has expression-limit diagnostics.
 
 ## Recommended next actions for the next AI
 
-1. **Do not deploy or mutate production.** First confirm whether the owner has separately authorized a production Rules change.
-2. Verify current source and test harness; run the Rules suite only with an isolated emulator. Capture the exact first failing assertion and distinguish Rules logic from stale fixtures or expression limits.
-3. Fix the remaining suite failure minimally, then rerun the complete suite; do not infer suite success from build/lint.
-4. Prepare an approved Rules-only deployment and active-release attestation as a separate, explicitly authorized operation.
-5. Complete external writer/IAM review and reconcile the six ownerUid findings with authorized evidence. Reconcile competition coverage against an independent expected set.
-6. Run concurrency/retry/recovery tests in the emulator. Keep readiness NO-GO until every required gate in [READINESS_EXECUTION_PLAN.md](./READINESS_EXECUTION_PLAN.md) passes.
-7. Reassess the uncommitted Eventor change and its local-vs-club-profile organization ID boundary; do not delete legacy Firestore data without explicit authorization.
+1. If further Eventor connection-test changes are made, rerun build/lint and exercise the endpoint with a saved local configuration; do not log API-key values.
+2. Diagnose the 18 Rules expression-limit diagnostics. Keep the Rules suite marked unclean until these are resolved and negative assertions are not passing solely because of evaluation limits.
+3. Keep production readiness **NO-GO**. A prior deployment attempt was authorized but failed authentication before publishing; do not assume production changed.
+4. Complete external writer/IAM review and reconcile the six ownerUid findings with authorized evidence. Reconcile competition coverage against an independent expected set.
+5. Run concurrency/retry/recovery tests in the emulator. Keep readiness NO-GO until every required gate in [READINESS_EXECUTION_PLAN.md](./READINESS_EXECUTION_PLAN.md) passes.
+6. Preserve the local Eventor key boundary; do not reintroduce Firestore credential persistence or delete legacy Firestore data without explicit authorization.
 
 ## Source-of-truth note
 
