@@ -144,6 +144,7 @@ export function StartCorralView({
   // Inline SI card swap at start line
   const [swappingRunnerId, setSwappingRunnerId] = useState<string | null>(null);
   const [swapSiInput, setSwapSiInput] = useState<string>('');
+  const [savingCardSwapId, setSavingCardSwapId] = useState<string | null>(null);
   const [feedbackNotice, setFeedbackNotice] = useState<{
     tone: 'ok' | 'warn';
     text: string;
@@ -685,21 +686,46 @@ export function StartCorralView({
       });
   }, [competitors, classes, classFilter, statusFilter, search]);
 
-  const handleSaveCardSwap = async (runner: Competitor) => {
-    const cleaned = Number(swapSiInput.replace(/\D/g, ''));
-    if (!Number.isFinite(cleaned) || cleaned < 1000) return;
-    await onUpdateCompetitor(runner.id, {
-      siNumber: cleaned,
-      cardSeries: inferCardSeries(cleaned),
-    });
-    setFeedbackNotice({
-      tone: 'ok',
-      text: `Brickbyte sparat vid startlinjen för #${runner.bib} ${runner.fullName}: ny SI ${formatSiNumber(
-        cleaned
-      )}.`,
-    });
-    setSwappingRunnerId(null);
-    setSwapSiInput('');
+  const handleSaveCardSwap = async (
+    event: React.FormEvent<HTMLFormElement>,
+    runner: Competitor
+  ) => {
+    event.preventDefault();
+    const newSiNumber = Number(swapSiInput.trim());
+    if (!Number.isSafeInteger(newSiNumber) || newSiNumber < 1000) {
+      setFeedbackNotice({
+        tone: 'warn',
+        text: 'Ange ett giltigt SI-bricknummer på minst 1000.',
+      });
+      return;
+    }
+
+    setSavingCardSwapId(runner.id);
+    try {
+      await onUpdateCompetitor(runner.id, {
+        siNumber: newSiNumber,
+        cardSeries: inferCardSeries(newSiNumber),
+      });
+      setFeedbackNotice({
+        tone: 'ok',
+        text: `Brickbyte sparat vid startlinjen för #${runner.bib} ${runner.fullName}: ny SI ${formatSiNumber(
+          newSiNumber
+        )}.`,
+      });
+      setSwappingRunnerId(null);
+      setSwapSiInput('');
+    } catch (error) {
+      console.error('Kunde inte spara brickbyte i Firestore:', error);
+      setFeedbackNotice({
+        tone: 'warn',
+        text:
+          error instanceof Error
+            ? `Kunde inte spara det nya bricknumret: ${error.message}`
+            : 'Kunde inte spara det nya bricknumret i Firestore.',
+      });
+    } finally {
+      setSavingCardSwapId(null);
+    }
   };
 
   const checkedCount = competitors.filter((c) => c.status === 'CHECKED').length;
@@ -1369,22 +1395,26 @@ export function StartCorralView({
 
                     <td className="py-1.5 px-2 whitespace-nowrap">
                       {isSwapping ? (
-                        <div className="inline-flex items-center gap-1">
+                        <form
+                          onSubmit={(event) => void handleSaveCardSwap(event, r)}
+                          className="inline-flex items-center gap-1"
+                        >
                           <input
                             type="text"
                             inputMode="numeric"
                             value={swapSiInput}
                             onChange={(e) => setSwapSiInput(e.target.value)}
                             placeholder="Ny SI"
+                            disabled={savingCardSwapId === r.id}
                             className="w-24 px-1.5 py-0.5 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded"
                             autoFocus
                           />
                           <button
-                            type="button"
-                            onClick={() => void handleSaveCardSwap(r)}
+                            type="submit"
+                            disabled={savingCardSwapId === r.id}
                             className="px-2 py-0.5 text-[11px] font-medium text-white bg-red-600 hover:bg-red-700 rounded"
                           >
-                            Spara
+                            {savingCardSwapId === r.id ? 'Sparar...' : 'Spara'}
                           </button>
                           <button
                             type="button"
@@ -1392,11 +1422,12 @@ export function StartCorralView({
                               setSwappingRunnerId(null);
                               setSwapSiInput('');
                             }}
+                            disabled={savingCardSwapId === r.id}
                             className="px-1.5 py-0.5 text-[11px] text-slate-500 hover:text-slate-800"
                           >
                             Avbryt
                           </button>
-                        </div>
+                        </form>
                       ) : (
                         <div className="inline-flex items-center gap-1.5">
                           <span className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
