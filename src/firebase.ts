@@ -104,6 +104,7 @@ import {
   type StartDrawMode,
 } from './utils/startListDraw';
 import { buildImportedCompetitorWriteFields } from './utils/importedCompetitorWrite';
+import { assertCanCreateCompetitionInFirestore } from './utils/competitionCreateAuthorization';
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -7139,11 +7140,17 @@ export async function createCompetitionInFirestore(
     throw new Error('Du måste vara inloggad med ett verifierat Google-konto för att skapa och spara en tävling i Firestore.');
   }
 
-  // Ensure /admins/{uid} exists so isAdmin() passes in Firestore security rules
-  await ensureAdminRoleInFirestore(current).catch(() => {});
-
   const ownerUid = sanitizeFirestoreId(current.uid, 'usr');
   const competitionId = sanitizeFirestoreId(params.competitionId, 'evt');
+  const tokenResult = await current.getIdTokenResult(true);
+  const adminAuthorization = await ensureAdminRoleInFirestore(current);
+  assertCanCreateCompetitionInFirestore({
+    uid: current.uid,
+    ownerUid,
+    emailVerified: tokenResult.claims.email_verified === true,
+    adminRole: adminAuthorization.role,
+  });
+
   const rawShort = sanitizeFirestoreId(params.shortCode || 'oko26', 'sc').slice(0, 32);
   const shortCode = rawShort.length >= 2 ? rawShort : 'ev26';
 
@@ -7193,13 +7200,24 @@ export async function createCompetitionInFirestore(
   };
 
   const compRef = doc(db, 'competitions', competitionId);
-  await runTransaction(db, async (transaction) => {
-    const existing = await transaction.get(compRef);
-    if (existing.exists()) {
-      throw new Error('Tävlings-ID:t finns redan i Firestore.');
+  try {
+    await runTransaction(db, async (transaction) => {
+      const existing = await transaction.get(compRef);
+      if (existing.exists()) {
+        throw new Error('Tävlings-ID:t finns redan i Firestore.');
+      }
+      transaction.set(compRef, compDocData);
+    });
+  } catch (error) {
+    if (isPermissionDeniedFirestoreError(error)) {
+      handleFirestoreError(
+        error,
+        OperationType.CREATE,
+        `competitions/${competitionId}`
+      );
     }
-    transaction.set(compRef, compDocData);
-  });
+    throw error;
+  }
 
   // Child subcollections: courses and classes
   const childBatchOps: QueuedBatchOp[] = [];
