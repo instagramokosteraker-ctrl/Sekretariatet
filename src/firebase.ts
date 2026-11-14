@@ -2542,19 +2542,23 @@ export async function loadFullSeasonFromFirestore(options?: {
       ? clubData.competitionIds
       : [];
   
-  // Merge targetIds with all reachable competitions from /competitions directly
-  try {
-    const compCol = collection(db, 'competitions');
-    const compListSnap = await getDocs(compCol).catch(async () => {
-      const current = auth.currentUser;
-      return current ? await getDocs(query(compCol, where('ownerUid', '==', current.uid))) : null;
-    });
-    if (compListSnap) {
-      const colIds = compListSnap.docs.map((d) => d.id);
-      targetIds = Array.from(new Set([...targetIds, ...colIds]));
+  // Avoid a collection listing when a public deep link names one competition.
+  if (!options?.competitionId) {
+    try {
+      const compCol = collection(db, 'competitions');
+      const compListSnap = await getDocs(compCol).catch(async () => {
+        const current = auth.currentUser;
+        return current
+          ? await getDocs(query(compCol, where('ownerUid', '==', current.uid)))
+          : null;
+      });
+      if (compListSnap) {
+        const colIds = compListSnap.docs.map((d) => d.id);
+        targetIds = Array.from(new Set([...targetIds, ...colIds]));
+      }
+    } catch {
+      // If collection listing is restricted, keep existing targetIds
     }
-  } catch {
-    // If collection listing is restricted, keep existing targetIds
   }
 
   if (targetIds.length === 0) {
@@ -6754,15 +6758,19 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
 }
 
 export async function loadPublicRaceFromFirestore(
-  shortCode: string
+  eventKey: string,
+  options?: { competitionId?: boolean }
 ): Promise<PublicRacePayload | null> {
-  const season = await loadFullSeasonFromFirestore();
+  const season = await loadFullSeasonFromFirestore({
+    ...(options?.competitionId ? { competitionId: eventKey } : {}),
+    includeRunnerDb: false,
+  });
   if (!season) return null;
 
   const target = season.events.find(
     (event) =>
-      event.competition.id === shortCode ||
-      event.competition.shortCode.toLowerCase() === shortCode.toLowerCase()
+      event.competition.id === eventKey ||
+      event.competition.shortCode.toLowerCase() === eventKey.toLowerCase()
   );
   if (!target) return null;
 

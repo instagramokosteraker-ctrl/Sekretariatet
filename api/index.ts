@@ -1,11 +1,8 @@
 import type { Request, Response } from 'express';
+import { app } from '../server';
 
-export default async function handler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export default function handler(req: Request, res: Response): void {
   try {
-    const { app } = await import('../server');
     app(req, res);
   } catch (error) {
     console.error('Vercel API initialization error:', error);

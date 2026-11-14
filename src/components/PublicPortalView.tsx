@@ -180,7 +180,9 @@ export function PublicPortalView({
         }
 
         if (!payload) {
-          payload = await loadPublicRaceFromFirestore(eventKey);
+          payload = await loadPublicRaceFromFirestore(eventKey, {
+            competitionId: Boolean(competitionId),
+          });
         }
 
         if (!payload) {
