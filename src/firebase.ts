@@ -7200,12 +7200,40 @@ export async function createCompetitionInFirestore(
   };
 
   const compRef = doc(db, 'competitions', competitionId);
+  const tokenEmail = tokenResult.claims.email;
+  const isBootstrapAdmin =
+    tokenEmail === 'instagram.okosteraker@gmail.com' ||
+    tokenEmail === 'marcus.o.ahlen@gmail.com';
+  const competitionCreateDiagnostics = {
+    requestAuthUid: current.uid,
+    ownerUid,
+    ownerUidEqualsRequestAuthUid: ownerUid === current.uid,
+    emailVerified: tokenResult.claims.email_verified === true,
+    isAdmin: isBootstrapAdmin || adminAuthorization.role !== null,
+    isBootstrapAdmin,
+    adminDocumentRole: adminAuthorization.role,
+    databaseId: firebaseConfig.firestoreDatabaseId || '(default)',
+    projectId: firebaseConfig.projectId,
+    competitionId,
+    competitionIdEqualsDocumentId: compDocData.competitionId === compRef.id,
+    competitionDocument: {
+      ...compDocData,
+      createdAt: 'serverTimestamp()',
+      updatedAt: 'serverTimestamp()',
+    },
+    isAdminSource: 'client preflight; rules result is not exposed by Firestore',
+  };
+
   try {
     await runTransaction(db, async (transaction) => {
       const existing = await transaction.get(compRef);
       if (existing.exists()) {
         throw new Error('Tävlings-ID:t finns redan i Firestore.');
       }
+      console.info(
+        '[Competition create diagnostics]',
+        JSON.stringify(competitionCreateDiagnostics)
+      );
       transaction.set(compRef, compDocData);
     });
   } catch (error) {
