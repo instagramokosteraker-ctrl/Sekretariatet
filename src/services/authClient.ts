@@ -197,7 +197,7 @@ export async function loginWithGoogleClient(): Promise<
       await signOut(auth);
       return {
         ok: false,
-        error: 'Kontot saknar tilldelad PasserSI-roll. Be en administratör bjuda in dig under Klubbadmin & Behörighet.',
+        error: 'Kontot saknar en tilldelad roll för LIVE-Appen. Be en administratör bjuda in dig under Klubbadmin & Behörighet.',
       };
     }
     const isOfficial = role.kind === 'OFFICIAL';

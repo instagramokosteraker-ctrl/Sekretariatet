@@ -160,7 +160,7 @@ export default async function handler(
       const response = await fetch(targetUrl, {
         headers: {
           ApiKey: apiKey,
-          'User-Agent': 'PasserSI/1.0 (Secretariat App)',
+          'User-Agent': 'LIVE-Appen/1.0 (Secretariat App)',
           Accept: 'application/xml, text/xml, text/plain, */*',
         },
         signal: controller.signal,

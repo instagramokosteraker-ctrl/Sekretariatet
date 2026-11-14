@@ -20,8 +20,8 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'PasserSI — SPORTident Inpassering',
-          short_name: 'PasserSI',
+          name: 'LIVE-Appen — SPORTident Inpassering',
+          short_name: 'LIVE-Appen',
           description:
             'Tidtagning, SPORTident-avläsning, startfålla, sträcktider och publik liverapportering för orientering.',
           theme_color: '#0f172a',

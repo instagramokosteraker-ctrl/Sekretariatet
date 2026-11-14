@@ -762,7 +762,7 @@ export default function App() {
   }, [activeEventId, authSession, firebaseUserUid]);
 
   useEffect(() => {
-    document.title = clubSettings.portalTitle?.trim() || 'PasserSI';
+    document.title = clubSettings.portalTitle?.trim() || 'LIVE-Appen';
   }, [clubSettings.portalTitle]);
 
   useEffect(() => {
@@ -2521,7 +2521,7 @@ export default function App() {
               />
             )}
             <span className="text-sm font-display font-bold tracking-tight truncate">
-              {clubSettings.portalTitle?.trim() || 'PasserSI'}
+              {clubSettings.portalTitle?.trim() || 'LIVE-Appen'}
             </span>
           </button>
         </div>
@@ -2749,7 +2749,7 @@ export default function App() {
                   />
                 )}
                 <span className="text-base font-display font-bold truncate">
-                  {clubSettings.portalTitle?.trim() || 'PasserSI'}
+                  {clubSettings.portalTitle?.trim() || 'LIVE-Appen'}
                 </span>
               </div>
               <button

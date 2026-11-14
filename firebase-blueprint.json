@@ -20,7 +20,7 @@
         },
         "role": {
           "type": "string",
-          "description": "Assigned administrative tier in PasserSI.",
+          "description": "Assigned administrative tier in LIVE-Appen.",
           "enum": ["SUPER_ADMIN", "RACE_ADMIN"],
           "minLength": 10,
           "maxLength": 11
@@ -1082,7 +1082,7 @@
   "firestore": {
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminRole" },
-      "description": "Non-PII RBAC collection mapping verified Firebase Auth UIDs to PasserSI administrative tiers."
+      "description": "Non-PII RBAC collection mapping verified Firebase Auth UIDs to LIVE-Appen administrative tiers."
     },
     "/adminInvites/{inviteId}": {
       "schema": { "$ref": "#/entities/AdminInvite" },

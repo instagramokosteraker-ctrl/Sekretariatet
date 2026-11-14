@@ -459,7 +459,7 @@ export function PublicPortalView({
               />
             )}
             <span className="text-sm sm:text-base font-display font-bold truncate">
-              {effectiveClubSettings?.portalTitle?.trim() || 'PasserSI Live'}
+              {effectiveClubSettings?.portalTitle?.trim() || 'LIVE-Appen'}
             </span>
             <span className="text-xs club-muted text-slate-500 dark:text-slate-400 hidden md:inline truncate">
               Liveresultat & sträcktider
@@ -628,7 +628,7 @@ export function PublicPortalView({
         <footer className="mt-4 club-surface bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
           <div className="w-full px-2 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs club-muted text-slate-500 dark:text-slate-400">
-              {effectiveClubSettings?.portalTitle?.trim() || 'PasserSI Live'} · Orienteringsresultat i realtid
+              {effectiveClubSettings?.portalTitle?.trim() || 'LIVE-Appen'} · Orienteringsresultat i realtid
             </span>
             <div className="flex flex-wrap items-center gap-1.5">
               <PWAInstallButton />
@@ -1063,7 +1063,7 @@ export function PublicPortalView({
             </div>
 
             <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              {effectiveClubSettings?.portalTitle?.trim() || effectiveClubSettings?.clubName || 'PasserSI'}
+              {effectiveClubSettings?.portalTitle?.trim() || effectiveClubSettings?.clubName || 'LIVE-Appen'}
             </span>
           </div>
         </div>

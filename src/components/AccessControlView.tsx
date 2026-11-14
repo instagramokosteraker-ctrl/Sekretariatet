@@ -2315,7 +2315,7 @@ export function AccessControlView({
                     maxLength={80}
                     value={clubForm.portalTitle ?? ''}
                     onChange={(e) => setClubForm((p) => ({ ...p, portalTitle: e.target.value }))}
-                    placeholder="t.ex. PasserSI eller OK Österåker"
+                    placeholder="t.ex. LIVE-Appen eller OK Österåker"
                     className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
                   />
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
@@ -2510,7 +2510,7 @@ export function AccessControlView({
                     ) : null}
                     <div className="min-w-0">
                       <div className="text-sm font-display font-bold truncate">
-                        {clubForm.portalTitle?.trim() || 'PasserSI Live'}
+                        {clubForm.portalTitle?.trim() || 'LIVE-Appen'}
                       </div>
                       <div className="text-[11px] club-muted text-slate-500 dark:text-slate-400 truncate">
                         {clubForm.clubName || 'Klubbnamn'} — Tävlingar & Träningar

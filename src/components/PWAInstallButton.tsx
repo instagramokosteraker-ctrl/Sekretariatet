@@ -39,7 +39,7 @@ export function PWAInstallButton() {
           <div className="mt-2 w-full max-w-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-3 text-xs text-slate-700 dark:text-slate-300">
             <div className="flex items-start justify-between gap-2">
               <span className="font-semibold text-slate-900 dark:text-slate-100">
-                Spara PasserSI i Safari
+                Spara LIVE-Appen i Safari
               </span>
               <button
                 type="button"

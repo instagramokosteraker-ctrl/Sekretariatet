@@ -127,7 +127,7 @@ ${
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<ResultList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="PasserSI MeOS Web">
+<ResultList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="LIVE-Appen MeOS Web">
   <Event>
     <Name>${escapeXml(competition.name)}</Name>
     <StartTime>
@@ -923,7 +923,7 @@ ${
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<StartList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="PasserSI">
+<StartList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="LIVE-Appen">
   <Event>
     <Name>${escapeXml(competition.name)}</Name>
     <StartTime>

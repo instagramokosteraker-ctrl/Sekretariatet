@@ -1729,7 +1729,7 @@ ${
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<ResultList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="PasserSI">
+<ResultList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="LIVE-Appen">
   <Event>
     <Id>${escapeXml(competition.shortCode)}</Id>
     <Name>${escapeXml(competition.name)}</Name>
@@ -1795,7 +1795,7 @@ ${
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<StartList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="PasserSI">
+<StartList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="LIVE-Appen">
   <Event>
     <Id>${escapeXml(competition.shortCode)}</Id>
     <Name>${escapeXml(competition.name)}</Name>
@@ -1823,7 +1823,7 @@ function saveSeasonDatabase(seasonDb: SeasonDatabase): void {
     fs.writeFileSync(tmpFile, JSON.stringify(seasonDb, null, 2), 'utf-8');
     fs.renameSync(tmpFile, SEASON_DB_FILE);
   } catch (err) {
-    console.error('Could not persist PasserSI season DB:', err);
+    console.error('Could not persist LIVE-Appen season DB:', err);
   }
 }
 
@@ -5895,7 +5895,7 @@ async function startServer() {
       !Array.isArray(restoredRunnerDb)
     ) {
       res.status(400).json({
-        error: 'Ogiltig säkerhetskopia. Filen måste vara en giltig PasserSI säsongsdatabas (.json).',
+        error: 'Ogiltig säkerhetskopia. Filen måste vara en giltig LIVE-Appen säsongsdatabas (.json).',
       });
       return;
     }
@@ -6056,8 +6056,8 @@ async function startServer() {
       res.setHeader('Cache-Control', 'no-store');
       res.json({
         id: '/',
-        name: 'PasserSI — SPORTident Inpassering',
-        short_name: 'PasserSI',
+        name: 'LIVE-Appen — SPORTident Inpassering',
+        short_name: 'LIVE-Appen',
         description:
           'Tidtagning, SPORTident-avläsning, startfålla, sträcktider och publik liverapportering för orientering.',
         theme_color: '#0f172a',
@@ -6099,7 +6099,7 @@ async function startServer() {
   if (!process.env.VERCEL) {
     const PORT = Number(process.env.PORT) || 3000;
     server.listen(PORT, '0.0.0.0', () => {
-      console.log(`PasserSI Multi-Event server running on http://0.0.0.0:${PORT}`);
+      console.log(`LIVE-Appen Multi-Event server running on http://0.0.0.0:${PORT}`);
     });
   }
 }

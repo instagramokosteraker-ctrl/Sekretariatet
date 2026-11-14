@@ -103,6 +103,7 @@ import {
   calculateClassStartDraw,
   type StartDrawMode,
 } from './utils/startListDraw';
+import { buildImportedCompetitorWriteFields } from './utils/importedCompetitorWrite';
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -305,7 +306,7 @@ function scheduleProactiveTokenRefresh(user: User): void {
 /**
  * Verifies that any cached Firebase Auth user has a valid, refreshable ID token BEFORE
  * Firestore opens a backend stream. If `securetoken.googleapis.com` is disabled in GCP,
- * signs out the stale Firebase Auth cache cleanly (leaving PasserSI's Secretariat session intact)
+ * signs out the stale Firebase Auth cache cleanly (leaving the LIVE-Appen Secretariat session intact)
  * so `@firebase/firestore` never fails with `Fetching auth token failed`.
  */
 export async function ensureValidFirestoreUser(forceRefresh = false): Promise<User | null> {
@@ -2007,7 +2008,7 @@ async function writeImportedCompetitorWithAssignment(params: {
           );
         }
         transaction.set(competitorRef, {
-          ...params.mutable,
+          ...buildImportedCompetitorWriteFields(params.mutable, 'CREATE'),
           competitorId,
           competitionId,
           ownerUid: params.ownerUid,
@@ -2055,7 +2056,7 @@ async function writeImportedCompetitorWithAssignment(params: {
       }
 
       transaction.update(competitorRef, {
-        ...params.mutable,
+        ...buildImportedCompetitorWriteFields(params.mutable, 'UPDATE'),
         updatedAt: serverTimestamp(),
       });
       return 'NOT_APPLICABLE';
