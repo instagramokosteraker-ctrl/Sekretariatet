@@ -1,18 +1,22 @@
 import React, { useMemo } from 'react';
 import { Award, Clock, Compass, Sparkles, Star, X } from 'lucide-react';
-import type { CompClass, Competitor, Course } from '../types/sportident';
+import type { CompClass, Course } from '../types/sportident';
 import {
   formatDurationMmSs,
   formatSecondsAsClock,
   formatSiNumber,
 } from '../services/sportidentProtocol';
 import { RunnerStatusIndicator } from './StatusLabels';
+import {
+  getCompetitorEffectiveStatus,
+  type CompetitorWithOptionalEffectiveStatus,
+} from '../utils/effectiveRunnerStatus';
 
 interface RunnerSplitCardModalProps {
-  runner: Competitor | null;
+  runner: CompetitorWithOptionalEffectiveStatus | null;
   compClass: CompClass | null;
   course: Course | null;
-  classCompetitors: Competitor[];
+  classCompetitors: CompetitorWithOptionalEffectiveStatus[];
   onClose: () => void;
 }
 
@@ -26,9 +30,18 @@ export function RunnerSplitCardModal({
   const isRogaining = compClass?.classFormat === 'ROGAINING';
 
   const placementInfo = useMemo(() => {
-    if (!runner || runner.status !== 'OK' || runner.runningTimeSec === null) return null;
+    if (
+      !runner ||
+      getCompetitorEffectiveStatus(runner) !== 'OK' ||
+      runner.runningTimeSec === null
+    ) {
+      return null;
+    }
     const okSorted = classCompetitors
-      .filter((c) => c.status === 'OK' && c.runningTimeSec !== null)
+      .filter(
+        (c) =>
+          getCompetitorEffectiveStatus(c) === 'OK' && c.runningTimeSec !== null
+      )
       .sort((a, b) => {
         if (isRogaining) {
           const pa = a.validation?.rogainingPoints ?? 0;
@@ -138,7 +151,10 @@ export function RunnerSplitCardModal({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <RunnerStatusIndicator status={runner.status} compact />
+          <RunnerStatusIndicator
+            status={getCompetitorEffectiveStatus(runner)}
+            compact
+          />
           <button
             type="button"
             onClick={onClose}

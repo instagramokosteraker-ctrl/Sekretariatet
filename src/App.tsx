@@ -3966,6 +3966,7 @@ export default function App() {
 
               {activeTab === 'forest' && (
                 <ForestSafetyView
+                  competition={competition}
                   competitors={competitors}
                   classes={classes}
                   zeroTimeSec={competition.zeroTimeSec}

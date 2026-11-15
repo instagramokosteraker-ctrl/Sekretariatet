@@ -8,8 +8,10 @@ import type {
   SIStation,
 } from '../types/sportident';
 import { formatDurationMmSs } from '../services/sportidentProtocol';
+import { useEffectiveCompetitors } from '../hooks/useEffectiveCompetitors';
 import { SplitsAnalysisTable } from './SplitsAnalysisTable';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
+import type { CompetitorWithEffectiveStatus } from '../utils/effectiveRunnerStatus';
 import {
   buildIofResultListXml,
   exportClassResultsCsv,
@@ -29,12 +31,14 @@ export function SpeakerResultsView({
   competition,
   courses,
   classes,
-  competitors,
+  competitors: rawCompetitors,
   stations,
   onOpenPublicPortal,
 }: SpeakerResultsViewProps) {
+  const competitors = useEffectiveCompetitors(rawCompetitors, competition);
   const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
-  const [inspectedRunner, setInspectedRunner] = useState<Competitor | null>(null);
+  const [inspectedRunner, setInspectedRunner] =
+    useState<CompetitorWithEffectiveStatus | null>(null);
   const [copiedLivelox, setCopiedLivelox] = useState<boolean>(false);
   const prewarningStations = stations.filter(
     (station) => station.active && station.stationFunction === 'PREWARNING'
@@ -49,8 +53,9 @@ export function SpeakerResultsView({
     return competitors
       .filter(
         (c) =>
-          c.status === 'PRELIMINARY_FIN' ||
-          (c.status === 'IN_FOREST' && c.radioSplits.some((r) => r.isPrewarning))
+          c.effectiveStatus === 'PRELIMINARY_FIN' ||
+          (c.effectiveStatus === 'IN_FOREST' &&
+            c.radioSplits.some((r) => r.isPrewarning))
       )
       .sort((a, b) => (b.lastSeenTimeSec ?? 0) - (a.lastSeenTimeSec ?? 0));
   }, [competitors]);
@@ -60,7 +65,7 @@ export function SpeakerResultsView({
       competition,
       classes,
       courses,
-      competitors,
+      competitors: rawCompetitors,
     });
     triggerTextFileDownload(
       `iof-resultat-3.0-${competition.date}.xml`,
@@ -130,7 +135,7 @@ export function SpeakerResultsView({
 
           <button
             type="button"
-            onClick={() => exportClassResultsCsv(competitors, classes)}
+            onClick={() => exportClassResultsCsv(rawCompetitors, classes)}
             className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
             <ArrowUp className="w-3.5 h-3.5" />
@@ -184,7 +189,7 @@ export function SpeakerResultsView({
                     </span>
                   </div>
                   <div className="text-right shrink-0 font-mono tabular-nums whitespace-nowrap">
-                    {r.status === 'PRELIMINARY_FIN' ? (
+                    {r.effectiveStatus === 'PRELIMINARY_FIN' ? (
                       <span className="font-semibold text-sky-700 dark:text-sky-400">
                         Prel. mål {formatDurationMmSs(r.runningTimeSec)}
                       </span>

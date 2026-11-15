@@ -21,6 +21,7 @@ import {
   formatSecondsAsClock,
   formatSiNumber,
 } from '../services/sportidentProtocol';
+import { useEffectiveCompetitors } from '../hooks/useEffectiveCompetitors';
 import { SplitsAnalysisTable } from './SplitsAnalysisTable';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { RunnerStatusIndicator } from './StatusLabels';
@@ -71,6 +72,10 @@ export function PublicPortalView({
   const [raceData, setRaceData] = useState<PublicRacePayload | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const effectiveCompetitors = useEffectiveCompetitors(
+    raceData?.competitors ?? [],
+    raceData?.competition ?? null
+  );
 
   const [activeTab, setActiveTab] = useState<PublicEventTab>('RESULTS');
   const [resultsGrouping, setResultsGrouping] = useState<'CLASS' | 'CLUB'>('CLASS');
@@ -383,9 +388,11 @@ export function PublicPortalView({
   const filteredCompetitors = useMemo(() => {
     if (!raceData) return [];
     return selectedClubName
-      ? raceData.competitors.filter((competitor) => competitor.club.trim() === selectedClubName)
-      : raceData.competitors;
-  }, [raceData, selectedClubName]);
+      ? effectiveCompetitors.filter(
+          (competitor) => competitor.club.trim() === selectedClubName
+        )
+      : effectiveCompetitors;
+  }, [effectiveCompetitors, raceData, selectedClubName]);
 
   // ============================================================================
   // VIEW A: SEASON OVERVIEW (/publik)
@@ -933,7 +940,10 @@ export function PublicPortalView({
                                       <span className="font-semibold">
                                         {formatDurationMmSs(r.runningTimeSec)}
                                       </span>
-                                      <RunnerStatusIndicator status={r.status} compact />
+                                      <RunnerStatusIndicator
+                                        status={r.effectiveStatus}
+                                        compact
+                                      />
                                     </div>
                                   </button>
                                   {isExpanded && (
@@ -948,7 +958,7 @@ export function PublicPortalView({
                                               (r.validation?.matchedCourseId ?? cls?.courseId)
                                           ) ?? null
                                         }
-                                        classCompetitors={raceData.competitors.filter(
+                                        classCompetitors={effectiveCompetitors.filter(
                                           (c) => c.classId === r.classId
                                         )}
                                         onClose={() => setInspectedRunner(null)}

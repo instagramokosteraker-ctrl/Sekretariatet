@@ -110,6 +110,7 @@ describe('sortCompetitorsByResult', () => {
         split(3, 33, 'OK', 420),
       ],
     });
+
     const faster = makeCompetitor('faster', 'MP', {
       splits: [
         split(1, 31, 'OK', 100),
@@ -134,6 +135,21 @@ describe('sortCompetitorsByResult', () => {
         { kind: 'default' }
       ).map((row) => row.id)
     ).toEqual(['more-punches', 'faster', 'slower']);
+  });
+
+  it('ranks a computed in-forest status with in-progress competitors', () => {
+    const overdueChecked = {
+      ...makeCompetitor('overdue-checked', 'CHECKED'),
+      effectiveStatus: 'IN_FOREST' as const,
+    };
+    const mp = makeCompetitor('mp', 'MP');
+    const registered = makeCompetitor('registered', 'REGISTERED');
+
+    expect(
+      sortCompetitorsByResult([registered, mp, overdueChecked], [], {
+        kind: 'default',
+      }).map((row) => row.id)
+    ).toEqual(['overdue-checked', 'mp', 'registered']);
   });
 
   it('sorts finished runners by the selected leg within their status group', () => {

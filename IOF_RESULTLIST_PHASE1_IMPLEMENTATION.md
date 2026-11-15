@@ -35,10 +35,11 @@ results. A controlled Eventor upload remains the next interoperability test.
   rental-card numbers.
 - Changed the XML creator label to `LIVE-Appen`.
 
-The Eventor identity gap remains: generated PasserSI class IDs are still
-written as IOF class IDs, and Eventor event/person/organisation IDs are not
-yet preserved by the current model. Those optional IDs are not XSD blockers,
-but may affect Eventor matching and are addressed by the roadmap's Phase 2.
+At the time of this Phase 1 implementation, Eventor identity fields were not
+included in the ResultList. A follow-up now emits preserved Eventor event,
+class, person, and organisation IDs when present; the controlled Eventor
+matching test for an ID-bearing result file remains a separate interoperability
+check.
 
 ## Automated XSD validation and regression coverage
 

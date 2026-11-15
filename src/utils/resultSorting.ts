@@ -1,4 +1,7 @@
-import type { Competitor } from '../types/sportident';
+import {
+  getCompetitorEffectiveStatus,
+  type CompetitorWithOptionalEffectiveStatus,
+} from './effectiveRunnerStatus';
 
 export type ResultSortMode =
   | { kind: 'default' }
@@ -11,20 +14,21 @@ interface MpProgress {
   validPunchCount: number;
 }
 
-function getStatusRank(competitor: Competitor): number {
-  if (competitor.status === 'OK' || competitor.status === 'PRELIMINARY_FIN') {
+function getStatusRank(competitor: CompetitorWithOptionalEffectiveStatus): number {
+  const status = getCompetitorEffectiveStatus(competitor);
+  if (status === 'OK' || status === 'PRELIMINARY_FIN') {
     return 0;
   }
-  if (competitor.status === 'IN_FOREST') return 1;
+  if (status === 'IN_FOREST') return 1;
 
-  const normalizedStatus = String(competitor.status)
+  const normalizedStatus = String(status)
     .toUpperCase()
     .replace(/[^A-Z]/g, '');
   if (['MP', 'DNF', 'DSQ', 'OVERTIME'].includes(normalizedStatus)) return 2;
   return 3;
 }
 
-function getMpProgress(competitor: Competitor): MpProgress {
+function getMpProgress(competitor: CompetitorWithOptionalEffectiveStatus): MpProgress {
   const splits = [...(competitor.validation?.splits ?? [])].sort(
     (a, b) => a.order - b.order
   );
@@ -65,21 +69,26 @@ function compareNullableTime(
   return timeA < timeB ? -1 : 1;
 }
 
-export function sortCompetitorsByResult(
-  competitors: Competitor[],
+export function sortCompetitorsByResult<
+  T extends CompetitorWithOptionalEffectiveStatus,
+>(
+  competitors: T[],
   officialOrder: string[],
   sortMode: ResultSortMode
-): Competitor[] {
+): T[] {
   const officialRank = new Map(
     officialOrder.map((competitorId, index) => [competitorId, index])
   );
   const mpProgress = new Map(
     competitors
-      .filter((competitor) => competitor.status === 'MP')
+      .filter((competitor) => getCompetitorEffectiveStatus(competitor) === 'MP')
       .map((competitor) => [competitor.id, getMpProgress(competitor)])
   );
 
-  const compareMp = (a: Competitor, b: Competitor): number => {
+  const compareMp = (
+    a: CompetitorWithOptionalEffectiveStatus,
+    b: CompetitorWithOptionalEffectiveStatus
+  ): number => {
     const progressA = mpProgress.get(a.id);
     const progressB = mpProgress.get(b.id);
     if (!progressA || !progressB) return 0;
@@ -94,7 +103,9 @@ export function sortCompetitorsByResult(
     return progressB.validPunchCount - progressA.validPunchCount;
   };
 
-  const getSelectedTime = (competitor: Competitor): number | null => {
+  const getSelectedTime = (
+    competitor: CompetitorWithOptionalEffectiveStatus
+  ): number | null => {
     if (sortMode.kind === 'bom') {
       return competitor.validation?.totalTimeLossSec ?? null;
     }
@@ -128,8 +139,8 @@ export function sortCompetitorsByResult(
     }
 
     if (rankA === 2) {
-      const isMpA = a.status === 'MP';
-      const isMpB = b.status === 'MP';
+      const isMpA = getCompetitorEffectiveStatus(a) === 'MP';
+      const isMpB = getCompetitorEffectiveStatus(b) === 'MP';
       if (isMpA !== isMpB) return isMpA ? -1 : 1;
       if (isMpA) {
         const mpDiff = compareMp(a, b);

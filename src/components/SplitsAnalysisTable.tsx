@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownUp, ChevronDown, ChevronUp, Zap } from 'lucide-react';
-import type { CompClass, Competitor, Course, SIStation } from '../types/sportident';
+import type { CompClass, Course, SIStation } from '../types/sportident';
+import type { CompetitorWithEffectiveStatus } from '../utils/effectiveRunnerStatus';
 import {
   formatDurationMmSs,
   formatSecondsAsClock,
@@ -84,11 +85,11 @@ function rankTimes<T>(
 interface SplitsAnalysisTableProps {
   classes: CompClass[];
   courses: Course[];
-  competitors: Competitor[];
+  competitors: CompetitorWithEffectiveStatus[];
   selectedClassId: string;
   onSelectClassId: (id: string) => void;
   onSelectClub?: (clubName: string) => void;
-  onInspectRunner?: (runner: Competitor) => void;
+  onInspectRunner?: (runner: CompetitorWithEffectiveStatus) => void;
   liveUpdates?: boolean;
   liveUpdateScope?: string;
   radioControls?: Pick<
@@ -270,7 +271,8 @@ export function SplitsAnalysisTable({
           const officialTimed = inClass
             .filter(
               (c) =>
-                (c.status === 'OK' || c.status === 'PRELIMINARY_FIN') &&
+                (c.effectiveStatus === 'OK' ||
+                  c.effectiveStatus === 'PRELIMINARY_FIN') &&
                 c.runningTimeSec !== null
             )
             .sort((a, b) => {
@@ -597,7 +599,8 @@ export function SplitsAnalysisTable({
                         const timedIdx = officialTimed.findIndex((t) => t.id === r.id);
                         const isRunning =
                           liveUpdates &&
-                          (r.status === 'IN_FOREST' || r.status === 'CHECKED') &&
+                          (r.effectiveStatus === 'IN_FOREST' ||
+                            r.effectiveStatus === 'CHECKED') &&
                           r.finishTimeSec === null;
                         const displayedTimeSec = isRunning
                           ? getLiveRunningTimeSec(
@@ -670,7 +673,7 @@ export function SplitsAnalysisTable({
                           >
                             <td className="py-1.5 pl-3 pr-1.5 font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap">
                               {timedIdx !== -1
-                                ? r.status === 'PRELIMINARY_FIN'
+                                ? r.effectiveStatus === 'PRELIMINARY_FIN'
                                   ? `(${timedIdx + 1})`
                                   : `${timedIdx + 1}.`
                                 : '—'}
@@ -1022,7 +1025,7 @@ export function SplitsAnalysisTable({
 
                             <td className="py-1.5 pl-1.5 pr-3 text-right whitespace-nowrap">
                               <RunnerStatusIndicator
-                                status={r.status}
+                                status={r.effectiveStatus}
                                 compact
                                 minimal={!detailedView}
                               />

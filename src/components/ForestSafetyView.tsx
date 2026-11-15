@@ -1,15 +1,22 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowUp, CheckCircle2, Search } from 'lucide-react';
-import type { CompClass, Competitor, RunnerStatus } from '../types/sportident';
+import type {
+  CompClass,
+  CompetitionMeta,
+  Competitor,
+  RunnerStatus,
+} from '../types/sportident';
 import {
   formatDurationMmSs,
   formatSecondsAsClock,
   formatSiNumber,
 } from '../services/sportidentProtocol';
+import { useEffectiveCompetitors } from '../hooks/useEffectiveCompetitors';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { exportForestSafetyCsv } from '../utils/iofXml';
 
 interface ForestSafetyViewProps {
+  competition: CompetitionMeta;
   competitors: Competitor[];
   classes: CompClass[];
   zeroTimeSec: number;
@@ -19,20 +26,22 @@ interface ForestSafetyViewProps {
 type ForestFilter = 'ALL_OUT' | 'IN_FOREST' | 'CHECKED' | 'PRELIMINARY_FIN' | 'UNCHECKED';
 
 export function ForestSafetyView({
-  competitors,
+  competition,
+  competitors: rawCompetitors,
   classes,
   zeroTimeSec,
   onUpdateRunnerStatus,
 }: ForestSafetyViewProps) {
+  const competitors = useEffectiveCompetitors(rawCompetitors, competition);
   const [filter, setFilter] = useState<ForestFilter>('ALL_OUT');
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [search, setSearch] = useState('');
 
   const counts = useMemo(() => {
-    const inForest = competitors.filter((c) => c.status === 'IN_FOREST').length;
-    const checked = competitors.filter((c) => c.status === 'CHECKED').length;
-    const prel = competitors.filter((c) => c.status === 'PRELIMINARY_FIN').length;
-    const unchecked = competitors.filter((c) => c.status === 'REGISTERED').length;
+    const inForest = competitors.filter((c) => c.effectiveStatus === 'IN_FOREST').length;
+    const checked = competitors.filter((c) => c.effectiveStatus === 'CHECKED').length;
+    const prel = competitors.filter((c) => c.effectiveStatus === 'PRELIMINARY_FIN').length;
+    const unchecked = competitors.filter((c) => c.effectiveStatus === 'REGISTERED').length;
     return {
       allOut: inForest + checked + prel,
       inForest,
@@ -48,19 +57,22 @@ export function ForestSafetyView({
       .filter((c) => {
         if (filter === 'ALL_OUT') {
           if (
-            c.status !== 'IN_FOREST' &&
-            c.status !== 'CHECKED' &&
-            c.status !== 'PRELIMINARY_FIN'
+            c.effectiveStatus !== 'IN_FOREST' &&
+            c.effectiveStatus !== 'CHECKED' &&
+            c.effectiveStatus !== 'PRELIMINARY_FIN'
           ) {
             return false;
           }
-        } else if (filter === 'IN_FOREST' && c.status !== 'IN_FOREST') {
+        } else if (filter === 'IN_FOREST' && c.effectiveStatus !== 'IN_FOREST') {
           return false;
-        } else if (filter === 'CHECKED' && c.status !== 'CHECKED') {
+        } else if (filter === 'CHECKED' && c.effectiveStatus !== 'CHECKED') {
           return false;
-        } else if (filter === 'PRELIMINARY_FIN' && c.status !== 'PRELIMINARY_FIN') {
+        } else if (
+          filter === 'PRELIMINARY_FIN' &&
+          c.effectiveStatus !== 'PRELIMINARY_FIN'
+        ) {
           return false;
-        } else if (filter === 'UNCHECKED' && c.status !== 'REGISTERED') {
+        } else if (filter === 'UNCHECKED' && c.effectiveStatus !== 'REGISTERED') {
           return false;
         }
 
@@ -219,7 +231,7 @@ export function ForestSafetyView({
                           : `Lottad ${formatSecondsAsClock(r.allocatedStartSec)}`}
                       </td>
                       <td className="hidden sm:table-cell py-1.5 px-2 font-mono tabular-nums whitespace-nowrap text-slate-600 dark:text-slate-400">
-                        {r.status === 'PRELIMINARY_FIN'
+                        {r.effectiveStatus === 'PRELIMINARY_FIN'
                           ? `Mål (${formatDurationMmSs(r.runningTimeSec)})`
                           : lastRadio
                           ? `(${lastRadio.controlCode}) ${formatDurationMmSs(
@@ -230,7 +242,7 @@ export function ForestSafetyView({
                           : '—'}
                       </td>
                       <td className="py-1.5 px-2 whitespace-nowrap">
-                        <RunnerStatusIndicator status={r.status} compact />
+                        <RunnerStatusIndicator status={r.effectiveStatus} compact />
                       </td>
                       <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">

@@ -16,6 +16,7 @@ import type {
   RunnerDbEntry,
   SICardSeries,
 } from '../types/sportident';
+import { useEffectiveCompetitors } from '../hooks/useEffectiveCompetitors';
 import {
   formatSecondsAsClock,
   formatSiNumber,
@@ -93,7 +94,7 @@ function getStockholmClockSecondsNow(): number {
 export function StartCorralView({
   competition,
   classes,
-  competitors,
+  competitors: rawCompetitors,
   runnerDb,
   serialStatus,
   capturedCard,
@@ -109,6 +110,7 @@ export function StartCorralView({
   onCreateCompetitor,
   onUpdateCompetitor,
 }: StartCorralViewProps) {
+  const competitors = useEffectiveCompetitors(rawCompetitors, competition);
   // Real-time 24h Swedish clock by default so BSM8 Pinnstart matches forest SI stations; Testklocka available for pre-race rehearsal
   const [clockMode, setClockMode] = useState<'REALTIME' | 'RACE_SIM'>('REALTIME');
   const [simBaseSec, setSimBaseSec] = useState<number>(() => competition.zeroTimeSec + 110);
@@ -227,7 +229,7 @@ export function StartCorralView({
 
       const waitingInList = competitors.filter(
         (c) =>
-          (c.status === 'REGISTERED' || c.status === 'CHECKED') &&
+          (c.effectiveStatus === 'REGISTERED' || c.effectiveStatus === 'CHECKED') &&
           c.id !== params.reassignedFromCompetitor?.id
       );
 
@@ -269,15 +271,15 @@ export function StartCorralView({
       const matched = competitors.find(
         (c) =>
           c.siNumber === siNumber &&
-          (c.status === 'REGISTERED' ||
-            c.status === 'CHECKED' ||
-            c.status === 'IN_FOREST' ||
-            c.status === 'PRELIMINARY_FIN')
+          (c.effectiveStatus === 'REGISTERED' ||
+            c.effectiveStatus === 'CHECKED' ||
+            c.effectiveStatus === 'IN_FOREST' ||
+            c.effectiveStatus === 'PRELIMINARY_FIN')
       );
 
       if (matched) {
         setPendingStartCard(null);
-        if (matched.status === 'PRELIMINARY_FIN') {
+        if (matched.effectiveStatus === 'PRELIMINARY_FIN') {
           if (soundEnabled) playMeosFeedbackTone('mp');
           setFeedbackNotice({
             tone: 'warn',
@@ -313,7 +315,7 @@ export function StartCorralView({
             },
           });
         } else {
-          if (matched.status === 'IN_FOREST') {
+          if (matched.effectiveStatus === 'IN_FOREST') {
             setFeedbackNotice({
               tone: 'warn',
               text: `#${matched.bib} ${matched.fullName} är redan registrerad som startad i skogen.`,
@@ -370,7 +372,7 @@ export function StartCorralView({
         actionAtDip: startUsbAction,
         dbOwner:
           dbOwner ??
-          (finishedOrDnsHolder && finishedOrDnsHolder.status !== 'DNS'
+          (finishedOrDnsHolder && finishedOrDnsHolder.effectiveStatus !== 'DNS'
             ? {
                 id: finishedOrDnsHolder.id,
                 siNumber: finishedOrDnsHolder.siNumber,
@@ -388,14 +390,14 @@ export function StartCorralView({
             : null),
         reassignedFromCompetitor:
           finishedOrDnsHolder &&
-          (finishedOrDnsHolder.status === 'OK' ||
-            finishedOrDnsHolder.status === 'MP' ||
-            finishedOrDnsHolder.status === 'DNS')
+          (finishedOrDnsHolder.effectiveStatus === 'OK' ||
+            finishedOrDnsHolder.effectiveStatus === 'MP' ||
+            finishedOrDnsHolder.effectiveStatus === 'DNS')
             ? {
                 id: finishedOrDnsHolder.id,
                 bib: finishedOrDnsHolder.bib,
                 fullName:
-                  finishedOrDnsHolder.status === 'DNS'
+                  finishedOrDnsHolder.effectiveStatus === 'DNS'
                     ? `${finishedOrDnsHolder.fullName} (Ej start / DNS)`
                     : `${finishedOrDnsHolder.fullName} (redan i mål)`,
               }
@@ -455,7 +457,7 @@ export function StartCorralView({
       const existingDns = competitors.find(
         (c) =>
           c.siNumber === pendingStartCard.siNumber &&
-          c.status === 'DNS' &&
+          c.effectiveStatus === 'DNS' &&
           c.fullName.trim().toLowerCase() === owner.fullName.trim().toLowerCase()
       );
 
@@ -609,7 +611,8 @@ export function StartCorralView({
 
   const handleSimulateStartDip = () => {
     const waitingRunners = competitors.filter(
-      (c) => c.status === 'REGISTERED' || c.status === 'CHECKED'
+      (c) =>
+        c.effectiveStatus === 'REGISTERED' || c.effectiveStatus === 'CHECKED'
     );
     if (waitingRunners.length > 0) {
       const picked = waitingRunners[simCursorRef.current % waitingRunners.length];
@@ -663,12 +666,12 @@ export function StartCorralView({
       .filter((r) => {
         const cls = classes.find((c) => c.id === r.classId);
         if (classFilter !== 'ALL' && r.classId !== classFilter) return false;
-        if (statusFilter === 'NOT_STARTED' && r.status !== 'REGISTERED') return false;
-        if (statusFilter === 'CHECKED' && r.status !== 'CHECKED') return false;
+        if (statusFilter === 'NOT_STARTED' && r.effectiveStatus !== 'REGISTERED') return false;
+        if (statusFilter === 'CHECKED' && r.effectiveStatus !== 'CHECKED') return false;
         if (statusFilter === 'FREE_START' && !cls?.freeStart && r.allocatedStartSec !== null) {
           return false;
         }
-        if (statusFilter === 'DNS' && r.status !== 'DNS') return false;
+        if (statusFilter === 'DNS' && r.effectiveStatus !== 'DNS') return false;
 
         if (!q) return true;
         return (
@@ -728,15 +731,15 @@ export function StartCorralView({
     }
   };
 
-  const checkedCount = competitors.filter((c) => c.status === 'CHECKED').length;
+  const checkedCount = competitors.filter((c) => c.effectiveStatus === 'CHECKED').length;
   const startedCount = competitors.filter(
     (c) =>
-      c.status === 'IN_FOREST' ||
-      c.status === 'PRELIMINARY_FIN' ||
-      c.status === 'OK' ||
-      c.status === 'MP'
+      c.effectiveStatus === 'IN_FOREST' ||
+      c.effectiveStatus === 'PRELIMINARY_FIN' ||
+      c.effectiveStatus === 'OK' ||
+      c.effectiveStatus === 'MP'
   ).length;
-  const waitingCount = competitors.filter((c) => c.status === 'REGISTERED').length;
+  const waitingCount = competitors.filter((c) => c.effectiveStatus === 'REGISTERED').length;
 
   return (
     <div className="space-y-3.5">
@@ -865,7 +868,7 @@ export function StartCorralView({
           const isPunch = pendingStartCard.actionAtDip === 'PUNCH_START';
           const q = borrowSearch.trim().toLowerCase();
           const assignableRunners = competitors.filter((c) => {
-            if (c.status !== 'REGISTERED' && c.status !== 'CHECKED') return false;
+            if (c.effectiveStatus !== 'REGISTERED' && c.effectiveStatus !== 'CHECKED') return false;
             if (c.id === pendingStartCard.reassignedFromCompetitor?.id) return false;
             if (!q) return true;
             return (
@@ -981,7 +984,7 @@ export function StartCorralView({
               {/* Option 2: Assign stick (Brickbyte) to an already pre-entered runner in today's start list */}
               {competitors.some(
                 (c) =>
-                  (c.status === 'REGISTERED' || c.status === 'CHECKED') &&
+                  (c.effectiveStatus === 'REGISTERED' || c.effectiveStatus === 'CHECKED') &&
                   c.id !== pendingStartCard.reassignedFromCompetitor?.id
               ) && (
                 <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2.5 space-y-2">
@@ -997,7 +1000,7 @@ export function StartCorralView({
                         const val = e.target.value;
                         setBorrowSearch(val);
                         const firstMatch = competitors.find((c) => {
-                          if (c.status !== 'REGISTERED' && c.status !== 'CHECKED') return false;
+                          if (c.effectiveStatus !== 'REGISTERED' && c.effectiveStatus !== 'CHECKED') return false;
                           if (c.id === pendingStartCard.reassignedFromCompetitor?.id) return false;
                           const ql = val.trim().toLowerCase();
                           if (!ql) return true;
@@ -1371,10 +1374,10 @@ export function StartCorralView({
 
                 const startClock =
                   r.startTimeSec !== null &&
-                  (r.status === 'IN_FOREST' ||
-                    r.status === 'PRELIMINARY_FIN' ||
-                    r.status === 'OK' ||
-                    r.status === 'MP') ? (
+                  (r.effectiveStatus === 'IN_FOREST' ||
+                    r.effectiveStatus === 'PRELIMINARY_FIN' ||
+                    r.effectiveStatus === 'OK' ||
+                    r.effectiveStatus === 'MP') ? (
                     <span
                       className="text-emerald-700 dark:text-emerald-400"
                       title="Registrerad starttid"
@@ -1465,7 +1468,7 @@ export function StartCorralView({
                     </td>
 
                     <td className="hidden lg:table-cell py-1.5 px-2 whitespace-nowrap">
-                      <RunnerStatusIndicator status={r.status} compact />
+                      <RunnerStatusIndicator status={r.effectiveStatus} compact />
                     </td>
 
                     <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">

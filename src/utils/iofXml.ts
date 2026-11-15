@@ -8,6 +8,10 @@ import type {
   SplitLegResult,
 } from '../types/sportident';
 import { formatDurationMmSs, formatSecondsAsClock } from '../services/sportidentProtocol';
+import {
+  getCompetitorEffectiveStatus,
+  type CompetitorWithOptionalEffectiveStatus,
+} from './effectiveRunnerStatus';
 
 function escapeXml(str: string): string {
   return str
@@ -16,6 +20,10 @@ function escapeXml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function buildIofIdElement(id: string | undefined, indentation: string): string {
+  return id?.trim() ? `${indentation}<Id>${escapeXml(id)}</Id>\n` : '';
 }
 
 function secondsToIsoToday(dateStr: string, sec: number | null): string | null {
@@ -192,13 +200,13 @@ export function buildIofResultListXml(params: {
 
           return `    <PersonResult>
       <Person>
-        <Name>
+${buildIofIdElement(runner.eventorPersonId, '        ')}        <Name>
           <Family>${escapeXml(family)}</Family>
           <Given>${escapeXml(given)}</Given>
         </Name>
       </Person>
       <Organisation>
-        <Name>${escapeXml(runner.club)}</Name>
+${buildIofIdElement(runner.eventorOrgId, '        ')}        <Name>${escapeXml(runner.club)}</Name>
       </Organisation>
       <Result>
         <BibNumber>${runner.bib}</BibNumber>
@@ -220,8 +228,7 @@ ${splitElements ? splitElements + '\n' : ''}${controlCardElement}      </Result>
 
       return `  <ClassResult>
     <Class>
-      <Id>${escapeXml(cls.id)}</Id>
-      <Name>${escapeXml(cls.name)}</Name>
+${buildIofIdElement(cls.eventorClassId, '      ')}      <Name>${escapeXml(cls.name)}</Name>
     </Class>
 ${
   course
@@ -237,7 +244,7 @@ ${
   return `<?xml version="1.0" encoding="UTF-8"?>
 <ResultList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="LIVE-Appen" status="${resultListStatus}">
   <Event>
-    <Name>${escapeXml(competition.name)}</Name>
+${buildIofIdElement(competition.eventorEventId, '    ')}    <Name>${escapeXml(competition.name)}</Name>
     <StartTime>
       <Date>${escapeXml(competition.date)}</Date>
       <Time>${escapeXml(competition.zeroTimeStr)}</Time>
@@ -928,11 +935,14 @@ export function triggerTextFileDownload(filename: string, content: string, mimeT
 }
 
 export function exportForestSafetyCsv(
-  competitors: Competitor[],
+  competitors: CompetitorWithOptionalEffectiveStatus[],
   classes: CompClass[]
 ): void {
   const inForest = competitors.filter(
-    (c) => c.status === 'CHECKED' || c.status === 'IN_FOREST' || c.status === 'PRELIMINARY_FIN'
+    (c) =>
+      ['CHECKED', 'IN_FOREST', 'PRELIMINARY_FIN'].includes(
+        getCompetitorEffectiveStatus(c)
+      )
   );
   const rows: string[][] = [
     [
@@ -956,7 +966,7 @@ export function exportForestSafetyCsv(
         cls,
         String(c.siNumber),
         c.isRentalCard ? 'Ja' : 'Nej',
-        c.status,
+        getCompetitorEffectiveStatus(c),
         formatSecondsAsClock(c.startTimeSec ?? c.allocatedStartSec),
         c.lastSeenControl ? `(${c.lastSeenControl})` : '-',
         formatSecondsAsClock(c.lastSeenTimeSec),

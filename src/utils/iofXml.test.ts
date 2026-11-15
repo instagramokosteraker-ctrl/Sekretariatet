@@ -140,6 +140,36 @@ describe('IOF ResultList XML export', () => {
     expect(() => expectValidIoFXml(invalidNameOrder)).toThrow();
   });
 
+  it('exports Eventor identities instead of internal document IDs', () => {
+    const xml = buildIofResultListXml({
+      competition: { ...competition, eventorEventId: '59797' },
+      classes: [{ ...eventClass, eventorClassId: '1234' }],
+      courses: [course],
+      competitors: [
+        runner('cmp-internal', 'DNS', {
+          eventorPersonId: '31889',
+          eventorOrgId: '636',
+        }),
+      ],
+    });
+
+    expect(xml).toContain('<Event>\n    <Id>59797</Id>');
+    expect(xml).toContain('<Class>\n      <Id>1234</Id>');
+    expect(xml).toContain('<Person>\n        <Id>31889</Id>');
+    expect(xml).toContain('<Organisation>\n        <Id>636</Id>');
+    expect(xml).not.toContain('<Id>evt-1</Id>');
+    expect(xml).not.toContain('<Id>cls-1</Id>');
+    expect(xml).not.toContain('<Id>cmp-internal</Id>');
+    expectValidIoFXml(xml);
+  });
+
+  it('omits absent Eventor identities and keeps the ResultList schema-valid', () => {
+    const xml = buildXml([runner('cmp-internal', 'DNS')]);
+
+    expect(xml).not.toContain('<Id>');
+    expectValidIoFXml(xml);
+  });
+
   it('uses snapshot/complete status and maps preliminary and unstarted runners accurately', () => {
     const xml = buildXml(
       [
