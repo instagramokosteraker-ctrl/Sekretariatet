@@ -331,6 +331,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     await assertSucceeds(
       raceAdminCtx.firestore().doc('competitions/evt_new').set({
         competitionId: 'evt_new',
+        eventorEventId: 'eventor-event-123',
         shortCode: 'nw26',
         name: 'Ny tävling',
         organizer: 'OK Österåker',
@@ -343,6 +344,44 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         competitorCount: 0,
         finishedCount: 0,
         brokenControls: [],
+        ownerUid: 'race_admin_1',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertSucceeds(
+      raceAdminCtx.firestore().doc('competitions/evt_new/classes/cls_eventor').set({
+        classId: 'cls_eventor',
+        competitionId: 'evt_new',
+        eventorClassId: 'eventor-class-123',
+        name: 'D21',
+        courseId: '',
+        classFormat: 'STANDARD',
+        forkCourseIds: [],
+        rogainingMaxTimeSec: -1,
+        rogainingPenaltyPerMin: -1,
+        allowDirectEntry: true,
+        freeStart: true,
+        autoMatchCourse: true,
+        ownerUid: 'race_admin_1',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      raceAdminCtx.firestore().doc('competitions/evt_new/classes/cls_bad_eventor_id').set({
+        classId: 'cls_bad_eventor_id',
+        competitionId: 'evt_new',
+        eventorClassId: 123,
+        name: 'D22',
+        courseId: '',
+        classFormat: 'STANDARD',
+        forkCourseIds: [],
+        rogainingMaxTimeSec: -1,
+        rogainingPenaltyPerMin: -1,
+        allowDirectEntry: true,
+        freeStart: true,
+        autoMatchCourse: true,
         ownerUid: 'race_admin_1',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -378,6 +417,12 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       raceAdminCtx.firestore().doc('competitions/evt_live').update({
         competitorCount: 11,
         finishedCount: 6,
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      raceAdminCtx.firestore().doc('competitions/evt_live').update({
+        eventorEventId: 'historical-event-should-not-be-added',
         updatedAt: serverTimestamp(),
       })
     );
@@ -473,6 +518,8 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         cardSeries: 'SI-Card 10',
         isRentalCard: false,
         rentalReturned: false,
+        eventorPersonId: 'eventor-person-123',
+        eventorOrgId: 'eventor-org-123',
         status: 'REGISTERED',
         allocatedStartSec: -1,
         checkTimeSec: -1,
@@ -572,6 +619,32 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     );
     // Competitor creation is now accepted only with its matching assignment.
     await assertSucceeds(initialCompetitorBatch.commit());
+    const invalidEventorIdentityBatch = writeBatch(raceAdminCtx.firestore());
+    invalidEventorIdentityBatch.set(
+      doc(
+        raceAdminCtx.firestore(),
+        'competitions/evt_live/competitors/cmp_bad_eventor_id'
+      ),
+      {
+        ...initialCompetitor,
+        competitorId: 'cmp_bad_eventor_id',
+        siNumber: 8500196,
+        eventorPersonId: 123,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+    );
+    invalidEventorIdentityBatch.set(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/siCardAssignments/8500196'),
+      {
+        ...siCardAssignment,
+        competitorId: 'cmp_bad_eventor_id',
+        competitorDocumentId: 'cmp_bad_eventor_id',
+        siNumber: 8500196,
+        source: 'IMPORT',
+      }
+    );
+    await assertFails(invalidEventorIdentityBatch.commit());
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await context
         .firestore()

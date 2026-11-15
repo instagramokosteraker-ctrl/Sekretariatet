@@ -2047,32 +2047,62 @@ export default function App() {
         : getStockholmTodayIso();
     const zeroTimeStr = '18:00:00';
     const zeroTimeSec = parseTimeToSec(zeroTimeStr);
-    const classNames = new Map<string, string>();
+    const classDefinitions = new Map<
+      string,
+      { name: string; eventorClassId?: string }
+    >();
+    const addClassDefinition = (rawName: string, eventorClassId?: string | null) => {
+      const className = rawName.trim().slice(0, 80);
+      if (!className) return;
+      const normalizedName = className.toLocaleLowerCase();
+      const key = eventorClassId
+        ? `eventor:${eventorClassId}`
+        : `name:${normalizedName}`;
+      if (!classDefinitions.has(key)) {
+        classDefinitions.set(key, {
+          name: className,
+          ...(eventorClassId ? { eventorClassId } : {}),
+        });
+      }
+    };
     for (const eventClass of parsed.classes) {
-      const className = eventClass.name.trim().slice(0, 80);
-      if (className) classNames.set(className.toLocaleLowerCase(), className);
+      addClassDefinition(eventClass.name, eventClass.id || null);
     }
     for (const entry of parsed.entries) {
-      const className = entry.className.trim().slice(0, 80);
-      if (className) classNames.set(className.toLocaleLowerCase(), className);
+      addClassDefinition(entry.className, entry.eventorClassId);
     }
-    if (classNames.size === 0) {
-      classNames.set('öppen', 'Öppen');
+    if (classDefinitions.size === 0) {
+      addClassDefinition('Öppen');
     }
 
-    const classes: CompClass[] = Array.from(classNames.values()).map((className, index) => ({
-      id: `evtcls-${now}-${index + 1}`,
-      name: className,
-      courseId: null,
-      classFormat: 'STANDARD',
-      forkCourseIds: [],
-      allowDirectEntry: true,
-      freeStart: true,
-      autoMatchCourse: true,
-    }));
-    const classIdByName = new Map(
-      classes.map((eventClass) => [eventClass.name.toLocaleLowerCase(), eventClass.id])
+    const classes: CompClass[] = Array.from(classDefinitions.values()).map(
+      (definition, index) => ({
+        id: `evtcls-${now}-${index + 1}`,
+        ...(definition.eventorClassId
+          ? { eventorClassId: definition.eventorClassId }
+          : {}),
+        name: definition.name,
+        courseId: null,
+        classFormat: 'STANDARD',
+        forkCourseIds: [],
+        allowDirectEntry: true,
+        freeStart: true,
+        autoMatchCourse: true,
+      })
     );
+    const classIdByEventorId = new Map<string, string>();
+    for (const eventClass of classes) {
+      if (eventClass.eventorClassId) {
+        classIdByEventorId.set(eventClass.eventorClassId, eventClass.id);
+      }
+    }
+    const classIdByName = new Map<string, string>();
+    for (const eventClass of classes) {
+      const key = eventClass.name.toLocaleLowerCase();
+      if (!classIdByName.has(key)) {
+        classIdByName.set(key, eventClass.id);
+      }
+    }
     const seenSiNumbers = new Set<number>();
     for (const entry of parsed.entries) {
       if (entry.siNumber > 0) {
@@ -2094,7 +2124,14 @@ export default function App() {
         bib,
         fullName: entry.fullName.trim(),
         club: entry.club.trim(),
-        classId: classIdByName.get(entry.className.trim().toLocaleLowerCase()) ?? classes[0].id,
+        classId:
+          (entry.eventorClassId
+            ? classIdByEventorId.get(entry.eventorClassId)
+            : undefined) ??
+          classIdByName.get(entry.className.trim().toLocaleLowerCase()) ??
+          classes[0].id,
+        ...(entry.personId ? { eventorPersonId: entry.personId } : {}),
+        ...(entry.eventorOrgId ? { eventorOrgId: entry.eventorOrgId } : {}),
         siNumber,
         cardSeries: entry.siNumber > 0 ? inferCardSeries(siNumber) : 'SI-Card 10',
         isRentalCard: !(entry.siNumber > 0),
@@ -2137,6 +2174,9 @@ export default function App() {
     }
     const competition: CompetitionMeta = {
       id: competitionId,
+      ...(parsed.event?.eventId
+        ? { eventorEventId: parsed.event.eventId }
+        : {}),
       shortCode,
       name: name || `Eventor ${parsed.event?.eventId || fallbackName}`,
       organizer: parsed.event?.organizer || clubSettings.clubName || 'OK Österåker',
@@ -2151,6 +2191,8 @@ export default function App() {
 
     await createCompetitionInFirestore({
       competitionId,
+      preserveEventorIdentities: true,
+      eventorEventId: competition.eventorEventId,
       shortCode,
       name: competition.name,
       organizer: competition.organizer,
@@ -2166,6 +2208,7 @@ export default function App() {
     try {
       await saveCompetitionImportToFirestore({
         competitionId,
+        preserveEventorIdentities: true,
         courses: [],
         classes,
         competitors,

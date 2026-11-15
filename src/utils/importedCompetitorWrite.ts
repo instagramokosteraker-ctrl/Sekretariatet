@@ -4,5 +4,9 @@ export function buildImportedCompetitorWriteFields(
 ): Record<string, unknown> {
   const fields = { ...mutable };
   delete fields.rentalReturned;
+  if (mode === 'UPDATE') {
+    delete fields.eventorPersonId;
+    delete fields.eventorOrgId;
+  }
   return mode === 'CREATE' ? { ...fields, rentalReturned: false } : fields;
 }

@@ -465,6 +465,18 @@ export function sanitizeFirestoreId(raw: string, fallbackPrefix = 'id'): string 
   return cleaned;
 }
 
+function normalizeOptionalEventorId(
+  value: string | undefined,
+  fieldName: string
+): string | undefined {
+  const id = value?.trim();
+  if (!id) return undefined;
+  if (id.length > 128) {
+    throw new Error(`Eventor ${fieldName}-ID överstiger 128 tecken.`);
+  }
+  return id;
+}
+
 export { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from './types/sportident';
 
 function getCompetitionSICardAssignmentRef(
@@ -2634,6 +2646,7 @@ export async function loadFullSeasonFromFirestore(options?: {
       for (const d of clsSnap.docs) {
         const cld = d.data() as {
           classId: string;
+          eventorClassId?: string;
           name: string;
           courseId: string;
           classFormat: ClassCompetitionFormat;
@@ -2646,6 +2659,9 @@ export async function loadFullSeasonFromFirestore(options?: {
         };
         classes.push({
           id: cld.classId || d.id,
+          ...(typeof cld.eventorClassId === 'string'
+            ? { eventorClassId: cld.eventorClassId }
+            : {}),
           name: cld.name || 'Klass',
           courseId: cld.courseId ? cld.courseId : null,
           classFormat: cld.classFormat || 'STANDARD',
@@ -2702,6 +2718,8 @@ export async function loadFullSeasonFromFirestore(options?: {
       for (const d of cmpSnap.docs) {
         const cmd = d.data() as {
           competitorId: string;
+          eventorPersonId?: string;
+          eventorOrgId?: string;
           bib: number;
           fullName: string;
           club: string;
@@ -2751,6 +2769,12 @@ export async function loadFullSeasonFromFirestore(options?: {
 
         competitors.push({
           id: cmd.competitorId || d.id,
+          ...(typeof cmd.eventorPersonId === 'string'
+            ? { eventorPersonId: cmd.eventorPersonId }
+            : {}),
+          ...(typeof cmd.eventorOrgId === 'string'
+            ? { eventorOrgId: cmd.eventorOrgId }
+            : {}),
           bib: Number(cmd.bib || 1),
           fullName: cmd.fullName || 'Deltagare',
           club: cmd.club || 'Klubblös',
@@ -2893,6 +2917,9 @@ export async function loadFullSeasonFromFirestore(options?: {
     events.push({
       competition: {
         id: competitionId,
+        ...(typeof compDocData.eventorEventId === 'string'
+          ? { eventorEventId: compDocData.eventorEventId }
+          : {}),
         shortCode: String(compDocData.shortCode || 'oko26'),
         status,
         statusOverride: Boolean(compDocData.statusOverride),
@@ -3070,6 +3097,7 @@ export function subscribeRunnerDbFromFirestore(
 
 export async function saveCompetitionImportToFirestore(params: {
   competitionId: string;
+  preserveEventorIdentities?: boolean;
   courses: Course[];
   classes: CompClass[];
   competitors: Competitor[];
@@ -3211,6 +3239,9 @@ export async function saveCompetitionImportToFirestore(params: {
 
   for (const cls of params.classes) {
     const id = sanitizeFirestoreId(cls.id, 'cls');
+    const eventorClassId = params.preserveEventorIdentities
+      ? normalizeOptionalEventorId(cls.eventorClassId, 'klass')
+      : undefined;
     const classFormat: ClassCompetitionFormat =
       cls.classFormat === 'FORKED' || cls.classFormat === 'ROGAINING'
         ? cls.classFormat
@@ -3238,6 +3269,7 @@ export async function saveCompetitionImportToFirestore(params: {
       classId: id,
       competitionId,
       ...mutable,
+      ...(eventorClassId ? { eventorClassId } : {}),
       ownerUid,
       ...nowFields,
     });
@@ -3261,6 +3293,12 @@ export async function saveCompetitionImportToFirestore(params: {
     if (!Number.isInteger(siNumber) || siNumber < 1 || siNumber > 99999999) {
       throw new Error(`Deltagare ${id} har ett ogiltigt SI-nummer.`);
     }
+    const eventorPersonId = params.preserveEventorIdentities
+      ? normalizeOptionalEventorId(competitor.eventorPersonId, 'person')
+      : undefined;
+    const eventorOrgId = params.preserveEventorIdentities
+      ? normalizeOptionalEventorId(competitor.eventorOrgId, 'organisation')
+      : undefined;
     const mutable = {
       bib: clampInt(competitor.bib, 1, 99999, 1),
       fullName: (competitor.fullName || 'Deltagare').trim().slice(0, 120) || 'Deltagare',
@@ -3279,6 +3317,8 @@ export async function saveCompetitionImportToFirestore(params: {
       readoutAtIso: (competitor.readoutAt || '').slice(0, 40),
       punchCodes: punches.map((punch) => clampInt(punch.code, 1, 999, 31)),
       punchTimes: punches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
+      ...(eventorPersonId ? { eventorPersonId } : {}),
+      ...(eventorOrgId ? { eventorOrgId } : {}),
     };
     competitorWrites.push({
       competitorId: id,
@@ -4379,6 +4419,9 @@ export function subscribeClassesFromFirestore(
           const data = classDoc.data();
           return {
             id: typeof data.classId === 'string' ? data.classId : classDoc.id,
+            ...(typeof data.eventorClassId === 'string'
+              ? { eventorClassId: data.eventorClassId }
+              : {}),
             name: typeof data.name === 'string' ? data.name : 'Klass',
             courseId: typeof data.courseId === 'string' && data.courseId ? data.courseId : null,
             classFormat:
@@ -7110,6 +7153,8 @@ export function subscribeActiveEventIdFromFirestore(
 
 export interface CreateCompetitionInFirestoreParams {
   competitionId: string;
+  preserveEventorIdentities?: boolean;
+  eventorEventId?: string;
   shortCode?: string;
   name: string;
   organizer?: string;
@@ -7176,6 +7221,9 @@ export async function createCompetitionInFirestore(
   const arenaInfo = (params.arenaInfo ?? '').trim().slice(0, 500);
   const seriesName = (params.seriesName ?? '').trim().slice(0, 80);
   const allowSelfRegistration = Boolean(params.allowSelfRegistration);
+  const eventorEventId = params.preserveEventorIdentities
+    ? normalizeOptionalEventorId(params.eventorEventId, 'event')
+    : undefined;
 
   // Required keys per firestore.rules isValidCloudCompetition.
   const compDocData = {
@@ -7189,6 +7237,7 @@ export async function createCompetitionInFirestore(
     zeroTimeSec,
     arenaInfo,
     seriesName,
+    ...(eventorEventId ? { eventorEventId } : {}),
     allowSelfRegistration,
     competitorCount: 0,
     finishedCount: 0,
@@ -7280,6 +7329,9 @@ export async function createCompetitionInFirestore(
         cls.classFormat === 'FORKED' || cls.classFormat === 'ROGAINING'
           ? cls.classFormat
           : 'STANDARD';
+      const eventorClassId = params.preserveEventorIdentities
+        ? normalizeOptionalEventorId(cls.eventorClassId, 'klass')
+        : undefined;
       childBatchOps.push({
         kind: 'set',
         ref: clsRef,
@@ -7288,6 +7340,7 @@ export async function createCompetitionInFirestore(
           classId,
           competitionId,
           name: (cls.name || 'Klass').trim().slice(0, 80) || 'Klass',
+          ...(eventorClassId ? { eventorClassId } : {}),
           courseId: cls.courseId ? sanitizeFirestoreId(cls.courseId, 'crs') : '',
           classFormat,
           forkCourseIds: (cls.forkCourseIds || [])

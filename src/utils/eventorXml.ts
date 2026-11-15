@@ -19,8 +19,10 @@ export interface ParsedEventorEntry {
   fullName: string;
   club: string;
   className: string;
+  eventorClassId: string | null;
   siNumber: number;
   personId: string | null;
+  eventorOrgId: string | null;
 }
 
 export interface ParsedEventorRunner {
@@ -74,6 +76,14 @@ function firstElement(parent: ParentNode, names: string[]): Element | null {
 
 function textFrom(parent: ParentNode, names: string[]): string {
   return firstElement(parent, names)?.textContent?.trim() ?? '';
+}
+
+function readExternalId(value: string, label: string): string {
+  const id = value.trim();
+  if (id.length > 128) {
+    throw new Error(`Eventor ${label}-ID överstiger 128 tecken.`);
+  }
+  return id;
 }
 
 function directClassName(element: Element): string {
@@ -141,7 +151,10 @@ function parseEvent(
     : textFrom(event, ['OrganiserName', 'OrganizerName']);
   const dateValue = textFrom(event, ['StartDate', 'EventDate', 'Date']);
   const date = dateValue.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
-  const eventId = requestedEventId || textFrom(event, ['EventId', 'Id']);
+  const eventId = readExternalId(
+    requestedEventId || textFrom(event, ['EventId', 'Id']),
+    'event'
+  );
   return {
     eventId,
     name: name.slice(0, 140),
@@ -170,12 +183,12 @@ function parseClasses(document: ParentNode | null): ParsedEventorClass[] {
   const classElements = elementsByName(document, ['EventClass', 'Class']);
   const classesById = new Map<string, ParsedEventorClass>();
   for (const element of classElements) {
-    const id = textFrom(element, ['EventClassId', 'Id']);
+    const id = readExternalId(textFrom(element, ['EventClassId', 'Id']), 'klass');
     const name = directClassName(element);
     if (!name) continue;
     const key = id || name;
     if (!classesById.has(key)) {
-      classesById.set(key, { id: id.slice(0, 128), name: name.slice(0, 80) });
+      classesById.set(key, { id, name: name.slice(0, 80) });
     }
   }
   return Array.from(classesById.values());
@@ -198,18 +211,21 @@ function parsePersonEntry(
   ).slice(0, 120);
   if (!fullName) return null;
 
-  const personId = textFrom(person, ['PersonId', 'Id']).slice(0, 128) || null;
+  const personId =
+    readExternalId(textFrom(person, ['PersonId', 'Id']), 'person') || null;
   const organization = firstElement(element, ['Organisation', 'Organization']);
+  const eventorOrgId = organization
+    ? readExternalId(
+        textFrom(organization, ['OrganisationId', 'OrganizationId', 'Id']),
+        'organisation'
+      ) || null
+    : null;
   const club = (
     (organization ? textFrom(organization, ['Name', 'ShortName']) : '') ||
     fallbackOrgName ||
     'Klubblös'
   ).slice(0, 100);
-  const orgId = (
-    (organization
-      ? textFrom(organization, ['OrganisationId', 'OrganizationId', 'Id'])
-      : '') || fallbackOrgId
-  ).slice(0, 32);
+  const orgId = ((eventorOrgId || fallbackOrgId).trim()).slice(0, 32);
   let inheritedClass: Element | null = null;
   let ancestor = element.parentElement;
   while (ancestor && !inheritedClass) {
@@ -222,9 +238,9 @@ function parsePersonEntry(
   const entryClass =
     firstElement(element, ['EntryClass', 'EventClass', 'Class']) ??
     inheritedClass;
-  const classId = entryClass
+  const classId = readExternalId(entryClass
     ? textFrom(entryClass, ['EventClassId', 'Id'])
-    : textFrom(element, ['EventClassId']);
+    : textFrom(element, ['EventClassId']), 'klass');
   const className = (
     (classId ? classNames.get(classId) : '') ||
     (entryClass ? directClassName(entryClass) : '') ||
@@ -253,7 +269,15 @@ function parsePersonEntry(
       eventorOrgId: orgId || null,
     });
   }
-  return { fullName, club, className, siNumber, personId };
+  return {
+    fullName,
+    club,
+    className,
+    eventorClassId: classId || null,
+    siNumber,
+    personId,
+    eventorOrgId,
+  };
 }
 
 function parseEntries(

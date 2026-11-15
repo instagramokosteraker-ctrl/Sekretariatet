@@ -14,9 +14,32 @@ describe('Eventor imported competitor Firestore fields', () => {
   it('does not include rentalReturned in updates', () => {
     expect(
       buildImportedCompetitorWriteFields(
-        { fullName: 'Ada Updated', rentalReturned: true },
+        {
+          fullName: 'Ada Updated',
+          rentalReturned: true,
+          eventorPersonId: 'person-1',
+          eventorOrgId: 'org-1',
+        },
         'UPDATE'
       )
     ).toEqual({ fullName: 'Ada Updated' });
+  });
+
+  it('stores Eventor identities on competitor creation', () => {
+    expect(
+      buildImportedCompetitorWriteFields(
+        {
+          fullName: 'Ada Löpare',
+          eventorPersonId: 'person-1',
+          eventorOrgId: 'org-1',
+        },
+        'CREATE'
+      )
+    ).toEqual({
+      fullName: 'Ada Löpare',
+      eventorPersonId: 'person-1',
+      eventorOrgId: 'org-1',
+      rentalReturned: false,
+    });
   });
 });

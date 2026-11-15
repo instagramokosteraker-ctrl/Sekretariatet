@@ -65,6 +65,7 @@ export interface ClubSettings {
 
 export interface CompetitionMeta {
   id?: string;
+  eventorEventId?: string;
   shortCode?: string;
   status?: EventLifecycleStatus;
   statusOverride?: boolean;
@@ -105,6 +106,7 @@ export interface Course {
 
 export interface CompClass {
   id: string;
+  eventorClassId?: string;
   name: string;
   courseId: string | null; // null if purely dynamic open course matching
   classFormat?: ClassCompetitionFormat;
@@ -188,6 +190,8 @@ export interface RawCardReadoutArchive {
 
 export interface Competitor {
   id: string;
+  eventorPersonId?: string;
+  eventorOrgId?: string;
   bib: number;
   fullName: string;
   club: string;
@@ -550,6 +554,7 @@ export interface AuthManagePayload {
 export interface CloudEventExportItem {
   competition: {
     id: string;
+    eventorEventId?: string;
     shortCode: string;
     status: EventLifecycleStatus;
     statusOverride?: boolean;
