@@ -5,6 +5,7 @@ import type {
   Competitor,
   Course,
   RunnerDbEntry,
+  SplitLegResult,
 } from '../types/sportident';
 import { formatDurationMmSs, formatSecondsAsClock } from '../services/sportidentProtocol';
 
@@ -23,9 +24,96 @@ function secondsToIsoToday(dateStr: string, sec: number | null): string | null {
   return `${dateStr}T${clock}`;
 }
 
+function getIofResultStatus(status: Competitor['status']): string {
+  switch (status) {
+    case 'OK':
+      return 'OK';
+    case 'MP':
+      return 'MissingPunch';
+    case 'DNF':
+      return 'DidNotFinish';
+    case 'DNS':
+      return 'DidNotStart';
+    case 'PRELIMINARY_FIN':
+      return 'Finished';
+    case 'IN_FOREST':
+      return 'Active';
+    case 'REGISTERED':
+    case 'CHECKED':
+      return 'Inactive';
+  }
+}
+
+function isSyntheticEventorSiNumber(runner: Competitor): boolean {
+  return (
+    runner.isRentalCard &&
+    runner.id.startsWith('evtcmp-') &&
+    runner.siNumber === 8_900_000 + runner.bib
+  );
+}
+
+function buildSplitTimeElement(
+  controlCode: number,
+  status: 'OK' | 'Missing' | 'Additional',
+  cumulativeSec: number | null
+): string {
+  const statusAttribute = status === 'OK' ? '' : ` status="${status}"`;
+  const timeElement =
+    cumulativeSec !== null && Number.isFinite(cumulativeSec) && cumulativeSec >= 0
+      ? `\n          <Time>${cumulativeSec}</Time>`
+      : '';
+  return `        <SplitTime${statusAttribute}>\n          <ControlCode>${controlCode}</ControlCode>${timeElement}\n        </SplitTime>`;
+}
+
+function buildRunnerSplitElements(
+  runner: Competitor,
+  course: Course | null,
+  zeroTimeSec: number
+): string {
+  const validationSplits =
+    runner.validation?.splits.filter((split) => split.controlCode !== 999) ??
+    (course?.controls ?? []).map(
+      (controlCode, index): SplitLegResult => ({
+        order: index + 1,
+        controlCode,
+        label: `(${controlCode})`,
+        status: 'MISSING',
+        punchTimeSec: null,
+        cumulativeSec: null,
+        legSec: null,
+      })
+    );
+  const startSec = runner.startTimeSec ?? runner.allocatedStartSec ?? zeroTimeSec;
+  const validationElements = validationSplits.map((split) => {
+    if (split.status === 'MISSING') {
+      return buildSplitTimeElement(split.controlCode, 'Missing', null);
+    }
+
+    // IOF has no broken-control status; the app adjudicates these controls as valid without a split time.
+    return buildSplitTimeElement(
+      split.controlCode,
+      'OK',
+      split.status === 'OK' ? split.cumulativeSec : null
+    );
+  });
+  const additionalElements = (runner.validation?.extraControls ?? [])
+    .filter((punch) => punch.code !== 999)
+    .map((punch) =>
+      buildSplitTimeElement(
+        punch.code,
+        'Additional',
+        punch.timeSec >= startSec
+          ? punch.timeSec - startSec
+          : null
+      )
+    );
+
+  return [...validationElements, ...additionalElements].join('\n');
+}
+
 /**
  * Generates a valid IOF Interface Standard v3.0 ResultList XML document
- * including <SplitTime> elements compatible with Eventor and WinSplits Online.
+ * including <SplitTime> elements for Eventor and WinSplits Online.
  */
 export function buildIofResultListXml(params: {
   competition: CompetitionMeta;
@@ -35,38 +123,52 @@ export function buildIofResultListXml(params: {
 }): string {
   const { competition, classes, courses, competitors } = params;
   const createTime = new Date().toISOString();
+  const allCompetitorsAreClassified = competitors.every((runner) =>
+    classes.some((eventClass) => eventClass.id === runner.classId)
+  );
+  const allResultsAreFinal = competitors.every((runner) =>
+    ['OK', 'MP', 'DNF', 'DNS'].includes(runner.status)
+  );
+  const resultListStatus =
+    competition.status === 'COMPLETED' &&
+    allCompetitorsAreClassified &&
+    allResultsAreFinal
+      ? 'Complete'
+      : 'Snapshot';
 
   const classBlocks = classes
     .map((cls) => {
       const course = courses.find((c) => c.id === cls.courseId) ?? null;
-      const inClass = competitors.filter(
-        (c) =>
-          c.classId === cls.id &&
-          (c.status === 'OK' ||
-            c.status === 'MP' ||
-            c.status === 'DNF' ||
-            c.status === 'DNS' ||
-            c.status === 'PRELIMINARY_FIN')
-      );
-
+      const inClass = competitors.filter((c) => c.classId === cls.id);
       const okRunners = inClass
-        .filter((c) => c.status === 'OK' && c.runningTimeSec !== null)
-        .sort((a, b) => (a.runningTimeSec ?? 999999) - (b.runningTimeSec ?? 999999));
-
-      const others = inClass.filter((c) => c.status !== 'OK');
-      const ordered = [...okRunners, ...others];
+        .filter(
+          (runner) =>
+            runner.status === 'OK' &&
+            runner.runningTimeSec !== null &&
+            Number.isFinite(runner.runningTimeSec) &&
+            runner.runningTimeSec >= 0
+        )
+        .sort((a, b) => (a.runningTimeSec ?? 0) - (b.runningTimeSec ?? 0));
+      const positions = new Map<Competitor, number>();
+      let previousTime: number | null = null;
+      let previousPosition = 0;
+      okRunners.forEach((runner, index) => {
+        const time = runner.runningTimeSec ?? 0;
+        if (time !== previousTime) previousPosition = index + 1;
+        positions.set(runner, previousPosition);
+        previousTime = time;
+      });
+      const ordered = [
+        ...okRunners,
+        ...inClass.filter((runner) => !positions.has(runner)),
+      ];
 
       const personResults = ordered
-        .map((runner, idx) => {
+        .map((runner) => {
           const nameParts = runner.fullName.trim().split(/\s+/);
           const given = nameParts[0] || runner.fullName;
           const family = nameParts.slice(1).join(' ') || '-';
-
-          let iofStatus = 'OK';
-          if (runner.status === 'MP') iofStatus = 'MissingPunch';
-          else if (runner.status === 'DNF') iofStatus = 'DidNotFinish';
-          else if (runner.status === 'DNS') iofStatus = 'DidNotStart';
-          else if (runner.status === 'PRELIMINARY_FIN') iofStatus = 'Active';
+          const iofStatus = getIofResultStatus(runner.status);
 
           const startIso = secondsToIsoToday(
             competition.date,
@@ -74,20 +176,25 @@ export function buildIofResultListXml(params: {
           );
           const finishIso = secondsToIsoToday(competition.date, runner.finishTimeSec);
 
-          const splitElements = (runner.validation?.splits ?? [])
-            .filter((s) => s.controlCode !== 999)
-            .map((s) =>
-              s.status === 'OK' && s.cumulativeSec !== null
-                ? `        <SplitTime>\n          <ControlCode>${s.controlCode}</ControlCode>\n          <Time>${s.cumulativeSec}</Time>\n        </SplitTime>`
-                : `        <SplitTime status="Missing">\n          <ControlCode>${s.controlCode}</ControlCode>\n        </SplitTime>`
-            )
-            .join('\n');
+          const splitElements = buildRunnerSplitElements(
+            runner,
+            course,
+            competition.zeroTimeSec
+          );
+          const hasElapsedTime =
+            runner.runningTimeSec !== null &&
+            Number.isFinite(runner.runningTimeSec) &&
+            runner.runningTimeSec >= 0 &&
+            ['OK', 'MP', 'DNF', 'PRELIMINARY_FIN'].includes(runner.status);
+          const controlCardElement = isSyntheticEventorSiNumber(runner)
+            ? ''
+            : `        <ControlCard>${runner.siNumber}</ControlCard>\n`;
 
           return `    <PersonResult>
       <Person>
         <Name>
-          <Given>${escapeXml(given)}</Given>
           <Family>${escapeXml(family)}</Family>
+          <Given>${escapeXml(given)}</Given>
         </Name>
       </Person>
       <Organisation>
@@ -98,14 +205,15 @@ export function buildIofResultListXml(params: {
 ${startIso ? `        <StartTime>${startIso}</StartTime>\n` : ''}${
             finishIso ? `        <FinishTime>${finishIso}</FinishTime>\n` : ''
           }${
-            runner.runningTimeSec !== null && runner.status === 'OK'
-              ? `        <Time>${runner.runningTimeSec}</Time>\n        <Position>${
-                  idx + 1
-                }</Position>\n`
+            hasElapsedTime
+              ? `        <Time>${runner.runningTimeSec}</Time>\n`
+              : ''
+          }${
+            positions.has(runner)
+              ? `        <Position>${positions.get(runner)}</Position>\n`
               : ''
           }        <Status>${iofStatus}</Status>
-        <ControlCard>${runner.siNumber}</ControlCard>
-${splitElements ? splitElements + '\n' : ''}      </Result>
+${splitElements ? splitElements + '\n' : ''}${controlCardElement}      </Result>
     </PersonResult>`;
         })
         .join('\n');
@@ -127,7 +235,7 @@ ${
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<ResultList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="LIVE-Appen MeOS Web">
+<ResultList xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0" createTime="${createTime}" creator="LIVE-Appen" status="${resultListStatus}">
   <Event>
     <Name>${escapeXml(competition.name)}</Name>
     <StartTime>
