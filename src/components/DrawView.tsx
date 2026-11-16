@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowUp,
   Shuffle,
@@ -15,6 +15,7 @@ import {
   formatSiNumber,
 } from '../services/sportidentProtocol';
 import { buildIofStartListXml, triggerTextFileDownload } from '../utils/iofXml';
+import { reconcileDrawClassId } from '../utils/drawClassSelection';
 import { RunnerStatusIndicator } from './StatusLabels';
 
 interface DrawViewProps {
@@ -58,8 +59,12 @@ export function DrawView({
   const [drawFeedback, setDrawFeedback] = useState<string | null>(null);
   const [vacantSlotsPreview, setVacantSlotsPreview] = useState<string[]>([]);
 
+  useEffect(() => {
+    setDrawClassId((currentClassId) => reconcileDrawClassId(currentClassId, classes));
+  }, [classes]);
+
   const selectedClass = useMemo(
-    () => classes.find((c) => c.id === drawClassId) ?? classes[0],
+    () => classes.find((c) => c.id === drawClassId),
     [classes, drawClassId]
   );
 
@@ -77,12 +82,13 @@ export function DrawView({
 
   const handleDrawSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!drawClassId) return;
+    const selectedClassId = selectedClass?.id;
+    if (!selectedClassId) return;
     setDrawBusy(true);
     setDrawFeedback(null);
     try {
       const res = await onDrawClass({
-        classId: drawClassId,
+        classId: selectedClassId,
         mode: drawMode,
         firstStartClock,
         intervalSec,
@@ -211,7 +217,7 @@ export function DrawView({
                 Klass att lotta
               </label>
               <select
-                value={drawClassId}
+                value={selectedClass?.id ?? ''}
                 onChange={(e) => setDrawClassId(e.target.value)}
                 className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg font-medium"
               >
@@ -312,7 +318,7 @@ export function DrawView({
 
             <button
               type="submit"
-              disabled={drawBusy || !drawClassId}
+              disabled={drawBusy || !selectedClass}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 disabled:opacity-40 rounded-lg transition-colors whitespace-nowrap"
             >
               <Shuffle className={`w-3.5 h-3.5 ${drawBusy ? 'animate-spin' : ''}`} />

@@ -57,7 +57,7 @@ import {
 } from './src/utils/siAssignmentDiagnostics';
 import { hasSameCompetitorIdentitySnapshot } from './src/utils/competitorIdentitySnapshot';
 import { protectCloudHydratedCompetitors } from './src/utils/cloudHydrateCompetitorFence';
-import { calculateClassStartDraw } from './src/utils/startListDraw';
+import { executeClassDraw } from './src/server/classDraw';
 
 let initError: Error | null = null;
 
@@ -4239,16 +4239,8 @@ async function startServer() {
 
   // 4. Start List Draw Engine (Lottning med minutstart, masstart, fri start, vakanser & klubbseparering)
   app.post('/api/draw/class', (req, res) => {
-    const db = getActiveEvent();
-    const {
-      classId,
-      mode = 'INTERVAL',
-      firstStartClock = db.competition.zeroTimeStr,
-      intervalSec = 120,
-      vacancies = 0,
-      clubSeparation = true,
-      includeAlreadyStarted = false,
-    } = req.body as {
+    const body = req.body as {
+      competitionId?: string;
       classId?: string;
       mode?: 'INTERVAL' | 'MASS' | 'FREE';
       firstStartClock?: string;
@@ -4258,38 +4250,42 @@ async function startServer() {
       includeAlreadyStarted?: boolean;
     };
 
-    const cls = db.classes.find((c) => c.id === classId);
-    if (!cls) {
+    const competitionId =
+      typeof body.competitionId === 'string' ? body.competitionId.trim() : '';
+    const classId = typeof body.classId === 'string' ? body.classId : '';
+    if (!competitionId || !classId.trim()) {
+      res.status(400).json({ error: 'competitionId och classId krävs.' });
+      return;
+    }
+
+    const draw = executeClassDraw(seasonDb.eventsMap, {
+      competitionId,
+      classId,
+      mode: body.mode,
+      firstStartClock: body.firstStartClock,
+      intervalSec: body.intervalSec,
+      vacancies: body.vacancies,
+      clubSeparation: body.clubSeparation,
+      includeAlreadyStarted: body.includeAlreadyStarted,
+    });
+    if (draw.kind === 'competition-not-found') {
+      res.status(404).json({ error: 'Tävlingen hittades ej.' });
+      return;
+    }
+    if (draw.kind === 'class-not-found') {
       res.status(404).json({ error: 'Klassen hittades ej.' });
       return;
     }
 
-    const drawPlan = calculateClassStartDraw(db.competitors, {
-      classId: cls.id,
-      mode,
-      firstStartClock,
-      intervalSec,
-      vacancies,
-      clubSeparation,
-      includeAlreadyStarted,
-      defaultFirstStartSec: db.competition.zeroTimeSec,
-    });
-    cls.freeStart = drawPlan.freeStart;
-    const competitorsById = new Map(
-      db.competitors.map((competitor) => [competitor.id, competitor])
-    );
-    for (const allocation of drawPlan.allocations) {
-      const competitor = competitorsById.get(allocation.competitorId);
-      if (competitor) competitor.allocatedStartSec = allocation.allocatedStartSec;
-    }
+    const db = draw.event;
 
     saveSeasonDatabase(seasonDb);
     broadcastFullState(db.competition.shortCode);
     res.json({
-      className: cls.name,
-      drawnCount: drawPlan.drawnCount,
-      mode: drawPlan.mode,
-      vacantStartTimes: drawPlan.vacantStartTimes,
+      className: draw.className,
+      drawnCount: draw.plan.drawnCount,
+      mode: draw.plan.mode,
+      vacantStartTimes: draw.plan.vacantStartTimes,
     });
   });
 

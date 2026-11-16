@@ -147,6 +147,13 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthGateView } from './components/AuthGateView';
 import { AccessControlView } from './components/AccessControlView';
 import { applyClubThemeToDocument } from './utils/clubTheme';
+import {
+  buildPublicCompetitionUrl,
+  buildSecretariatUrl,
+  parsePathnameToRoute,
+  type AppRouteState,
+  type PublicCompetitionTab,
+} from './utils/competitionNavigation';
 import { readEventorLocalConfig } from './utils/eventorLocalConfig';
 import { EventorNetworkError, fetchEventorXml } from './utils/eventorClient';
 import {
@@ -175,56 +182,10 @@ type MeosTab =
   | 'access'
   | 'protocol';
 
-interface AppRouteState {
-  mode: 'SECRETARIAT' | 'PUBLIC';
-  shortCode: string | null;
+interface PublicPortalContext {
   competitionId: string | null;
   classFilter: string | null;
-}
-
-function parsePathnameToRoute(pathname: string, search = ''): AppRouteState {
-  const params = new URLSearchParams(search);
-  const competitionId = params.get('id')?.trim() || null;
-  const classFilter = competitionId ? params.get('class')?.trim() || null : null;
-  const shortMatch = pathname.match(/^\/t\/([^/?#]+)/i);
-  if (shortMatch && shortMatch[1]) {
-    return {
-      mode: 'PUBLIC',
-      shortCode: decodeURIComponent(shortMatch[1]),
-      competitionId: null,
-      classFilter: null,
-    };
-  }
-  if (/^\/publik(\/|$)/i.test(pathname)) {
-    return {
-      mode: 'PUBLIC',
-      shortCode: null,
-      competitionId,
-      classFilter,
-    };
-  }
-  if (/^\/admin(\/|$)|^\/login(\/|$)/i.test(pathname)) {
-    return {
-      mode: 'SECRETARIAT',
-      shortCode: null,
-      competitionId: null,
-      classFilter: null,
-    };
-  }
-  if (pathname === '/' || pathname === '/index.html') {
-    return {
-      mode: 'PUBLIC',
-      shortCode: null,
-      competitionId,
-      classFilter,
-    };
-  }
-  return {
-    mode: 'SECRETARIAT',
-    shortCode: null,
-    competitionId: null,
-    classFilter: null,
-  };
+  publicTab: PublicCompetitionTab;
 }
 
 const NAV_ITEMS: {
@@ -352,6 +313,7 @@ export default function App() {
           shortCode: null,
           competitionId: null,
           classFilter: null,
+          publicTab: 'RESULTS',
         }
   );
   const [lastPublicShortCode, setLastPublicShortCode] = useState<
@@ -611,18 +573,21 @@ export default function App() {
       shortCode,
       competitionId: null,
       classFilter: null,
+      publicTab: 'RESULTS',
     });
   }, []);
 
   const navigatePublicCompetition = useCallback(
-    (competitionId: string | null, classFilter: string | null = null) => {
-      const params = new URLSearchParams();
-      if (competitionId) {
-        params.set('id', competitionId);
-        if (classFilter) params.set('class', classFilter);
-      }
-      const search = params.toString();
-      const targetUrl = search ? `/?${search}` : '/';
+    (
+      competitionId: string | null,
+      classFilter: string | null = null,
+      publicTab: PublicCompetitionTab = 'RESULTS'
+    ) => {
+      const targetUrl = buildPublicCompetitionUrl(
+        competitionId,
+        classFilter,
+        publicTab
+      );
       window.history.pushState({}, '', targetUrl);
       setLastPublicShortCode(null);
       setRoute({
@@ -630,21 +595,22 @@ export default function App() {
         shortCode: null,
         competitionId,
         classFilter: competitionId ? classFilter : null,
+        publicTab,
       });
     },
     []
   );
 
-  const navigateSecretariat = useCallback(() => {
-    if (window.location.pathname !== '/admin' || window.location.search) {
-      window.history.pushState({}, '', '/admin');
-    }
-    setRoute({
-      mode: 'SECRETARIAT',
-      shortCode: null,
-      competitionId: null,
-      classFilter: null,
-    });
+  const handlePublicTabChange = useCallback((publicTab: PublicCompetitionTab) => {
+    const params = new URLSearchParams(window.location.search);
+    if (publicTab === 'STARTLIST') params.set('tab', publicTab);
+    else params.delete('tab');
+    const search = params.toString();
+    const targetUrl = `${window.location.pathname}${search ? `?${search}` : ''}`;
+    window.history.replaceState({}, '', targetUrl);
+    setRoute((current) =>
+      current.mode === 'PUBLIC' ? { ...current, publicTab } : current
+    );
   }, []);
 
   // Authoritative MeOS state synced via WebSockets
@@ -654,12 +620,33 @@ export default function App() {
 
   const [activeEventId, setActiveEventId] = useState<string>('');
   const activeEventIdRef = useRef<string>('');
+  const routeCompetitionActivationRef = useRef<string | null>(null);
   const activeEventIdFromFirestoreRef = useRef(false);
   const rentalFieldsLoadedEventIdRef = useRef<string>('');
   const mirroredActiveEventIdRef = useRef<string | null>(null);
   const mirroredSeriesScoringSettingsRef = useRef<string | null>(null);
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
   const [competitionSwitchError, setCompetitionSwitchError] = useState<string | null>(null);
+  const navigateToSelectedPublicCompetition = useCallback(() => {
+    const selectedCompetitionId =
+      route.mode === 'SECRETARIAT'
+        ? route.competitionId || activeEventId || null
+        : route.competitionId;
+    if (!selectedCompetitionId) {
+      navigatePublicPortal(null);
+      return;
+    }
+    navigatePublicCompetition(
+      selectedCompetitionId,
+      route.classFilter,
+      route.publicTab
+    );
+  }, [
+    activeEventId,
+    navigatePublicCompetition,
+    navigatePublicPortal,
+    route,
+  ]);
   const [isEmptySeason, setIsEmptySeason] = useState<boolean>(true);
   const [isFreshColdStart, setIsFreshColdStart] = useState<boolean>(false);
   const [demoCleared, setDemoCleared] = useState<boolean>(false);
@@ -1539,51 +1526,124 @@ export default function App() {
     return 18 * 3600;
   }
 
-  const handleActivateCompetition = async (eventId: string) => {
-    setCompetitionSwitchError(null);
-    setSelectedRunnerId(null);
-    setPendingUnknownReadout(null);
-    if (eventId === activeEventId) return true;
+  const handleActivateCompetition = useCallback(
+    async (eventId: string) => {
+      setCompetitionSwitchError(null);
+      setSelectedRunnerId(null);
+      setPendingUnknownReadout(null);
+      if (eventId === activeEventId) return true;
 
-    try {
-      const cloudSnap = await loadFullSeasonFromFirestore({
-        competitionId: eventId,
-        includeRunnerDb: false,
-      });
-      if (!cloudSnap) {
-        throw new Error('Tävlingarna kunde inte hämtas från Firestore.');
-      }
-      const targetEvt = cloudSnap.events.find((e) => e.competition.id === eventId);
-      if (!targetEvt) {
-        throw new Error('Den valda tävlingen kunde inte hämtas från Firestore.');
-      }
-
-      await activateCompetitionInFirestore(eventId);
-      setActiveEventId(eventId);
-      setCompetition(targetEvt.competition);
-      setCourses(targetEvt.courses);
-      setClasses(targetEvt.classes);
-      setStations(targetEvt.stations ?? []);
-      setCompetitors(targetEvt.competitors);
-      setEmergency(
-        targetEvt.emergency ?? {
-          brokenControls: targetEvt.brokenControls,
-          controlTimeOffsets: {},
+      try {
+        const cloudSnap = await loadFullSeasonFromFirestore({
+          competitionId: eventId,
+          includeRunnerDb: false,
+        });
+        if (!cloudSnap) {
+          throw new Error('Tävlingarna kunde inte hämtas från Firestore.');
         }
-      );
-      setIsEmptySeason(false);
+        const targetEvt = cloudSnap.events.find((e) => e.competition.id === eventId);
+        if (!targetEvt) {
+          throw new Error('Den valda tävlingen kunde inte hämtas från Firestore.');
+        }
 
-      return true;
-    } catch (err) {
-      console.error('Kunde inte aktivera vald tävling:', err);
-      setCompetitionSwitchError(
-        err instanceof Error
-          ? err.message
-          : 'Tävlingen kunde inte aktiveras. Kontrollera anslutningen och försök igen.'
+        await activateCompetitionInFirestore(eventId);
+        setActiveEventId(eventId);
+        setCompetition(targetEvt.competition);
+        setCourses(targetEvt.courses);
+        setClasses(targetEvt.classes);
+        setStations(targetEvt.stations ?? []);
+        setCompetitors(targetEvt.competitors);
+        setEmergency(
+          targetEvt.emergency ?? {
+            brokenControls: targetEvt.brokenControls,
+            controlTimeOffsets: {},
+          }
+        );
+        setIsEmptySeason(false);
+
+        if (route.mode === 'SECRETARIAT') {
+          const classFilter =
+            route.competitionId === eventId ? route.classFilter : null;
+          window.history.replaceState(
+            {},
+            '',
+            buildSecretariatUrl(eventId, classFilter, route.publicTab)
+          );
+          setRoute((current) =>
+            current.mode === 'SECRETARIAT'
+              ? { ...current, competitionId: eventId, classFilter }
+              : current
+          );
+        }
+        return true;
+      } catch (err) {
+        console.error('Kunde inte aktivera vald tävling:', err);
+        setCompetitionSwitchError(
+          err instanceof Error
+            ? err.message
+            : 'Tävlingen kunde inte aktiveras. Kontrollera anslutningen och försök igen.'
+        );
+        return false;
+      }
+    },
+    [
+      activeEventId,
+      route.classFilter,
+      route.competitionId,
+      route.mode,
+      route.publicTab,
+    ]
+  );
+
+  const navigateSecretariat = useCallback(
+    (context: PublicPortalContext) => {
+      const selectedPublicCompetitionId = context.competitionId?.trim() || null;
+      const competitionId = selectedPublicCompetitionId || activeEventId || null;
+      const classFilter = selectedPublicCompetitionId
+        ? context.classFilter
+        : null;
+      const targetUrl = buildSecretariatUrl(
+        competitionId,
+        classFilter,
+        context.publicTab
       );
-      return false;
+      if (
+        `${window.location.pathname}${window.location.search}` !== targetUrl
+      ) {
+        window.history.pushState({}, '', targetUrl);
+      }
+      setRoute({
+        mode: 'SECRETARIAT',
+        shortCode: null,
+        competitionId,
+        classFilter,
+        publicTab: context.publicTab,
+      });
+    },
+    [activeEventId]
+  );
+
+  useEffect(() => {
+    if (
+      route.mode !== 'SECRETARIAT' ||
+      !route.competitionId ||
+      authSession?.user.sessionKind !== 'ADMIN' ||
+      routeCompetitionActivationRef.current === route.competitionId
+    ) {
+      return;
     }
-  };
+
+    routeCompetitionActivationRef.current = route.competitionId;
+    if (route.competitionId !== activeEventId) {
+      void handleActivateCompetition(route.competitionId);
+    }
+  }, [
+    activeEventId,
+    authSession,
+    handleActivateCompetition,
+    route.competitionId,
+    route.mode,
+  ]);
 
   const handleDeleteCompetition = async (
     eventId: string
@@ -2473,9 +2533,11 @@ export default function App() {
         shortCode={route.shortCode}
         competitionId={route.competitionId}
         classFilter={route.classFilter}
+        publicTab={route.publicTab}
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode((d) => !d)}
         onNavigatePublicUrl={navigatePublicCompetition}
+        onSelectPublicTab={handlePublicTabChange}
         onSwitchToSecretariat={navigateSecretariat}
       />
     );
@@ -2542,7 +2604,6 @@ export default function App() {
     ROLE_ALLOWED_TABS[effectiveRoleMode].includes(item.id)
   );
   const activeNavLabel = NAV_ITEMS.find((n) => n.id === activeTab)?.label ?? 'Översikt';
-  const activePublicShortCode = competition.shortCode || 'oko26a';
 
   return (
     <div className="min-h-screen flex club-canvas bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-x-clip">
@@ -2995,9 +3056,7 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() =>
-                navigatePublicPortal(isEmptySeason ? null : activePublicShortCode)
-              }
+              onClick={navigateToSelectedPublicCompetition}
               className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/80 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <Eye className="w-3.5 h-3.5 shrink-0" />
@@ -3338,7 +3397,7 @@ export default function App() {
                       )
                     );
                   }}
-                  onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
+                  onOpenPublicPortal={navigateToSelectedPublicCompetition}
                   onUpdateEventorSettings={async (patch) => {
                     const response = await apiFetch('/api/eventor/settings', {
                       method: 'PUT',
@@ -3989,7 +4048,7 @@ export default function App() {
                   classes={classes}
                   competitors={competitors}
                   stations={stations}
-                  onOpenPublicPortal={() => navigatePublicPortal(activePublicShortCode)}
+                  onOpenPublicPortal={navigateToSelectedPublicCompetition}
                 />
               )}
 
@@ -4303,7 +4362,7 @@ export default function App() {
                       const res = await apiFetch('/api/draw/class', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(params),
+                        body: JSON.stringify({ ...params, competitionId: activeEventId }),
                       });
                       return await readApiResponseJson<{
                         className: string;

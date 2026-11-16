@@ -34,29 +34,39 @@ import {
   subscribePublicCompetitionSummaries,
 } from '../firebase';
 import { apiWebSocketUrl } from '../services/authClient';
+import type { PublicCompetitionTab } from '../utils/competitionNavigation';
 
 interface PublicPortalViewProps {
   shortCode: string | null;
   competitionId: string | null;
   classFilter: string | null;
+  publicTab: PublicCompetitionTab;
   darkMode: boolean;
   onToggleDarkMode: () => void;
   onNavigatePublicUrl: (
     competitionId: string | null,
-    classFilter?: string | null
+    classFilter?: string | null,
+    publicTab?: PublicCompetitionTab
   ) => void;
-  onSwitchToSecretariat: () => void;
+  onSelectPublicTab: (publicTab: PublicCompetitionTab) => void;
+  onSwitchToSecretariat: (context: {
+    competitionId: string | null;
+    classFilter: string | null;
+    publicTab: PublicCompetitionTab;
+  }) => void;
 }
 
-type PublicEventTab = 'RESULTS' | 'STARTLIST';
+type PublicEventTab = PublicCompetitionTab;
 
 export function PublicPortalView({
   shortCode,
   competitionId,
   classFilter,
+  publicTab,
   darkMode,
   onToggleDarkMode,
   onNavigatePublicUrl,
+  onSelectPublicTab,
   onSwitchToSecretariat,
 }: PublicPortalViewProps) {
   const [apiCompetitionsList, setApiCompetitionsList] = useState<CompetitionSummary[]>([]);
@@ -77,7 +87,7 @@ export function PublicPortalView({
     raceData?.competition ?? null
   );
 
-  const [activeTab, setActiveTab] = useState<PublicEventTab>('RESULTS');
+  const [activeTab, setActiveTab] = useState<PublicEventTab>(publicTab);
   const [resultsGrouping, setResultsGrouping] = useState<'CLASS' | 'CLUB'>('CLASS');
   const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
   const [selectedClubName, setSelectedClubName] = useState<string | null>(null);
@@ -86,6 +96,16 @@ export function PublicPortalView({
   const [inspectedRunner, setInspectedRunner] = useState<Competitor | null>(null);
 
   const isRacePage = Boolean(shortCode || competitionId);
+  const switchToSecretariat = () =>
+    onSwitchToSecretariat({
+      competitionId: raceData?.competition.id || competitionId,
+      classFilter,
+      publicTab: activeTab,
+    });
+
+  useEffect(() => {
+    setActiveTab(publicTab);
+  }, [publicTab]);
 
   const competitionsList = useMemo(() => {
     const firestoreById = new Map(
@@ -423,7 +443,7 @@ export function PublicPortalView({
               <button
                 key={ev.id}
                 type="button"
-                onClick={() => onNavigatePublicUrl(ev.id)}
+                onClick={() => onNavigatePublicUrl(ev.id, null, activeTab)}
                 className="w-full text-left px-3.5 py-2 hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-3"
               >
                 <div className="min-w-0 flex-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -485,7 +505,7 @@ export function PublicPortalView({
 
             <button
               type="button"
-              onClick={onSwitchToSecretariat}
+              onClick={switchToSecretariat}
               className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/80 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <Wrench className="w-3.5 h-3.5 shrink-0" />
@@ -716,7 +736,7 @@ export function PublicPortalView({
 
             <button
               type="button"
-              onClick={onSwitchToSecretariat}
+              onClick={switchToSecretariat}
               className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-100 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/80 dark:border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <Wrench className="w-3.5 h-3.5 shrink-0" />
@@ -754,7 +774,10 @@ export function PublicPortalView({
           <div className="w-full px-2 sm:px-4 flex flex-wrap items-center gap-x-1 border-t border-slate-100 dark:border-slate-800/80">
             <button
               type="button"
-              onClick={() => setActiveTab('RESULTS')}
+              onClick={() => {
+                setActiveTab('RESULTS');
+                onSelectPublicTab('RESULTS');
+              }}
               className={`px-2.5 sm:px-3 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'RESULTS'
                   ? 'club-accent-tab-active'
@@ -766,7 +789,10 @@ export function PublicPortalView({
 
             <button
               type="button"
-              onClick={() => setActiveTab('STARTLIST')}
+              onClick={() => {
+                setActiveTab('STARTLIST');
+                onSelectPublicTab('STARTLIST');
+              }}
               className={`px-2.5 sm:px-3 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap shrink-0 ${
                 activeTab === 'STARTLIST'
                   ? 'club-accent-tab-active'
@@ -873,7 +899,8 @@ export function PublicPortalView({
                         currentCompetitionId,
                         selectedClass
                           ? selectedClass.name || selectedClass.id
-                          : null
+                          : null,
+                        activeTab
                       );
                     }}
                     onSelectClub={setSelectedClubName}
