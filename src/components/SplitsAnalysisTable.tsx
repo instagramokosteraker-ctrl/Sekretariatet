@@ -6,33 +6,13 @@ import {
   formatDurationMmSs,
   formatSecondsAsClock,
 } from '../services/sportidentProtocol';
-import { sortCompetitorsByResult } from '../utils/resultSorting';
+import {
+  sortCompetitorsByResult,
+  type ResultSortMode,
+} from '../utils/resultSorting';
+import { getLivePassageProgress } from '../utils/livePassage';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
-
-function getLiveRunningTimeSec(startTimeSec: number | null, nowMs: number): number | null {
-  if (startTimeSec === null) return null;
-
-  const now = new Date(nowMs);
-  const currentClockSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-  const difference = currentClockSec - startTimeSec;
-  const elapsedSec = difference < -12 * 3600 ? difference + 86400 : difference;
-  return elapsedSec >= 0 ? elapsedSec : null;
-}
-
-function getLiveLegTimeSec(
-  startTimeSec: number | null,
-  lastPunchTimeSec: number | null,
-  nowMs: number
-): number | null {
-  const now = new Date(nowMs);
-  const currentClockSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-  const baseline = lastPunchTimeSec ?? startTimeSec;
-  if (baseline === null) return null;
-  const difference = currentClockSec - baseline;
-  const elapsedSec = difference < -12 * 3600 ? difference + 86400 : difference;
-  return elapsedSec >= 0 ? elapsedSec : null;
-}
 
 function getPlacementClass(rank: number | null | undefined): string {
   if (rank === 1) return 'text-red-600 dark:text-red-400 font-semibold';
@@ -111,8 +91,7 @@ export function SplitsAnalysisTable({
   radioControls = [],
 }: SplitsAnalysisTableProps) {
   const [detailedView, setDetailedView] = useState(false);
-  // Sort per class by control order (null = official result order, -1 = sort by total bomtid, >0 = leg order)
-  const [sortByLegOrder, setSortByLegOrder] = useState<Record<string, number | null>>({});
+  const [sortByClass, setSortByClass] = useState<Record<string, ResultSortMode>>({});
   const [expandedRunnerId, setExpandedRunnerId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const previousCompetitorsRef = useRef<Map<string, string>>(new Map());
@@ -154,10 +133,9 @@ export function SplitsAnalysisTable({
   }, [competitors, liveUpdateScope, liveUpdates]);
 
   useEffect(() => {
-    if (!liveUpdates) return;
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
-  }, [liveUpdates]);
+  }, []);
 
   const visibleClasses = useMemo(
     () =>
@@ -167,11 +145,22 @@ export function SplitsAnalysisTable({
     [classes, selectedClassId]
   );
 
-  const toggleClassSort = (classId: string, orderKey: number) => {
-    setSortByLegOrder((prev) => ({
-      ...prev,
-      [classId]: prev[classId] === orderKey ? null : orderKey,
-    }));
+  const toggleClassSort = (classId: string, nextMode: ResultSortMode) => {
+    setSortByClass((prev) => {
+      const currentMode = prev[classId] ?? { kind: 'default' };
+      const isSameMode =
+        currentMode.kind === nextMode.kind &&
+        (currentMode.kind === 'radio'
+          ? nextMode.kind === 'radio' &&
+            currentMode.controlCode === nextMode.controlCode
+          : currentMode.kind === 'ordinary'
+            ? nextMode.kind === 'ordinary' && currentMode.order === nextMode.order
+            : true);
+      return {
+        ...prev,
+        [classId]: isSameMode ? { kind: 'default' } : nextMode,
+      };
+    });
   };
 
   const viewTabClass = (selected: boolean) =>
@@ -180,6 +169,9 @@ export function SplitsAnalysisTable({
         ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-xs'
         : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
     }`;
+  const hasCustomSort = Object.values(sortByClass).some(
+    (mode) => mode.kind !== 'default'
+  );
 
   return (
     <div className="space-y-3">
@@ -212,32 +204,43 @@ export function SplitsAnalysisTable({
             </button>
           ))}
         </div>
-        <div
-          className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-lg w-fit"
-          role="tablist"
-          aria-label="Resultatvy"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={!detailedView}
-            onClick={() => {
-              setDetailedView(false);
-              setSortByLegOrder({});
-            }}
-            className={viewTabClass(!detailedView)}
+        <div className="flex items-center gap-2">
+          <div
+            className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-lg w-fit"
+            role="tablist"
+            aria-label="Resultatvy"
           >
-            Förenklad vy
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={detailedView}
-            onClick={() => setDetailedView(true)}
-            className={viewTabClass(detailedView)}
-          >
-            Sträcka & bom
-          </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!detailedView}
+              onClick={() => {
+                setDetailedView(false);
+                setSortByClass({});
+              }}
+              className={viewTabClass(!detailedView)}
+            >
+              Förenklad vy
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={detailedView}
+              onClick={() => setDetailedView(true)}
+              className={viewTabClass(detailedView)}
+            >
+              Sträcka & bom
+            </button>
+          </div>
+          {hasCustomSort && (
+            <button
+              type="button"
+              onClick={() => setSortByClass({})}
+              className="text-xs font-medium text-red-600 hover:underline dark:text-red-400"
+            >
+              Återställ ordning
+            </button>
+          )}
         </div>
       </div>
 
@@ -266,15 +269,15 @@ export function SplitsAnalysisTable({
             ...inClass.flatMap((competitor) =>
               competitor.radioSplits.map((split) => split.controlCode)
             ),
-          ]);
+          ].sort((a, b) => {
+            const orderA = course?.controls.indexOf(a) ?? -1;
+            const orderB = course?.controls.indexOf(b) ?? -1;
+            return (orderA < 0 ? Number.MAX_SAFE_INTEGER : orderA) -
+              (orderB < 0 ? Number.MAX_SAFE_INTEGER : orderB);
+          }));
 
           const officialTimed = inClass
-            .filter(
-              (c) =>
-                (c.effectiveStatus === 'OK' ||
-                  c.effectiveStatus === 'PRELIMINARY_FIN') &&
-                c.runningTimeSec !== null
-            )
+            .filter((c) => c.effectiveStatus === 'OK')
             .sort((a, b) => {
               if (isRogaining) {
                 const pa = a.validation?.rogainingPoints ?? 0;
@@ -284,7 +287,9 @@ export function SplitsAnalysisTable({
               return (a.runningTimeSec ?? 999999) - (b.runningTimeSec ?? 999999);
             });
 
-          const leaderSec = officialTimed[0]?.runningTimeSec ?? null;
+          const leaderSec =
+            officialTimed.find((runner) => runner.runningTimeSec !== null)
+              ?.runningTimeSec ?? null;
           const leaderPts = officialTimed[0]?.validation?.rogainingPoints ?? null;
           const idealSec =
             !isRogaining && !isForked
@@ -294,13 +299,11 @@ export function SplitsAnalysisTable({
           const winnerVsIdeal =
             leaderSec !== null && idealSec !== null ? leaderSec - idealSec : null;
 
-          const activeSortOrder = sortByLegOrder[cls.id] ?? null;
+          const sortMode = sortByClass[cls.id] ?? { kind: 'default' as const };
 
-          // Simplified results keep radio controls and the final leg while omitting ordinary controls.
           const legColumns: { order: number; code: number; label: string; bestLegSec: number | null }[] =
             course && !isRogaining && !isForked
-              ? [
-                  ...course.controls.map((ctrl, idx) => {
+              ? course.controls.map((ctrl, idx) => {
                     const order = idx + 1;
                     const best =
                       officialTimed
@@ -314,34 +317,20 @@ export function SplitsAnalysisTable({
                       label: `(${ctrl})`,
                       bestLegSec: best,
                     };
-                  }),
-                  {
-                    order: course.controls.length + 1,
-                    code: 999,
-                    label: 'Spurt',
-                    bestLegSec:
-                      officialTimed
-                        .map((r) =>
-                          r.validation?.splits.find((s) => s.controlCode === 999)?.bestLegSec
-                        )
-                        .find((v) => v !== null && v !== undefined) ?? null,
-                  },
-                ]
+                  })
               : [];
           const visibleLegColumns = detailedView
             ? legColumns
             : legColumns.filter((col) => radioControlCodes.has(col.code));
 
-          const sortMode =
-            activeSortOrder === null
-              ? { kind: 'default' as const }
-              : activeSortOrder === -1
-                ? { kind: 'bom' as const }
-                : { kind: 'leg' as const, order: activeSortOrder };
           let displayRows = sortCompetitorsByResult(
             inClass,
             officialTimed.map((runner) => runner.id),
-            sortMode
+            sortMode,
+            {
+              radioControlCodes: [...radioControlCodes],
+              nowMs,
+            }
           );
 
           const controlResults = new Map<
@@ -475,17 +464,6 @@ export function SplitsAnalysisTable({
                   <span className="text-slate-500 dark:text-slate-400">
                     {inClass.length} anm.
                   </span>
-                  {activeSortOrder !== null && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSortByLegOrder((prev) => ({ ...prev, [cls.id]: null }))
-                      }
-                      className="font-sans text-red-600 dark:text-red-400 hover:underline font-medium"
-                    >
-                      Återställ ordning
-                    </button>
-                  )}
                 </div>
               </div>
 
@@ -504,10 +482,24 @@ export function SplitsAnalysisTable({
                         <th className="py-1.5 px-2 min-w-[140px] max-w-[220px]">
                           Namn / Klubb
                         </th>
-                        <th className="py-1.5 px-2 text-right whitespace-nowrap">Starttid</th>
+                        <th className="py-1.5 px-2 text-right whitespace-nowrap">Start</th>
                         {visibleLegColumns.map((col) => {
-                          const isSorted = activeSortOrder === col.order;
                           const isRadioControl = radioControlCodes.has(col.code);
+                          const isFinish = col.code === 999;
+                          const isSorted =
+                            (isRadioControl &&
+                              sortMode.kind === 'radio' &&
+                              sortMode.controlCode === col.code) ||
+                            (!isRadioControl &&
+                              !isFinish &&
+                              sortMode.kind === 'ordinary' &&
+                              sortMode.order === col.order) ||
+                            (isFinish && sortMode.kind === 'finish');
+                          const columnSortMode: ResultSortMode = isRadioControl
+                            ? { kind: 'radio', controlCode: col.code }
+                            : isFinish
+                              ? { kind: 'finish' }
+                              : { kind: 'ordinary', order: col.order };
                           return (
                             <th
                               key={col.order}
@@ -517,7 +509,7 @@ export function SplitsAnalysisTable({
                             >
                               <button
                                 type="button"
-                                onClick={() => toggleClassSort(cls.id, col.order)}
+                                onClick={() => toggleClassSort(cls.id, columnSortMode)}
                                 className={`inline-flex flex-col items-end hover:text-slate-900 dark:hover:text-slate-100 transition-colors ${
                                   isSorted
                                     ? isRadioControl
@@ -554,7 +546,20 @@ export function SplitsAnalysisTable({
                             </th>
                           );
                         })}
-                        <th className="py-1.5 px-2 text-right">Tid</th>
+                        <th className="py-1.5 px-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => toggleClassSort(cls.id, { kind: 'finish' })}
+                            className={`inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-100 ${
+                              sortMode.kind === 'finish'
+                                ? 'text-red-600 dark:text-red-400 font-semibold'
+                                : ''
+                            }`}
+                          >
+                            Tid
+                            <ArrowDownUp className="w-2.5 h-2.5 opacity-60" />
+                          </button>
+                        </th>
                         {detailedView && (
                           <th className="hidden sm:table-cell py-1.5 px-2 text-right">
                             Diff
@@ -574,9 +579,9 @@ export function SplitsAnalysisTable({
                           >
                             <button
                               type="button"
-                              onClick={() => toggleClassSort(cls.id, -1)}
+                              onClick={() => toggleClassSort(cls.id, { kind: 'bom' })}
                               className={`inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-slate-100 ${
-                                activeSortOrder === -1
+                                sortMode.kind === 'bom'
                                   ? 'text-red-600 dark:text-red-400 font-semibold'
                                   : ''
                               }`}
@@ -585,12 +590,7 @@ export function SplitsAnalysisTable({
                               {!isForked && <ArrowDownUp className="w-2.5 h-2.5 opacity-60" />}
                             </button>
                           </th>
-                        ) : isRogaining ? (
-                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Poäng</th>
-                        ) : isForked ? (
-                          <th className="py-1.5 px-2 text-right whitespace-nowrap">Gaffel</th>
                         ) : null}
-                        <th className="py-1.5 pl-1.5 pr-3 text-right">Status</th>
                       </tr>
                     </thead>
 
@@ -598,43 +598,25 @@ export function SplitsAnalysisTable({
                       {displayRows.map((r) => {
                         const timedIdx = officialTimed.findIndex((t) => t.id === r.id);
                         const isRunning =
-                          liveUpdates &&
-                          (r.effectiveStatus === 'IN_FOREST' ||
-                            r.effectiveStatus === 'CHECKED') &&
+                          r.effectiveStatus === 'IN_FOREST' &&
                           r.finishTimeSec === null;
+                        const passage = getLivePassageProgress(
+                          r,
+                          [...radioControlCodes],
+                          nowMs
+                        );
                         const displayedTimeSec = isRunning
-                          ? getLiveRunningTimeSec(
-                              r.startTimeSec ?? r.allocatedStartSec,
-                              nowMs
-                            )
+                          ? passage.nextRadioControlCode === null
+                            ? passage.projectedPassageTimeSec
+                            : null
                           : r.runningTimeSec;
                         const passedRadioSplits = [...r.radioSplits].sort(
                           (a, b) => a.punchTimeSec - b.punchTimeSec
                         );
-                        const lastPassedConfiguredRadioIndex = passedRadioSplits.reduce(
-                          (lastIndex, split) => {
-                            const index = configuredRadioControls.findIndex(
-                              (station) => station.stationCode === split.controlCode
-                            );
-                            return Math.max(lastIndex, index);
-                          },
-                          -1
-                        );
-                        const nextRadioControl = configuredRadioControls.find(
-                          (_, index) => index > lastPassedConfiguredRadioIndex
-                        );
-                        const liveLegTimeSec =
-                          isRunning && radioControlCodes.size > 0
-                            ? getLiveLegTimeSec(
-                                r.startTimeSec ?? r.allocatedStartSec,
-                                passedRadioSplits.length > 0
-                                  ? passedRadioSplits[passedRadioSplits.length - 1].punchTimeSec
-                                  : null,
-                                nowMs
-                              )
-                            : null;
                         const diff =
-                          (timedIdx !== -1 || isRunning) &&
+                          (timedIdx !== -1 ||
+                            r.effectiveStatus === 'PRELIMINARY_FIN' ||
+                            isRunning) &&
                           leaderSec !== null &&
                           displayedTimeSec !== null
                             ? displayedTimeSec - leaderSec
@@ -650,10 +632,12 @@ export function SplitsAnalysisTable({
 
                         const isExpanded = expandedRunnerId === r.id;
                         const totalCols = detailedView
-                          ? 3 + legColumns.length + (isRogaining ? 3 : 1) + 3
-                          : 5 +
+                          ? 3 +
                             visibleLegColumns.length +
-                            (isRogaining || isForked ? 1 : 0);
+                            1 +
+                            1 +
+                            (isRogaining ? 3 : 1)
+                          : 3 + visibleLegColumns.length + 1;
 
                         return (
                           <React.Fragment key={r.id}>
@@ -672,11 +656,15 @@ export function SplitsAnalysisTable({
                             }`}
                           >
                             <td className="py-1.5 pl-3 pr-1.5 font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap">
-                              {timedIdx !== -1
-                                ? r.effectiveStatus === 'PRELIMINARY_FIN'
-                                  ? `(${timedIdx + 1})`
-                                  : `${timedIdx + 1}.`
-                                : '—'}
+                              {r.effectiveStatus === 'OK' && timedIdx !== -1 ? (
+                                `${timedIdx + 1}.`
+                              ) : (
+                                <RunnerStatusIndicator
+                                  status={r.effectiveStatus}
+                                  compact
+                                  minimal={!detailedView}
+                                />
+                              )}
                             </td>
 
                             <td className="py-1.5 px-2 min-w-[140px] max-w-[220px] whitespace-nowrap">
@@ -722,88 +710,34 @@ export function SplitsAnalysisTable({
                                     (split) => split.controlCode === col.code
                                   )
                                 : undefined;
-                              const isNextRadioControl =
-                                nextRadioControl?.stationCode === col.code;
-                              const isFinishLeg = col.code === 999;
                               const sp = r.validation?.splits.find(
                                 (s) => s.order === col.order
                               );
                               const controlResult = controlResults
                                 .get(col.code)
                                 ?.get(r.id);
-                              if (radioSplit) {
+                              if (isRadioControl) {
+                                const actualPassageTime =
+                                  radioSplit?.runningTimeSec ?? sp?.cumulativeSec ?? null;
+                                const projectedPassageTime =
+                                  isRunning &&
+                                  passage.nextRadioControlCode === col.code
+                                    ? passage.projectedPassageTimeSec
+                                    : null;
                                 return (
                                   <td
                                     key={col.order}
                                     className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 whitespace-nowrap align-top"
                                   >
-                                    <div className="leading-4">
-                                      <span
-                                        className={getPlacementTimeClass(controlResult?.legRank)}
-                                      >
-                                        {formatDurationMmSs(controlResult?.legSec ?? null)}
-                                      </span>{' '}
-                                      {controlResult?.legRank && (
-                                        <span className={getPlacementClass(controlResult.legRank)}>
-                                          ({controlResult.legRank})
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                      <span
-                                        className={getPlacementTimeClass(
-                                          controlResult?.cumulativeRank
-                                        )}
-                                      >
-                                        {formatDurationMmSs(
-                                          controlResult?.cumulativeSec ?? null
-                                        )}
-                                      </span>{' '}
-                                      {controlResult?.cumulativeRank && (
-                                        <span
-                                          className={getPlacementClass(
-                                            controlResult.cumulativeRank
-                                          )}
-                                        >
-                                          ({controlResult.cumulativeRank})
-                                        </span>
-                                      )}
-                                    </div>
-                                    {!detailedView && !isRogaining && !isForked && (
-                                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                        {formatSignedDuration(
-                                          controlResult?.cumulativeDiffSec
-                                        )}
-                                      </div>
-                                    )}
-                                  </td>
-                                );
-                              }
-                              if (
-                                isRunning &&
-                                liveLegTimeSec !== null &&
-                                (isNextRadioControl ||
-                                  (isFinishLeg && !nextRadioControl))
-                              ) {
-                                return (
-                                  <td
-                                    key={col.order}
-                                    className="py-1.5 px-2 text-right font-mono tabular-nums leading-4 text-slate-800 dark:text-slate-200 whitespace-nowrap align-top"
-                                  >
-                                    <div className="leading-4 italic font-normal">
-                                      ({formatDurationMmSs(liveLegTimeSec)})
-                                    </div>
-                                    {!detailedView && !isRogaining && !isForked && (
-                                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                                        {formatSignedDuration(
-                                          displayedTimeSec !== null &&
-                                            controlResult?.bestCumulativeSec != null
-                                            ? displayedTimeSec -
-                                                controlResult.bestCumulativeSec
-                                            : null
-                                        )}
-                                      </div>
-                                    )}
+                                    {actualPassageTime !== null
+                                      ? formatDurationMmSs(actualPassageTime)
+                                      : projectedPassageTime !== null
+                                        ? (
+                                          <span className="italic font-normal text-red-600 dark:text-red-400">
+                                            {formatDurationMmSs(projectedPassageTime)}
+                                          </span>
+                                        )
+                                        : null}
                                   </td>
                                 );
                               }
@@ -923,19 +857,14 @@ export function SplitsAnalysisTable({
                               <div
                                 className={`leading-4 ${
                                   isRunning && displayedTimeSec !== null
-                                    ? 'italic font-normal'
+                                    ? 'italic font-normal text-red-600 dark:text-red-400'
                                     : ''
                                 }`}
                               >
-                                {isRunning && displayedTimeSec !== null
-                                  ? `(${formatDurationMmSs(displayedTimeSec)})`
+                                {isRunning && displayedTimeSec === null
+                                  ? null
                                   : formatDurationMmSs(displayedTimeSec)}
                               </div>
-                              {!detailedView && !isRogaining && (
-                                <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
-                                  {formatSignedDuration(diff)}
-                                </div>
-                              )}
                             </td>
 
                             {detailedView && (
@@ -989,19 +918,6 @@ export function SplitsAnalysisTable({
                               >
                                 {r.validation?.matchedCourseName ?? '—'}
                               </td>
-                            ) : !detailedView && isRogaining ? (
-                              <td className="py-1.5 px-2 text-right font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
-                                <div>{r.validation?.rogainingPoints ?? '—'}</div>
-                                <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400">
-                                  {ptsDiff === null
-                                    ? '—'
-                                    : `${ptsDiff > 0 ? '+' : ''}${ptsDiff} p`}
-                                </div>
-                              </td>
-                            ) : !detailedView && isForked ? (
-                              <td className="py-1.5 px-2 text-right text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                                {r.validation?.matchedCourseName ?? '—'}
-                              </td>
                             ) : detailedView ? (
                               <td
                                 className="py-1.5 px-2 text-right font-mono tabular-nums whitespace-nowrap"
@@ -1023,13 +939,6 @@ export function SplitsAnalysisTable({
                               </td>
                             ) : null}
 
-                            <td className="py-1.5 pl-1.5 pr-3 text-right whitespace-nowrap">
-                              <RunnerStatusIndicator
-                                status={r.effectiveStatus}
-                                compact
-                                minimal={!detailedView}
-                              />
-                            </td>
                           </tr>
                           {isExpanded && (
                             <tr className="bg-slate-50/70 dark:bg-slate-950/60">

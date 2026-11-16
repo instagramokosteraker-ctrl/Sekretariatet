@@ -1,18 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import type { Competitor, RunnerStatus, SplitLegResult } from '../types/sportident';
+import type {
+  Competitor,
+  RadioSplit,
+  RunnerStatus,
+  SplitLegResult,
+} from '../types/sportident';
+import type { CompetitorWithOptionalEffectiveStatus } from './effectiveRunnerStatus';
 import { sortCompetitorsByResult } from './resultSorting';
+
+const NOW = Date.parse('2025-01-01T12:35:23+01:00');
+const START = 12 * 60 * 60;
+const RADIO_CODES = [137, 45];
 
 function makeCompetitor(
   id: string,
   status: RunnerStatus,
   options: {
+    effectiveStatus?: RunnerStatus;
+    allocatedStartSec?: number | null;
+    startTimeSec?: number | null;
     runningTimeSec?: number | null;
+    finishTimeSec?: number | null;
     splits?: SplitLegResult[];
+    radioSplits?: RadioSplit[];
     totalTimeLossSec?: number | null;
   } = {}
-): Competitor {
-  const splits = options.splits ?? [];
-  return {
+): CompetitorWithOptionalEffectiveStatus {
+  const competitor: Competitor = {
     id,
     bib: 1,
     fullName: id,
@@ -23,15 +37,15 @@ function makeCompetitor(
     isRentalCard: false,
     rentalReturned: false,
     status,
-    allocatedStartSec: null,
+    allocatedStartSec: options.allocatedStartSec ?? START,
     checkTimeSec: null,
-    startTimeSec: null,
-    finishTimeSec: null,
+    startTimeSec: options.startTimeSec ?? START,
+    finishTimeSec: options.finishTimeSec ?? null,
     runningTimeSec: options.runningTimeSec ?? null,
     lastSeenControl: null,
     lastSeenTimeSec: null,
     readoutAt: null,
-    radioSplits: [],
+    radioSplits: options.radioSplits ?? [],
     cardPunches: [],
     validation: {
       ok: false,
@@ -39,139 +53,225 @@ function makeCompetitor(
       matchedCourseName: 'Bana',
       missingControls: [],
       extraControls: [],
-      splits,
+      splits: options.splits ?? [],
       totalTimeLossSec: options.totalTimeLossSec,
     },
   };
+  return options.effectiveStatus
+    ? { ...competitor, effectiveStatus: options.effectiveStatus }
+    : competitor;
 }
 
 function split(
   order: number,
   controlCode: number,
-  status: SplitLegResult['status'],
-  cumulativeSec: number | null = null,
-  legSec: number | null = null
+  cumulativeSec: number | null
 ): SplitLegResult {
   return {
     order,
     controlCode,
     label: `(${controlCode})`,
-    status,
+    status: cumulativeSec === null ? 'MISSING' : 'OK',
     punchTimeSec: cumulativeSec,
     cumulativeSec,
-    legSec,
+    legSec: null,
   };
 }
 
+function radio(controlCode: number, runningTimeSec: number): RadioSplit {
+  return {
+    controlCode,
+    stationName: `(${controlCode})`,
+    punchTimeSec: START + runningTimeSec,
+    runningTimeSec,
+    isPrewarning: false,
+  };
+}
+
+const sortOptions = {
+  radioControlCodes: RADIO_CODES,
+  nowMs: NOW,
+};
+
 describe('sortCompetitorsByResult', () => {
-  it('keeps finished, in-progress, MP and unstarted runners in the requested groups', () => {
+  it('applies status groups before internal ranking', () => {
     const rows = [
-      makeCompetitor('checked', 'CHECKED'),
-      makeCompetitor('mp-missing-first', 'MP', {
-        splits: [
-          split(1, 31, 'MISSING'),
-          split(2, 32, 'OK', 120),
-          split(3, 33, 'OK', 180),
-        ],
-      }),
-      makeCompetitor('in-forest', 'IN_FOREST'),
-      makeCompetitor('finished-slow', 'OK', { runningTimeSec: 700 }),
-      makeCompetitor('finished-fast', 'OK', { runningTimeSec: 600 }),
-      makeCompetitor('mp-leading', 'MP', {
-        splits: [split(1, 31, 'OK', 90), split(2, 32, 'OK', 150)],
-      }),
-      makeCompetitor('dnf', 'DNF'),
-      makeCompetitor('registered', 'REGISTERED'),
       makeCompetitor('dns', 'DNS'),
+      makeCompetitor('forest', 'IN_FOREST'),
+      makeCompetitor('checked', 'CHECKED'),
+      makeCompetitor('preliminary', 'PRELIMINARY_FIN', {
+        runningTimeSec: 620,
+        finishTimeSec: START + 620,
+      }),
+      makeCompetitor('registered', 'REGISTERED'),
+      makeCompetitor('ok-slow', 'OK', { runningTimeSec: 700 }),
+      makeCompetitor('dnf', 'DNF'),
+      makeCompetitor('ok-fast', 'OK', { runningTimeSec: 600 }),
+      makeCompetitor('mp', 'MP'),
     ];
 
     expect(
-      sortCompetitorsByResult(rows, ['finished-fast', 'finished-slow'], {
-        kind: 'default',
-      }).map((row) => row.id)
+      sortCompetitorsByResult(
+        rows,
+        ['ok-fast', 'ok-slow'],
+        { kind: 'default' },
+        sortOptions
+      ).map((row) => row.id)
     ).toEqual([
-      'finished-fast',
-      'finished-slow',
-      'in-forest',
-      'mp-leading',
-      'mp-missing-first',
-      'dnf',
+      'ok-fast',
+      'ok-slow',
+      'preliminary',
+      'forest',
       'checked',
       'registered',
+      'mp',
+      'dnf',
       'dns',
     ]);
   });
 
-  it('breaks MP ties by elapsed time at the last leading control, then valid punches', () => {
-    const slower = makeCompetitor('slower', 'MP', {
-      splits: [
-        split(1, 31, 'OK', 200),
-        split(2, 32, 'OK', 300),
-        split(3, 33, 'OK', 420),
-      ],
+  it('ranks in-forest competitors by passage progress, then rolling elapsed time', () => {
+    const rows = [
+      makeCompetitor('next-137', 'IN_FOREST'),
+      makeCompetitor('next-45', 'IN_FOREST', {
+        radioSplits: [radio(137, 2100)],
+      }),
+      makeCompetitor('actual-137', 'IN_FOREST', {
+        radioSplits: [radio(137, 2100)],
+      }),
+    ];
+
+    expect(
+      sortCompetitorsByResult(rows, [], { kind: 'default' }, sortOptions).map(
+        (row) => row.id
+      )
+    ).toEqual(['next-45', 'actual-137', 'next-137']);
+  });
+
+  it('uses the completed-radio count as the primary in-forest ranking key', () => {
+    const oneRadioCompleted = makeCompetitor('one-radio', 'IN_FOREST', {
+      radioSplits: [radio(137, 2000)],
+    });
+    const twoRadiosCompleted = makeCompetitor('two-radios', 'IN_FOREST', {
+      radioSplits: [radio(137, 2000), radio(36, 2100)],
     });
 
-    const faster = makeCompetitor('faster', 'MP', {
-      splits: [
-        split(1, 31, 'OK', 100),
-        split(2, 32, 'OK', 200),
-        split(3, 33, 'OK', 300),
-      ],
+    expect(
+      sortCompetitorsByResult(
+        [oneRadioCompleted, twoRadiosCompleted],
+        [],
+        { kind: 'default' },
+        { ...sortOptions, radioControlCodes: [137, 45, 36] }
+      ).map((row) => row.id)
+    ).toEqual(['two-radios', 'one-radio']);
+  });
+
+  it('sorts a selected radio by actual and projected passage times together', () => {
+    const rows = [
+      makeCompetitor('jocke', 'IN_FOREST'),
+      makeCompetitor('kasper', 'IN_FOREST', {
+        radioSplits: [radio(137, 2122)],
+      }),
+      makeCompetitor('emil', 'IN_FOREST', {
+        radioSplits: [radio(137, 2075)],
+      }),
+      makeCompetitor('finished', 'OK', {
+        runningTimeSec: 100,
+        finishTimeSec: START + 100,
+      }),
+    ];
+
+    expect(
+      sortCompetitorsByResult(
+        rows,
+        ['finished'],
+        { kind: 'radio', controlCode: 137 },
+        sortOptions
+      ).map((row) => row.id)
+    ).toEqual(['finished', 'emil', 'kasper', 'jocke']);
+  });
+
+  it('sorts ordinary-control actuals first and retains LIVE order for missing values', () => {
+    const rows = [
+      makeCompetitor('jocke', 'IN_FOREST'),
+      makeCompetitor('slow-actual', 'IN_FOREST', {
+        splits: [split(3, 36, 3540)],
+      }),
+      makeCompetitor('emil', 'IN_FOREST', {
+        radioSplits: [radio(137, 2000)],
+      }),
+      makeCompetitor('fast-actual', 'IN_FOREST', {
+        splits: [split(3, 36, 3469)],
+      }),
+    ];
+
+    expect(
+      sortCompetitorsByResult(
+        rows,
+        [],
+        { kind: 'ordinary', order: 3 },
+        sortOptions
+      ).map((row) => row.id)
+    ).toEqual(['fast-actual', 'slow-actual', 'emil', 'jocke']);
+  });
+
+  it('keeps checked runners with computed IN_FOREST status in the active group', () => {
+    const overdueChecked = makeCompetitor('overdue-checked', 'CHECKED', {
+      effectiveStatus: 'IN_FOREST',
+    });
+    const checked = makeCompetitor('checked', 'CHECKED');
+    const registered = makeCompetitor('registered', 'REGISTERED');
+
+    expect(
+      sortCompetitorsByResult(
+        [registered, checked, overdueChecked],
+        [],
+        { kind: 'default' },
+        sortOptions
+      ).map((row) => row.id)
+    ).toEqual(['overdue-checked', 'checked', 'registered']);
+  });
+
+  it('retains the existing MP progress ordering', () => {
+    const fewerControls = makeCompetitor('fewer-controls', 'MP', {
+      splits: [split(1, 31, 100), split(2, 32, 200)],
     });
     const morePunches = makeCompetitor('more-punches', 'MP', {
       splits: [
-        split(1, 31, 'OK', 100),
-        split(2, 32, 'OK', 200),
-        split(3, 33, 'OK', 300),
-        split(4, 34, 'MISSING'),
-        split(5, 35, 'OK', 420),
+        split(1, 31, 100),
+        split(2, 32, 200),
+        split(3, 33, 300),
+        split(4, 34, null),
+        split(5, 35, 420),
       ],
     });
 
     expect(
       sortCompetitorsByResult(
-        [slower, faster, morePunches],
+        [fewerControls, morePunches],
         [],
-        { kind: 'default' }
+        { kind: 'default' },
+        sortOptions
       ).map((row) => row.id)
-    ).toEqual(['more-punches', 'faster', 'slower']);
+    ).toEqual(['more-punches', 'fewer-controls']);
   });
 
-  it('ranks a computed in-forest status with in-progress competitors', () => {
-    const overdueChecked = {
-      ...makeCompetitor('overdue-checked', 'CHECKED'),
-      effectiveStatus: 'IN_FOREST' as const,
-    };
-    const mp = makeCompetitor('mp', 'MP');
-    const registered = makeCompetitor('registered', 'REGISTERED');
+  it('keeps Bom sorting on validated total time-loss data', () => {
+    const moreBom = makeCompetitor('more-bom', 'OK', {
+      totalTimeLossSec: 30,
+    });
+    const lessBom = makeCompetitor('less-bom', 'OK', {
+      totalTimeLossSec: 12,
+    });
+    const forest = makeCompetitor('forest', 'IN_FOREST');
 
     expect(
-      sortCompetitorsByResult([registered, mp, overdueChecked], [], {
-        kind: 'default',
-      }).map((row) => row.id)
-    ).toEqual(['overdue-checked', 'mp', 'registered']);
-  });
-
-  it('sorts finished runners by the selected leg within their status group', () => {
-    const rows = [
-      makeCompetitor('slow', 'OK', {
-        runningTimeSec: 600,
-        splits: [split(1, 31, 'OK', 100, 100)],
-      }),
-      makeCompetitor('fast', 'OK', {
-        runningTimeSec: 700,
-        splits: [split(1, 31, 'OK', 90, 90)],
-      }),
-      makeCompetitor('mp', 'MP', {
-        splits: [split(1, 31, 'OK', 80, 80)],
-      }),
-    ];
-
-    expect(
-      sortCompetitorsByResult(rows, ['slow', 'fast'], {
-        kind: 'leg',
-        order: 1,
-      }).map((row) => row.id)
-    ).toEqual(['fast', 'slow', 'mp']);
+      sortCompetitorsByResult(
+        [moreBom, forest, lessBom],
+        ['more-bom', 'less-bom'],
+        { kind: 'bom' },
+        sortOptions
+      ).map((row) => row.id)
+    ).toEqual(['less-bom', 'more-bom', 'forest']);
   });
 });
