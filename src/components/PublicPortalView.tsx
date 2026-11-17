@@ -19,7 +19,6 @@ import type {
 import {
   formatDurationMmSs,
   formatSecondsAsClock,
-  formatSiNumber,
 } from '../services/sportidentProtocol';
 import { useEffectiveCompetitors } from '../hooks/useEffectiveCompetitors';
 import { SplitsAnalysisTable } from './SplitsAnalysisTable';
@@ -28,13 +27,15 @@ import { RunnerStatusIndicator } from './StatusLabels';
 import { PWAInstallButton } from './PWAInstallButton';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
 import {
-  loadFullSeasonFromFirestore,
+  loadPublicCompetitionSummariesFromFirestore,
   loadPublicRaceFromFirestore,
   subscribeClubSettingsFromFirestore,
   subscribePublicCompetitionSummaries,
+  subscribePublicCompetitionMetadataFromFirestore,
+  subscribePublicResultsFromFirestore,
 } from '../firebase';
-import { apiWebSocketUrl } from '../services/authClient';
 import type { PublicCompetitionTab } from '../utils/competitionNavigation';
+import { toPublicResultCompetitor } from '../utils/publicResultProjection';
 
 interface PublicPortalViewProps {
   shortCode: string | null;
@@ -82,8 +83,12 @@ export function PublicPortalView({
   const [raceData, setRaceData] = useState<PublicRacePayload | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const publicCompetitors = useMemo(
+    () => (raceData?.competitors ?? []).map(toPublicResultCompetitor),
+    [raceData?.competitors]
+  );
   const effectiveCompetitors = useEffectiveCompetitors(
-    raceData?.competitors ?? [],
+    publicCompetitors,
     raceData?.competition ?? null
   );
 
@@ -129,7 +134,6 @@ export function PublicPortalView({
 
   const loadData = useCallback(async () => {
     try {
-      let firestoreSeason: Awaited<ReturnType<typeof loadFullSeasonFromFirestore>> = null;
       if (!isRacePage) {
         let overview: PublicSeasonOverviewPayload | null = null;
         try {
@@ -151,42 +155,15 @@ export function PublicPortalView({
               fallbackCompetitions = (await fallback.json()) as CompetitionSummary[];
             }
           } catch {
-            // Fall through to the direct Firestore season read.
+            // Fall through to the public competition summaries listener.
           }
           if (fallbackCompetitions) {
             setApiCompetitionsList(fallbackCompetitions);
             setError(null);
           } else {
-            firestoreSeason = await loadFullSeasonFromFirestore({
-              includeRunnerDb: false,
-            });
-            const cloudSeason = firestoreSeason;
-            if (cloudSeason) {
-              setApiCompetitionsList(
-                cloudSeason.events.map((event) => ({
-                  id: event.competition.id,
-                  competitionId: event.competition.id,
-                  shortCode: event.competition.shortCode,
-                  status: event.competition.status,
-                  name: event.competition.name,
-                  organizer: event.competition.organizer,
-                  date: event.competition.date,
-                  zeroTimeStr: event.competition.zeroTimeStr,
-                  arenaInfo: event.competition.arenaInfo,
-                  seriesName: event.competition.seriesName,
-
-                  competitorCount: event.competitors.length,
-                  finishedCount: event.competitors.filter(
-                    (competitor) =>
-                      competitor.status === 'OK' || competitor.status === 'MP'
-                  ).length,
-                  classCount: event.classes.length,
-                }))
-              );
-              setSeasonClubSettings(cloudSeason.clubSettings);
-              setSeasonSeriesStandings(cloudSeason.seriesStandings ?? []);
-              setError(null);
-            }
+            const summaries = await loadPublicCompetitionSummariesFromFirestore();
+            setApiCompetitionsList(summaries);
+            setError(null);
           }
         }
       } else {
@@ -221,37 +198,6 @@ export function PublicPortalView({
           setError(null);
         }
       }
-      if (!firestoreSeason) {
-        try {
-          firestoreSeason = await loadFullSeasonFromFirestore({
-            includeRunnerDb: false,
-          });
-        } catch (error) {
-          console.error('Kunde inte läsa kanoniska serieställningar från Firestore:', error);
-        }
-      }
-      if (firestoreSeason) {
-        setSeasonClubSettings((current) => ({
-          ...(current ?? firestoreSeason.clubSettings),
-          seriesScoringSettings: firestoreSeason.clubSettings.seriesScoringSettings,
-        }));
-        setSeasonSeriesStandings(firestoreSeason.seriesStandings ?? []);
-        setRaceData((current) =>
-          current
-            ? {
-                ...current,
-                clubSettings: current.clubSettings
-                  ? {
-                      ...current.clubSettings,
-                      seriesScoringSettings:
-                        firestoreSeason.clubSettings.seriesScoringSettings,
-                    }
-                  : current.clubSettings,
-                seriesStandings: firestoreSeason.seriesStandings ?? [],
-              }
-            : current
-        );
-      }
     } catch {
       setError('Kunde inte nå resultatservern — visar senast hämtade data.');
     } finally {
@@ -279,6 +225,54 @@ export function PublicPortalView({
   }, [isRacePage]);
 
   useEffect(() => {
+    const activeCompetitionId = raceData?.competition.id;
+    if (!isRacePage || !activeCompetitionId) return;
+    return subscribePublicResultsFromFirestore(
+      activeCompetitionId,
+      selectedClassId === 'ALL' ? null : selectedClassId,
+      (results) => {
+        setRaceData((current) =>
+          current?.competition.id === activeCompetitionId
+            ? { ...current, competitors: results }
+            : current
+        );
+      },
+      (error) => {
+        console.error(
+          `Kunde inte prenumerera på publika resultat i tävling ${activeCompetitionId}:`,
+          error
+        );
+      }
+    );
+  }, [isRacePage, raceData?.competition.id, selectedClassId]);
+
+  useEffect(() => {
+    const activeCompetitionId = raceData?.competition.id;
+    if (!isRacePage || !activeCompetitionId) return;
+    return subscribePublicCompetitionMetadataFromFirestore(
+      activeCompetitionId,
+      (metadata) => {
+        setRaceData((current) =>
+          current?.competition.id === activeCompetitionId
+            ? {
+                ...current,
+                competition: metadata.competition,
+                radioControls: metadata.radioControls,
+                emergency: metadata.emergency,
+              }
+            : current
+        );
+      },
+      (error) => {
+        console.error(
+          `Kunde inte prenumerera på publik metadata i tävling ${activeCompetitionId}:`,
+          error
+        );
+      }
+    );
+  }, [isRacePage, raceData?.competition.id]);
+
+  useEffect(() => {
     if (!raceData) return;
     if (!classFilter) {
       setSelectedClassId('ALL');
@@ -295,8 +289,6 @@ export function PublicPortalView({
   }, [classFilter, raceData]);
 
   useEffect(() => {
-    let active = true;
-    let revision = 0;
     const unsubscribe = subscribeClubSettingsFromFirestore((settings) => {
       setFirestoreBranding({
         portalTitle: settings.portalTitle,
@@ -305,39 +297,8 @@ export function PublicPortalView({
         customTextColor: settings.customTextColor,
         customAccentColor: settings.customAccentColor,
       });
-      const currentRevision = ++revision;
-      void loadFullSeasonFromFirestore({ includeRunnerDb: false })
-        .then((cloudSeason) => {
-          if (!active || currentRevision !== revision || !cloudSeason) return;
-          setSeasonClubSettings((current) => ({
-            ...(current ?? cloudSeason.clubSettings),
-            seriesScoringSettings: cloudSeason.clubSettings.seriesScoringSettings,
-          }));
-          setSeasonSeriesStandings(cloudSeason.seriesStandings ?? []);
-          setRaceData((current) =>
-            current
-              ? {
-                  ...current,
-                  clubSettings: current.clubSettings
-                    ? {
-                        ...current.clubSettings,
-                        seriesScoringSettings:
-                          cloudSeason.clubSettings.seriesScoringSettings,
-                      }
-                    : current.clubSettings,
-                  seriesStandings: cloudSeason.seriesStandings ?? [],
-                }
-              : current
-          );
-        })
-        .catch((error: unknown) => {
-          console.error('Kunde inte läsa publika serieställningar från Firestore:', error);
-        });
     });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -356,31 +317,6 @@ export function PublicPortalView({
       setSelectedSeriesClass(bundle.classes[0]?.className ?? '');
     }
   }, [seasonSeriesStandings, selectedSeriesName, selectedSeriesClass]);
-
-  // Real-time WebSocket auto-refresh for spectators
-  useEffect(() => {
-    let active = true;
-    let ws: WebSocket | null = null;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const connect = () => {
-      if (!active) return;
-      ws = new WebSocket(apiWebSocketUrl('/api/ws'));
-      ws.onmessage = () => {
-        if (active) void loadData();
-      };
-      ws.onclose = () => {
-        if (active) retryTimer = setTimeout(connect, 3000);
-      };
-    };
-
-    connect();
-    return () => {
-      active = false;
-      if (retryTimer) clearTimeout(retryTimer);
-      if (ws) ws.close();
-    };
-  }, [loadData]);
 
   const effectiveClubSettings = useMemo(() => {
     const settings = raceData?.clubSettings ?? seasonClubSettings;
@@ -988,6 +924,7 @@ export function PublicPortalView({
                                         classCompetitors={effectiveCompetitors.filter(
                                           (c) => c.classId === r.classId
                                         )}
+                                        showSiNumber={false}
                                         onClose={() => setInspectedRunner(null)}
                                       />
                                     </div>
@@ -1034,7 +971,6 @@ export function PublicPortalView({
                               <thead>
                                 <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/50 dark:bg-slate-950/30">
                                   <th className="py-2 pl-3 pr-2 w-16 font-mono">Nr-lapp</th>
-                                  <th className="py-2 px-2.5 w-28 font-mono">Bricknummer</th>
                                   <th className="py-2 px-2.5">Namn</th>
                                   <th className="py-2 px-2.5">Klubb</th>
                                   <th className="py-2 pl-2.5 pr-3 text-right font-mono w-24">Starttid</th>
@@ -1050,9 +986,6 @@ export function PublicPortalView({
                                     <tr key={r.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
                                       <td className="py-1.5 pl-3 pr-2 font-mono tabular-nums text-slate-600 dark:text-slate-400">
                                         {r.bib ?? '—'}
-                                      </td>
-                                      <td className="py-1.5 px-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300">
-                                        {formatSiNumber(r.siNumber)}
                                       </td>
                                       <td className="py-1.5 px-2.5 font-medium text-slate-900 dark:text-slate-100">
                                         {r.fullName}

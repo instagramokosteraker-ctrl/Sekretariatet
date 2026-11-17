@@ -1,5 +1,6 @@
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from '../types/sportident';
+import { createPublicResultDocumentFromFirestore } from '../utils/publicResultProjection';
 
 export interface SIAssignmentRetirementActor {
   uid: string;
@@ -166,6 +167,18 @@ export async function retireCompetitorWithAssignment(
     }
 
     transaction.update(competitorRef, { status: nextStatus, updatedAt });
+    transaction.set(
+      competitionRef.collection('publicResults').doc(competitorId),
+      {
+        ...createPublicResultDocumentFromFirestore(
+          competitionId,
+          competitorId,
+          { ...competitor, status: nextStatus }
+        ),
+        updatedAt,
+      },
+      { merge: true }
+    );
     if (wasFinished !== willBeFinished) {
       const currentFinishedCount = Number(competition.finishedCount);
       if (!Number.isInteger(currentFinishedCount) || currentFinishedCount < 0) {

@@ -48,6 +48,7 @@ import type {
   LiveEventItem,
   MeosAppState,
   OfficialRoleMode,
+  PublicCompetitorResult,
   RawSIFrameLog,
   RocIntegrationStatus,
   RunnerDbEntry,
@@ -126,10 +127,18 @@ import {
   subscribeClubSettingsFromFirestore,
   subscribeActiveEventIdFromFirestore,
   subscribeRunnerDbFromFirestore,
-  subscribeCompetitorRentalReturnsFromFirestore,
+  subscribeCompetitorsFromFirestore,
+  subscribeStationPunchesFromFirestore,
+  subscribePublicResultsFromFirestore,
+  publishPublicCompetitionMetadataToFirestore,
+  seedPublicResultProjectionsFromFirestore,
   loadRunnerDbEntriesFromFirestore,
   saveLearnedRunnerDbEntryToFirestore,
 } from './firebase';
+import {
+  applyFirestoreRadioPunches,
+  type FirestoreLiveRadioPunch,
+} from './utils/firestoreLiveResults';
 import { onAuthStateChanged } from 'firebase/auth';
 import { ReadoutDashboard } from './components/ReadoutDashboard';
 import { ForestSafetyView } from './components/ForestSafetyView';
@@ -622,7 +631,16 @@ export default function App() {
   const activeEventIdRef = useRef<string>('');
   const routeCompetitionActivationRef = useRef<string | null>(null);
   const activeEventIdFromFirestoreRef = useRef(false);
-  const rentalFieldsLoadedEventIdRef = useRef<string>('');
+  const competitorsStateEventIdRef = useRef<string>('');
+  const firestoreCompetitorsLoadedEventIdRef = useRef<string>('');
+  const liveRadioPunchesRef = useRef<{
+    competitionId: string;
+    punches: FirestoreLiveRadioPunch[];
+  } | null>(null);
+  const livePublicResultsRef = useRef<{
+    competitionId: string;
+    results: PublicCompetitorResult[];
+  } | null>(null);
   const mirroredActiveEventIdRef = useRef<string | null>(null);
   const mirroredSeriesScoringSettingsRef = useRef<string | null>(null);
   const [competitionsList, setCompetitionsList] = useState<CompetitionSummary[]>([]);
@@ -793,6 +811,10 @@ export default function App() {
   const [stations, setStations] = useState<SIStation[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [runnerDb, setRunnerDb] = useState<RunnerDbEntry[]>([]);
+  const [emergency, setEmergency] = useState<EmergencySettings>({
+    brokenControls: [],
+    controlTimeOffsets: {},
+  });
   useEffect(() => {
     if (!firebaseUserUid) return;
     return subscribeRunnerDbFromFirestore(setRunnerDb, (error) => {
@@ -801,33 +823,184 @@ export default function App() {
   }, [firebaseUserUid]);
   useEffect(() => {
     if (!firebaseUserUid || !activeEventId) {
-      rentalFieldsLoadedEventIdRef.current = '';
+      firestoreCompetitorsLoadedEventIdRef.current = '';
       return;
     }
-    return subscribeCompetitorRentalReturnsFromFirestore(
-      activeEventId,
-      (fields) => {
-        rentalFieldsLoadedEventIdRef.current = activeEventId;
-        const fieldsById = new Map(
-          fields.map((item) => [item.competitorId, item])
+    const activeCompetitionId = activeEventId;
+    return subscribeCompetitorsFromFirestore(
+      activeCompetitionId,
+      {
+        classes,
+        courses,
+        competitionZeroTimeSec: competition.zeroTimeSec,
+        emergency,
+      },
+      (firestoreCompetitors) => {
+        if (activeEventIdRef.current !== activeCompetitionId) return;
+        const preserveCurrentCompetition =
+          competitorsStateEventIdRef.current === activeCompetitionId;
+        setCompetitors((current) => {
+          const currentById = new Map(
+            (preserveCurrentCompetition ? current : []).map((competitor) => [
+              competitor.id,
+              competitor,
+            ])
+          );
+          const currentRadioPunches =
+            liveRadioPunchesRef.current?.competitionId === activeCompetitionId
+              ? liveRadioPunchesRef.current.punches
+              : null;
+          const currentPublicResults =
+            livePublicResultsRef.current?.competitionId === activeCompetitionId
+              ? new Map(
+                  livePublicResultsRef.current.results.map((result) => [
+                    result.id,
+                    result,
+                  ])
+                )
+              : null;
+          const merged = firestoreCompetitors.map((competitor) => {
+            const existing = currentById.get(competitor.id);
+            const publicResult = currentPublicResults?.get(competitor.id);
+            return {
+              ...competitor,
+              ...(competitor.isBorrowedCard === undefined &&
+              existing?.isBorrowedCard !== undefined
+                ? { isBorrowedCard: existing.isBorrowedCard }
+                : {}),
+              radioSplits:
+                currentRadioPunches !== null
+                  ? competitor.radioSplits
+                  : publicResult?.radioSplits ??
+                    (existing?.siNumber === competitor.siNumber
+                      ? existing.radioSplits
+                      : competitor.radioSplits),
+            };
+          });
+          return currentRadioPunches === null
+            ? merged
+            : applyFirestoreRadioPunches(merged, currentRadioPunches);
+        });
+        competitorsStateEventIdRef.current = activeCompetitionId;
+        firestoreCompetitorsLoadedEventIdRef.current = activeCompetitionId;
+      },
+      (error) => {
+        console.error('Kunde inte prenumerera på deltagarresultat från Firestore:', error);
+      }
+    );
+  }, [
+    activeEventId,
+    classes,
+    competition.zeroTimeSec,
+    courses,
+    emergency,
+    firebaseUserUid,
+  ]);
+  useEffect(() => {
+    if (
+      !firebaseUserUid ||
+      !activeEventId ||
+      (authSession?.user.sessionKind !== 'ADMIN' &&
+        !['READOUT', 'FOREST'].includes(
+          authSession?.user.officialRole || ''
+        ))
+    ) {
+      liveRadioPunchesRef.current = null;
+      return;
+    }
+    const activeCompetitionId = activeEventId;
+    return subscribeStationPunchesFromFirestore(
+      activeCompetitionId,
+      (punches) => {
+        if (activeEventIdRef.current !== activeCompetitionId) return;
+        liveRadioPunchesRef.current = {
+          competitionId: activeCompetitionId,
+          punches,
+        };
+        setCompetitors((current) =>
+          applyFirestoreRadioPunches(current, punches)
         );
+      },
+      (error) => {
+        console.error(
+          `Kunde inte prenumerera på radiostämplingar i tävling ${activeCompetitionId}:`,
+          error
+        );
+      }
+    );
+  }, [activeEventId, authSession?.user.sessionKind, firebaseUserUid]);
+  useEffect(() => {
+    if (
+      !firebaseUserUid ||
+      !activeEventId ||
+      authSession?.user.sessionKind !== 'OFFICIAL' ||
+      authSession.user.officialRole !== 'SPEAKER'
+    ) {
+      livePublicResultsRef.current = null;
+      return;
+    }
+    const activeCompetitionId = activeEventId;
+    return subscribePublicResultsFromFirestore(
+      activeCompetitionId,
+      null,
+      (results) => {
+        if (activeEventIdRef.current !== activeCompetitionId) return;
+        livePublicResultsRef.current = {
+          competitionId: activeCompetitionId,
+          results,
+        };
+        const resultsById = new Map(results.map((result) => [result.id, result]));
         setCompetitors((current) =>
           current.map((competitor) => {
-            const canonical = fieldsById.get(competitor.id);
-            return canonical
-              ? {
-                  ...competitor,
-                  rentalReturned: canonical.rentalReturned,
-                }
+            const result = resultsById.get(competitor.id);
+            return result
+              ? { ...competitor, radioSplits: result.radioSplits }
               : competitor;
           })
         );
       },
       (error) => {
-        console.error('Kunde inte prenumerera på hyrstatus från Firestore:', error);
+        console.error(
+          `Kunde inte prenumerera på publika resultat för Speaker i tävling ${activeCompetitionId}:`,
+          error
+        );
       }
     );
-  }, [activeEventId, firebaseUserUid]);
+  }, [
+    activeEventId,
+    authSession?.user.officialRole,
+    authSession?.user.sessionKind,
+    firebaseUserUid,
+  ]);
+  useEffect(() => {
+    if (!activeEventId || authSession?.user.sessionKind !== 'ADMIN') return;
+    void seedPublicResultProjectionsFromFirestore(activeEventId).catch((error: unknown) => {
+      console.error(
+        `Kunde inte skapa publika resultatprojektioner i tävling ${activeEventId}:`,
+        error
+      );
+    });
+  }, [activeEventId, authSession?.user.sessionKind]);
+  useEffect(() => {
+    if (!activeEventId || authSession?.user.sessionKind !== 'ADMIN') return;
+    void publishPublicCompetitionMetadataToFirestore(
+      activeEventId,
+      competition,
+      stations,
+      emergency
+    ).catch((error: unknown) => {
+      console.error(
+        `Kunde inte publicera tävlingsmetadata för tävling ${activeEventId}:`,
+        error
+      );
+    });
+  }, [
+    activeEventId,
+    authSession?.user.sessionKind,
+    competition,
+    emergency,
+    stations,
+  ]);
   useEffect(() => {
     if (!firebaseUserUid || !activeEventId) return;
     return subscribeCoursesFromFirestore(
@@ -853,8 +1026,26 @@ export default function App() {
     if (!firebaseUserUid || !activeEventId) return;
     return subscribeCompetitionMetadataFromFirestore(
       activeEventId,
-      (metadata) => {
+      (metadata, emergencySettings) => {
         if (metadata) setCompetition(metadata);
+        if (emergencySettings) {
+          setEmergency((current) => {
+            const sameBrokenControls =
+              current.brokenControls.length === emergencySettings.brokenControls.length &&
+              current.brokenControls.every(
+                (controlCode, index) =>
+                  controlCode === emergencySettings.brokenControls[index]
+              );
+            const currentOffsets = current.controlTimeOffsets;
+            const nextOffsets = emergencySettings.controlTimeOffsets;
+            const sameOffsets =
+              Object.keys(currentOffsets).length === Object.keys(nextOffsets).length &&
+              Object.entries(currentOffsets).every(
+                ([controlCode, offset]) => nextOffsets[controlCode] === offset
+              );
+            return sameBrokenControls && sameOffsets ? current : emergencySettings;
+          });
+        }
       },
       (error) => {
         console.error('Kunde inte prenumerera på tävlingsmetadata från Firestore:', error);
@@ -907,6 +1098,7 @@ export default function App() {
         setCompetition(selectedEvent.competition);
         setCourses(selectedEvent.courses);
         setClasses(selectedEvent.classes);
+        competitorsStateEventIdRef.current = activeEventId;
         setCompetitors(selectedEvent.competitors);
         setStations(selectedEvent.stations ?? []);
         setEmergency(
@@ -933,10 +1125,6 @@ export default function App() {
     connectedEventId: null,
     lastSyncedAt: null,
     autoCreateFromRunnerDbOnReadout: true,
-  });
-  const [emergency, setEmergency] = useState<EmergencySettings>({
-    brokenControls: [],
-    controlTimeOffsets: {},
   });
   const [roc, setRoc] = useState<RocIntegrationStatus>({
     enabled: false,
@@ -1084,7 +1272,10 @@ export default function App() {
         const event = cloudSnap?.events.find(
           (candidate) => candidate.competition.id === activeEventIdRef.current
         );
-        if (event) setCompetitors(event.competitors);
+        if (event) {
+          competitorsStateEventIdRef.current = event.competition.id;
+          setCompetitors(event.competitors);
+        }
       }
       if (soundEnabledRef.current) {
         playMeosFeedbackTone(res.queuedOffline ? 'registration' : 'radio');
@@ -1191,17 +1382,27 @@ export default function App() {
       setClasses(snap.classes);
     }
     setStations(snap.stations);
+    const keepFirestoreCompetitors =
+      hasFirestoreIdentity &&
+      firestoreCompetitorsLoadedEventIdRef.current === snap.activeEventId;
+    if (!keepFirestoreCompetitors) {
+      competitorsStateEventIdRef.current = snap.activeEventId;
+    }
     setCompetitors((current) => {
-      if (!hasFirestoreIdentity) return snap.competitors;
-      if (rentalFieldsLoadedEventIdRef.current !== snap.activeEventId) return current;
-      const currentById = new Map(current.map((competitor) => [competitor.id, competitor]));
-      return snap.competitors.map((competitor) => {
-        const canonical = currentById.get(competitor.id);
-        return canonical
-          ? {
-              ...competitor,
-              rentalReturned: Boolean(canonical.rentalReturned),
-            }
+      if (!keepFirestoreCompetitors) return snap.competitors;
+      if (
+        liveRadioPunchesRef.current?.competitionId === snap.activeEventId ||
+        livePublicResultsRef.current?.competitionId === snap.activeEventId
+      ) {
+        return current;
+      }
+      const snapshotById = new Map(
+        snap.competitors.map((competitor) => [competitor.id, competitor])
+      );
+      return current.map((competitor) => {
+        const snapshotCompetitor = snapshotById.get(competitor.id);
+        return snapshotCompetitor
+          ? { ...competitor, radioSplits: snapshotCompetitor.radioSplits }
           : competitor;
       });
     });
@@ -1552,6 +1753,7 @@ export default function App() {
         setCourses(targetEvt.courses);
         setClasses(targetEvt.classes);
         setStations(targetEvt.stations ?? []);
+        competitorsStateEventIdRef.current = targetEvt.competition.id;
         setCompetitors(targetEvt.competitors);
         setEmergency(
           targetEvt.emergency ?? {
@@ -4764,12 +4966,13 @@ export default function App() {
                     } catch (error) {
                       if (!(error instanceof TypeError)) throw error;
                     }
-                    if (res?.ok) return null;
                     if (res && res.status !== 404 && res.status !== 405) {
-                      const errorBody = (await res.json().catch(() => ({}))) as {
-                        error?: string;
-                      };
-                      return errorBody.error ?? 'Kunde inte spara manuell måltid.';
+                      if (!res.ok) {
+                        const errorBody = (await res.json().catch(() => ({}))) as {
+                          error?: string;
+                        };
+                        return errorBody.error ?? 'Kunde inte spara manuell måltid.';
+                      }
                     }
                     const runner = competitors.find(
                       (candidate) => candidate.id === params.competitorId

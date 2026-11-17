@@ -1,5 +1,6 @@
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from '../types/sportident';
+import { createPublicResultDocumentFromFirestore } from '../utils/publicResultProjection';
 
 export interface ReadoutAutoCreateActor {
   uid: string;
@@ -384,6 +385,28 @@ export async function createReadoutCompetitorFromRunnerDb(
       createdAt: serverTimestamp,
       updatedAt: serverTimestamp,
     });
+    transaction.create(
+      competitionRef.collection('publicResults').doc(input.competitorId),
+      {
+        ...createPublicResultDocumentFromFirestore(
+          competitionId,
+          input.competitorId,
+          {
+            bib,
+            fullName: String(runner?.fullName).slice(0, 120),
+            club: String(runner?.club).slice(0, 100) || 'Klubblös',
+            classId: input.competitor.classId,
+            status: input.competitor.status,
+            allocatedStartSec: -1,
+            startTimeSec: input.competitor.startTimeSec,
+            finishTimeSec: input.competitor.finishTimeSec,
+            runningTimeSec: input.competitor.runningTimeSec,
+          },
+          []
+        ),
+        updatedAt: serverTimestamp,
+      }
+    );
     transaction.create(assignmentRef, {
       competitionId,
       siNumber: input.siNumber,

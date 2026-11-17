@@ -58,6 +58,7 @@ import {
 import { hasSameCompetitorIdentitySnapshot } from './src/utils/competitorIdentitySnapshot';
 import { protectCloudHydratedCompetitors } from './src/utils/cloudHydrateCompetitorFence';
 import { executeClassDraw } from './src/server/classDraw';
+import { toPublicCompetitorResult } from './src/utils/publicResultProjection';
 
 let initError: Error | null = null;
 
@@ -2207,7 +2208,7 @@ async function startServer() {
       }),
       courses: ev.courses,
       classes: ev.classes.map(omitLegacyPaymentFields),
-      competitors: ev.competitors.map(omitLegacyPaymentFields),
+      competitors: ev.competitors.map(toPublicCompetitorResult),
       radioControls: ev.stations
         .filter(
           (station) =>
@@ -2220,7 +2221,7 @@ async function startServer() {
           stationFunction,
           active,
         })),
-      events: ev.events.slice(0, 60),
+      events: [],
       emergency: ev.emergency,
       competitionsList: buildCompetitionsSummaryList(seasonDb),
       clubSettings: omitLegacyPaymentFields(ensureClubSettings(seasonDb)),

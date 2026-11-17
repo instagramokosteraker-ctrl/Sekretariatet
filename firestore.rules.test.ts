@@ -14,6 +14,7 @@ import {
   getDocs,
   query,
   serverTimestamp,
+  updateDoc,
   where,
   writeBatch,
   type DocumentData,
@@ -619,6 +620,90 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     );
     // Competitor creation is now accepted only with its matching assignment.
     await assertSucceeds(initialCompetitorBatch.commit());
+
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .get()
+    );
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .collection('competitions/evt_live/competitors')
+        .get()
+    );
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/stations/station_1')
+        .get()
+    );
+    await assertFails(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/stationPunches/punch_1')
+        .get()
+    );
+    await assertSucceeds(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/publicResults/cmp_valid')
+        .get()
+    );
+    await assertSucceeds(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/publicMetadata/summary')
+        .get()
+    );
+
+    const publicResult = {
+      competitionId: 'evt_live',
+      competitorId: 'cmp_valid',
+      bib: 101,
+      fullName: 'Test Löpare',
+      club: 'OK Linné',
+      classId: 'cls_1',
+      status: 'REGISTERED',
+      allocatedStartSec: -1,
+      startTimeSec: -1,
+      finishTimeSec: -1,
+      runningTimeSec: -1,
+      radioSplits: [],
+      updatedAt: serverTimestamp(),
+    };
+    await assertSucceeds(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/publicResults/cmp_valid')
+        .set(publicResult)
+    );
+    await assertSucceeds(
+      attackerCtx
+        .firestore()
+        .doc('competitions/evt_live/publicResults/cmp_valid')
+        .get()
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/publicResults/cmp_valid')
+        .update({
+          siNumber: 8500111,
+          updatedAt: serverTimestamp(),
+        })
+    );
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/publicResults/cmp_valid')
+        .update({
+          status: 'OK',
+          updatedAt: serverTimestamp(),
+        })
+    );
+
     const invalidEventorIdentityBatch = writeBatch(raceAdminCtx.firestore());
     invalidEventorIdentityBatch.set(
       doc(
@@ -1305,16 +1390,22 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     await assertSucceeds(
       raceAdminCtx.firestore().collection('competitions/evt_live/stationPunches').get()
     );
+    await assertSucceeds(
+      readoutCtx.firestore().collection('competitions/evt_live/stationPunches').get()
+    );
     await assertFails(
-      attackerCtx
-        .firestore()
-        .doc('competitions/evt_live/stationPunches/op_attacker')
-        .set({
-          ...stationPunch,
-          punchId: 'op_attacker',
-          clientPunchId: 'op_attacker',
-          ownerUid: 'attacker_uid',
-        })
+      officialCtx.firestore().collection('competitions/evt_live/stationPunches').get()
+    );
+    await assertFails(
+      attackerCtx.firestore().collection('competitions/evt_live/stationPunches').get()
+    );
+    await assertFails(
+      attackerCtx.firestore().doc('competitions/evt_live/stationPunches/op_attacker').set({
+        ...stationPunch,
+        punchId: 'op_attacker',
+        clientPunchId: 'op_attacker',
+        ownerUid: 'attacker_uid',
+      })
     );
     await assertFails(
       raceAdminCtx
@@ -1585,6 +1676,197 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .firestore()
         .doc('competitions/evt_live/siCardAssignments/8500112')
         .delete()
+    );
+  } finally {
+    await testEnv.cleanup();
+  }
+}
+
+export async function runPublicProjectionRulesSuite(): Promise<void> {
+  const rules = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
+  const testEnv = await initializeTestEnvironment({
+    projectId: 'demo-passersi-public-projection-test',
+    firestore: { rules },
+  });
+
+  try {
+    await testEnv.clearFirestore();
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx.firestore().doc('admins/projection_admin').set({
+        uid: 'projection_admin',
+      });
+      await ctx.firestore().doc('competitions/evt_projection').set({
+        competitionId: 'evt_projection',
+      });
+      await ctx.firestore().doc('roleAssignments/projection_forest').set({
+        uid: 'projection_forest',
+        role: 'FOREST',
+      });
+      await ctx
+        .firestore()
+        .doc('competitions/evt_projection/competitors/cmp_projection')
+        .set({
+          competitorId: 'cmp_projection',
+          competitionId: 'evt_projection',
+          bib: 14,
+          fullName: 'Safe Runner',
+          club: 'Safe Club',
+          classId: 'class_1',
+          siNumber: 12345678,
+          cardSeries: 'SI-Card 10',
+          isRentalCard: false,
+          rentalReturned: false,
+          status: 'IN_FOREST',
+          allocatedStartSec: 36000,
+          checkTimeSec: -1,
+          startTimeSec: 36005,
+          finishTimeSec: -1,
+          manualFinishTimeSec: -1,
+          runningTimeSec: -1,
+          readoutAtIso: '',
+          punchCodes: [],
+          punchTimes: [],
+          ownerUid: 'projection_owner',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      await ctx
+        .firestore()
+        .doc('competitions/evt_projection/publicMetadata/summary')
+        .set({
+          competition: {
+            id: 'evt_projection',
+            status: 'LIVE',
+            name: 'Projection Test',
+          },
+          radioControls: [],
+          emergency: {
+            brokenControls: [],
+            controlTimeOffsets: {},
+          },
+          updatedAt: new Date(),
+        });
+    });
+
+    const publicCtx = testEnv.authenticatedContext('public_viewer', {
+      email: 'viewer@example.com',
+      email_verified: true,
+    });
+    const adminCtx = testEnv.authenticatedContext('projection_admin', {
+      email: 'admin@example.com',
+      email_verified: true,
+    });
+    const forestCtx = testEnv.authenticatedContext('projection_forest', {
+      email: 'forest@example.com',
+      email_verified: true,
+    });
+
+    await assertFails(
+      publicCtx
+        .firestore()
+        .doc('competitions/evt_projection/competitors/cmp_projection')
+        .get()
+    );
+    await assertFails(
+      publicCtx
+        .firestore()
+        .doc('competitions/evt_projection/stations/station_1')
+        .get()
+    );
+    await assertFails(
+      publicCtx
+        .firestore()
+        .doc('competitions/evt_projection/stationPunches/punch_1')
+        .get()
+    );
+    await assertSucceeds(
+      publicCtx
+        .firestore()
+        .doc('competitions/evt_projection/publicResults/cmp_projection')
+        .get()
+    );
+    await assertSucceeds(
+      publicCtx
+        .firestore()
+        .doc('competitions/evt_projection/publicMetadata/summary')
+        .get()
+    );
+
+    const projectionRef = adminCtx
+      .firestore()
+      .doc('competitions/evt_projection/publicResults/cmp_projection');
+    await assertSucceeds(
+      projectionRef.set({
+        competitionId: 'evt_projection',
+        competitorId: 'cmp_projection',
+        bib: 14,
+        fullName: 'Safe Runner',
+        club: 'Safe Club',
+        classId: 'class_1',
+        status: 'IN_FOREST',
+        allocatedStartSec: 36000,
+        startTimeSec: 36005,
+        finishTimeSec: -1,
+        runningTimeSec: -1,
+        radioSplits: [],
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      projectionRef.update({
+        status: 'OK',
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      projectionRef.update({
+        siNumber: 12345678,
+        updatedAt: serverTimestamp(),
+      })
+    );
+    const forestProjectionRef = forestCtx
+      .firestore()
+      .doc('competitions/evt_projection/publicResults/cmp_projection');
+    await assertSucceeds(
+      updateDoc(
+        forestCtx
+          .firestore()
+          .doc('competitions/evt_projection/competitors/cmp_projection'),
+        {
+          status: 'OK',
+          finishTimeSec: 37200,
+          manualFinishTimeSec: 37200,
+          runningTimeSec: 1195,
+          updatedAt: serverTimestamp(),
+        }
+      )
+    );
+    await assertSucceeds(
+      updateDoc(forestProjectionRef, {
+        status: 'OK',
+        finishTimeSec: 37200,
+        runningTimeSec: 1195,
+        updatedAt: serverTimestamp(),
+      })
+    );
+
+    await assertSucceeds(
+      adminCtx
+        .firestore()
+        .doc('competitions/evt_projection/publicMetadata/summary')
+        .set({
+          competition: {
+            id: 'evt_projection',
+            status: 'LIVE',
+            name: 'Projection Test',
+          },
+          radioControls: [],
+          emergency: {
+            brokenControls: [],
+            controlTimeOffsets: {},
+          },
+          updatedAt: serverTimestamp(),
+        })
     );
   } finally {
     await testEnv.cleanup();

@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import {
   Timestamp,
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
@@ -29,6 +30,17 @@ import {
   type Transaction,
 } from 'firebase/firestore';
 import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './utils/readoutValidation';
+import {
+  mapFirestoreCompetitor,
+  type FirestoreCompetitorContext,
+  type FirestoreLiveRadioPunch,
+} from './utils/firestoreLiveResults';
+import {
+  addPublicRadioSplit,
+  createPublicResultDocument,
+  createPublicResultDocumentFromFirestore,
+  parsePublicResultDocument,
+} from './utils/publicResultProjection';
 import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
@@ -55,7 +67,11 @@ import type {
   OfficialRoleAssignment,
   OfficialRoleInvite,
   PublicRacePayload,
+  PublicCompetitionMetadata,
+  PublicCompetitorResult,
+  SeriesStandingsBundle,
   RunnerDbEntry,
+  RadioSplit,
   RunnerStatus,
   SICardSeries,
   SIStation,
@@ -111,6 +127,56 @@ const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+function getPublicResultDocumentRef(
+  competitionId: string,
+  competitorId: string
+): DocumentReference {
+  return doc(
+    db,
+    'competitions',
+    competitionId,
+    'publicResults',
+    competitorId
+  );
+}
+
+function writePublicResultProjectionInTransaction(
+  transaction: Transaction,
+  competitionId: string,
+  competitorId: string,
+  competitorData: Record<string, unknown>,
+  radioSplits?: unknown
+): void {
+  transaction.set(
+    getPublicResultDocumentRef(competitionId, competitorId),
+    {
+      ...createPublicResultDocumentFromFirestore(
+        competitionId,
+        competitorId,
+        competitorData,
+        radioSplits
+      ),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+function writePublicResultProjectionFromCompetitor(
+  transaction: Transaction,
+  competitionId: string,
+  competitor: Competitor
+): void {
+  transaction.set(
+    getPublicResultDocumentRef(competitionId, competitor.id),
+    {
+      ...createPublicResultDocument(competitionId, competitor),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
 
 // Blueprint validation constants synchronized verbatim with firebase-blueprint.json & firestore.rules
 export const BOOTSTRAP_SUPER_ADMIN_EMAIL = 'instagram.okosteraker@gmail.com';
@@ -2020,7 +2086,7 @@ async function writeImportedCompetitorWithAssignment(params: {
             }
           );
         }
-        transaction.set(competitorRef, {
+        const competitorWrite = {
           ...buildImportedCompetitorWriteFields(params.mutable, 'CREATE'),
           competitorId,
           competitionId,
@@ -2028,7 +2094,15 @@ async function writeImportedCompetitorWithAssignment(params: {
           schemaVersion: 1,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-        });
+        };
+        transaction.set(competitorRef, competitorWrite);
+        writePublicResultProjectionInTransaction(
+          transaction,
+          competitionId,
+          competitorId,
+          competitorWrite,
+          []
+        );
         return assignment ? 'ALREADY_MATCHED' : 'CREATED';
       }
 
@@ -2068,10 +2142,20 @@ async function writeImportedCompetitorWithAssignment(params: {
         );
       }
 
+      const competitorUpdate = buildImportedCompetitorWriteFields(
+        params.mutable,
+        'UPDATE'
+      );
       transaction.update(competitorRef, {
-        ...buildImportedCompetitorWriteFields(params.mutable, 'UPDATE'),
+        ...competitorUpdate,
         updatedAt: serverTimestamp(),
       });
+      writePublicResultProjectionInTransaction(
+        transaction,
+        competitionId,
+        competitorId,
+        { ...competitorData, ...competitorUpdate }
+      );
       return 'NOT_APPLICABLE';
     }
   );
@@ -2716,96 +2800,14 @@ export async function loadFullSeasonFromFirestore(options?: {
         collection(db, 'competitions', competitionId, 'competitors')
       );
       for (const d of cmpSnap.docs) {
-        const cmd = d.data() as {
-          competitorId: string;
-          eventorPersonId?: string;
-          eventorOrgId?: string;
-          bib: number;
-          fullName: string;
-          club: string;
-          classId: string;
-          siNumber: number;
-          cardSeries: SICardSeries;
-          isRentalCard: boolean;
-          rentalReturned: boolean;
-          status: RunnerStatus;
-          allocatedStartSec: number;
-          checkTimeSec: number;
-          startTimeSec: number;
-          finishTimeSec: number;
-          manualFinishTimeSec: number;
-          runningTimeSec: number;
-          readoutAtIso: string;
-          punchCodes: number[];
-          punchTimes: number[];
-        };
-        const codes = Array.isArray(cmd.punchCodes) ? cmd.punchCodes.map(Number) : [];
-        const times = Array.isArray(cmd.punchTimes) ? cmd.punchTimes.map(Number) : [];
-        const len = Math.min(codes.length, times.length);
-        const punches = [];
-        for (let idx = 0; idx < len; idx++) {
-          punches.push({ code: codes[idx], timeSec: times[idx] });
-        }
-        const checkSec = decodeNullableSec(cmd.checkTimeSec);
-        const startSec = decodeNullableSec(cmd.startTimeSec);
-        const finishSec = decodeNullableSec(cmd.finishTimeSec);
-        const manualFinishSec = decodeNullableSec(cmd.manualFinishTimeSec);
-        const allocatedStartSec = decodeNullableSec(cmd.allocatedStartSec);
-        const hasReadout = Boolean(cmd.readoutAtIso) || punches.length > 0;
-        const effectiveFinish = manualFinishSec ?? finishSec;
-        const validation =
-          hasReadout && effectiveFinish !== null
-            ? validateCompetitorReadout(
-                classes.find((candidate) => candidate.id === cmd.classId),
-                courses,
-                startSec ??
-                  allocatedStartSec ??
-                  Number(compDocData.zeroTimeSec ?? 36000),
-                effectiveFinish,
-                punches,
-                  emergency
-              )
-            : null;
-
-        competitors.push({
-          id: cmd.competitorId || d.id,
-          ...(typeof cmd.eventorPersonId === 'string'
-            ? { eventorPersonId: cmd.eventorPersonId }
-            : {}),
-          ...(typeof cmd.eventorOrgId === 'string'
-            ? { eventorOrgId: cmd.eventorOrgId }
-            : {}),
-          bib: Number(cmd.bib || 1),
-          fullName: cmd.fullName || 'Deltagare',
-          club: cmd.club || 'Klubblös',
-          classId: cmd.classId || classes[0]?.id || 'cls_open',
-          siNumber: Number(cmd.siNumber || 1000),
-          cardSeries: cmd.cardSeries || 'SI-Card 10',
-          isRentalCard: Boolean(cmd.isRentalCard),
-          rentalReturned: Boolean(cmd.rentalReturned),
-          status: cmd.status || 'REGISTERED',
-          allocatedStartSec,
-          checkTimeSec: checkSec,
-          startTimeSec: startSec,
-          finishTimeSec: finishSec,
-          manualFinishTimeSec: manualFinishSec,
-          runningTimeSec: decodeNullableSec(cmd.runningTimeSec),
-          lastSeenControl: punches.length > 0 ? 1 : null,
-          lastSeenTimeSec: finishSec ?? startSec ?? checkSec,
-          readoutAt: cmd.readoutAtIso ? cmd.readoutAtIso : null,
-          radioSplits: [],
-          cardPunches: punches,
-          rawReadout: hasReadout
-            ? {
-                checkTimeSec: checkSec,
-                startTimeSec: startSec,
-                finishTimeSec: finishSec,
-                punches,
-                receivedAt: cmd.readoutAtIso || new Date().toISOString(),
-              }
-            : null,
-          validation,
-        });
+        competitors.push(
+          mapFirestoreCompetitor(d.id, d.data() as Record<string, unknown>, {
+            classes,
+            courses,
+            competitionZeroTimeSec: Number(compDocData.zeroTimeSec ?? 36000),
+            emergency,
+          })
+        );
       }
       let stationPunchDocs: DocumentSnapshot[] = [];
       try {
@@ -2998,29 +3000,455 @@ function parseRunnerDbDocument(id: string, data: Record<string, unknown>): Runne
     };
 }
 
-export function subscribeCompetitorRentalReturnsFromFirestore(
+export function subscribeCompetitorsFromFirestore(
   competitionId: string,
-  onFields: (
-    fields: Array<{
-      competitorId: string;
-      rentalReturned: boolean;
-    }>
-  ) => void,
+  context: FirestoreCompetitorContext,
+  onCompetitors: (competitors: Competitor[]) => void,
   onError: (error: Error) => void
 ): () => void {
   const competitionPath = sanitizeFirestoreId(competitionId, 'evt');
   return onSnapshot(
     collection(db, 'competitions', competitionPath, 'competitors'),
     (snapshot) => {
-      onFields(
-        snapshot.docs.map((competitorDoc) => ({
-          competitorId: competitorDoc.id,
-          rentalReturned: Boolean(competitorDoc.data().rentalReturned),
-        }))
+      onCompetitors(
+        snapshot.docs
+          .map((competitorDoc) =>
+            mapFirestoreCompetitor(
+              competitorDoc.id,
+              competitorDoc.data() as Record<string, unknown>,
+              context
+            )
+          )
+          .sort((left, right) => left.bib - right.bib)
       );
     },
     (error) => onError(error)
   );
+}
+
+export function subscribeStationPunchesFromFirestore(
+  competitionId: string,
+  onPunches: (punches: FirestoreLiveRadioPunch[]) => void,
+  onError: (error: Error) => void
+): () => void {
+  const competitionPath = sanitizeFirestoreId(competitionId, 'evt');
+  const radioPunchesQuery = query(
+    collection(db, 'competitions', competitionPath, 'stationPunches'),
+    where('stationFunction', 'in', ['RADIO', 'PREWARNING'])
+  );
+  return onSnapshot(
+    radioPunchesQuery,
+    (snapshot) => {
+      const punches: FirestoreLiveRadioPunch[] = [];
+      for (const punchDoc of snapshot.docs) {
+        const data = punchDoc.data();
+        const stationFunction = data.stationFunction;
+        const siNumber = Number(data.siNumber);
+        const stationCode = Number(data.stationCode);
+        const punchTimeSec = Number(data.punchTimeSec);
+        if (
+          (stationFunction !== 'RADIO' && stationFunction !== 'PREWARNING') ||
+          !Number.isInteger(siNumber) ||
+          siNumber < 1 ||
+          !Number.isInteger(stationCode) ||
+          stationCode < 1 ||
+          stationCode > 999 ||
+          !Number.isInteger(punchTimeSec) ||
+          punchTimeSec < 0 ||
+          punchTimeSec > 86400
+        ) {
+          console.error(
+            `Ignoring malformed radio passage document competitions/${competitionPath}/stationPunches/${punchDoc.id}.`
+          );
+          continue;
+        }
+        punches.push({
+          competitorId:
+            typeof data.competitorId === 'string' ? data.competitorId : '',
+          siNumber,
+          stationCode,
+          stationName:
+            typeof data.stationName === 'string' ? data.stationName : '',
+          stationFunction,
+          punchTimeSec,
+          runningTimeSec: decodeNullableSec(data.runningTimeSec),
+        });
+      }
+      onPunches(punches);
+    },
+    (error) => onError(error)
+  );
+}
+
+export function subscribePublicResultsFromFirestore(
+  competitionId: string,
+  classId: string | null,
+  onResults: (results: PublicCompetitorResult[]) => void,
+  onError: (error: Error) => void
+): () => void {
+  const competitionPath = sanitizeFirestoreId(competitionId, 'evt');
+  const resultsCollection = collection(
+    db,
+    'competitions',
+    competitionPath,
+    'publicResults'
+  );
+  const resultsQuery = classId
+    ? query(resultsCollection, where('classId', '==', classId))
+    : resultsCollection;
+  return onSnapshot(
+    resultsQuery,
+    (snapshot) => {
+      const results = snapshot.docs.flatMap((resultDoc) => {
+        const result = parsePublicResultDocument(
+          resultDoc.id,
+          resultDoc.data() as Record<string, unknown>
+        );
+        return result ? [result] : [];
+      });
+      onResults(results.sort((left, right) => left.bib - right.bib));
+    },
+    onError
+  );
+}
+
+export async function publishPublicCompetitionMetadataToFirestore(
+  competitionId: string,
+  competition: CompetitionMeta,
+  stations: SIStation[],
+  emergency: EmergencySettings
+): Promise<void> {
+  const authorization = await getCurrentFirebaseRoles();
+  if (!authorization.adminTier) {
+    throw new Error('Endast tävlingsadministratörer får publicera publik tävlingsmetadata.');
+  }
+  const competitionPath = sanitizeFirestoreId(competitionId, 'evt');
+  const metadataRef = doc(
+    db,
+    'competitions',
+    competitionPath,
+    'publicMetadata',
+    'summary'
+  );
+  const radioControls = stations
+    .filter(
+      (station) =>
+        station.active &&
+        (station.stationFunction === 'RADIO' ||
+          station.stationFunction === 'PREWARNING')
+    )
+    .map(({ stationCode, name, stationFunction, active }) => ({
+      stationCode,
+      name,
+      stationFunction,
+      active,
+    }));
+  const publicData = {
+    competition: {
+      id: competitionPath,
+      shortCode: competition.shortCode,
+      status: competition.status,
+      statusOverride: competition.statusOverride,
+      name: competition.name,
+      organizer: competition.organizer,
+      date: competition.date,
+      zeroTimeStr: competition.zeroTimeStr,
+      zeroTimeSec: competition.zeroTimeSec,
+      arenaInfo: competition.arenaInfo,
+      seriesName: competition.seriesName,
+      allowSelfRegistration: competition.allowSelfRegistration,
+    },
+    radioControls,
+    emergency: {
+      brokenControls: emergency.brokenControls,
+      controlTimeOffsets: {},
+    },
+  };
+  const existing = await getDoc(metadataRef);
+  if (
+    existing.exists() &&
+    JSON.stringify({
+      competition: existing.data().competition,
+      radioControls: existing.data().radioControls,
+      emergency: existing.data().emergency,
+    }) === JSON.stringify(publicData)
+  ) {
+    return;
+  }
+  await setDoc(metadataRef, { ...publicData, updatedAt: serverTimestamp() });
+}
+
+export function subscribePublicCompetitionMetadataFromFirestore(
+  competitionId: string,
+  onUpdate: (metadata: PublicCompetitionMetadata) => void,
+  onError: (error: Error) => void
+): () => void {
+  const competitionPath = sanitizeFirestoreId(competitionId, 'evt');
+  return onSnapshot(
+    doc(db, 'competitions', competitionPath, 'publicMetadata', 'summary'),
+    (snapshot) => {
+      if (!snapshot.exists()) return;
+      const data = snapshot.data();
+      const competitionData =
+        data.competition && typeof data.competition === 'object'
+          ? (data.competition as Record<string, unknown>)
+          : {};
+      const competitionStatus =
+        competitionData.status === 'LIVE' ||
+        competitionData.status === 'UPCOMING' ||
+        competitionData.status === 'COMPLETED'
+          ? competitionData.status
+          : 'UPCOMING';
+      const competition: CompetitionMeta = {
+        id: competitionPath,
+        shortCode:
+          typeof competitionData.shortCode === 'string'
+            ? competitionData.shortCode
+            : '',
+        status: competitionStatus,
+        statusOverride: Boolean(competitionData.statusOverride),
+        name:
+          typeof competitionData.name === 'string'
+            ? competitionData.name
+            : 'Tävling',
+        organizer:
+          typeof competitionData.organizer === 'string'
+            ? competitionData.organizer
+            : '',
+        date:
+          typeof competitionData.date === 'string' &&
+          ISO_DATE_REGEX.test(competitionData.date)
+            ? competitionData.date
+            : getStockholmTodayIso(),
+        zeroTimeStr:
+          typeof competitionData.zeroTimeStr === 'string' &&
+          CLOCK_REGEX.test(competitionData.zeroTimeStr)
+            ? competitionData.zeroTimeStr
+            : '18:00:00',
+        zeroTimeSec: clampInt(competitionData.zeroTimeSec, 0, 86400, 64800),
+        arenaInfo:
+          typeof competitionData.arenaInfo === 'string'
+            ? competitionData.arenaInfo
+            : '',
+        seriesName:
+          typeof competitionData.seriesName === 'string'
+            ? competitionData.seriesName
+            : '',
+        allowSelfRegistration: Boolean(competitionData.allowSelfRegistration),
+      };
+      const radioControls = Array.isArray(data.radioControls)
+        ? data.radioControls.flatMap((candidate) => {
+            if (!candidate || typeof candidate !== 'object') return [];
+            const station = candidate as Record<string, unknown>;
+            const stationCode = Number(station.stationCode);
+            const stationFunction: StationFunction | null =
+              station.stationFunction === 'RADIO' ||
+              station.stationFunction === 'PREWARNING'
+                ? station.stationFunction
+                : null;
+            if (
+              !Number.isInteger(stationCode) ||
+              stationCode < 1 ||
+              stationCode > 999 ||
+              stationFunction === null
+            ) {
+              return [];
+            }
+            return [{
+              stationCode,
+              name:
+                typeof station.name === 'string' ? station.name : `(${stationCode})`,
+              stationFunction,
+              active: station.active === true,
+            }];
+          })
+        : [];
+      const emergencyData =
+        data.emergency && typeof data.emergency === 'object'
+          ? (data.emergency as Record<string, unknown>)
+          : {};
+      onUpdate({
+        competition,
+        radioControls,
+        emergency: {
+          brokenControls: Array.isArray(emergencyData.brokenControls)
+            ? emergencyData.brokenControls.map(Number)
+            : [],
+          controlTimeOffsets: {},
+        },
+      });
+    },
+    onError
+  );
+}
+
+export async function seedPublicResultProjectionsFromFirestore(
+  competitionId: string
+): Promise<number> {
+  const authorization = await getCurrentFirebaseRoles();
+  if (!authorization.adminTier) {
+    throw new Error('Endast tävlingsadministratörer får skapa publik resultatdata.');
+  }
+  const competitionPath = sanitizeFirestoreId(competitionId, 'evt');
+  const [competitorSnapshot, publicResultSnapshot, punchSnapshot] =
+    await Promise.all([
+      getDocs(collection(db, 'competitions', competitionPath, 'competitors')),
+      getDocs(
+        collection(db, 'competitions', competitionPath, 'publicResults')
+      ),
+      getDocs(
+        query(
+          collection(db, 'competitions', competitionPath, 'stationPunches'),
+          where('stationFunction', 'in', ['RADIO', 'PREWARNING'])
+        )
+      ),
+    ]);
+  const existingPublicResults = new Map(
+    publicResultSnapshot.docs.map((resultDoc) => [
+      resultDoc.id,
+      resultDoc.data(),
+    ])
+  );
+  const punches = punchSnapshot.docs.flatMap((punchDoc) => {
+    const data = punchDoc.data();
+    const stationFunction = data.stationFunction;
+    const siNumber = Number(data.siNumber);
+    const stationCode = Number(data.stationCode);
+    const punchTimeSec = Number(data.punchTimeSec);
+    if (
+      (stationFunction !== 'RADIO' && stationFunction !== 'PREWARNING') ||
+      !Number.isInteger(siNumber) ||
+      !Number.isInteger(stationCode) ||
+      !Number.isInteger(punchTimeSec)
+    ) {
+      return [];
+    }
+    return [{
+      competitorId:
+        typeof data.competitorId === 'string' ? data.competitorId : '',
+      siNumber,
+      stationCode,
+      stationName:
+        typeof data.stationName === 'string' ? data.stationName : '',
+      stationFunction,
+      punchTimeSec,
+      runningTimeSec: decodeNullableSec(data.runningTimeSec),
+    } satisfies FirestoreLiveRadioPunch];
+  });
+  const buildRadioSplits = (
+    competitorId: string,
+    competitorData: Record<string, unknown>
+  ): RadioSplit[] =>
+    punches
+      .filter(
+        (punch) =>
+          punch.competitorId === competitorId &&
+          punch.siNumber === Number(competitorData.siNumber)
+      )
+      .reduce<RadioSplit[]>(
+        (splits, punch) =>
+          addPublicRadioSplit(splits, {
+            controlCode: punch.stationCode,
+            stationName: punch.stationName || `(${punch.stationCode})`,
+            punchTimeSec: punch.punchTimeSec,
+            runningTimeSec: punch.runningTimeSec,
+            isPrewarning: punch.stationFunction === 'PREWARNING',
+          }),
+        []
+      );
+  const projectionMatches = (
+    existing: Record<string, unknown> | undefined,
+    expected: Record<string, unknown>
+  ): boolean => {
+    if (!existing) return false;
+    const existingKeys = Object.keys(existing).filter(
+      (key) => key !== 'updatedAt'
+    );
+    const expectedKeys = Object.keys(expected);
+    return (
+      existingKeys.length === expectedKeys.length &&
+      expectedKeys.every(
+        (key) =>
+          existingKeys.includes(key) &&
+          JSON.stringify(existing[key]) === JSON.stringify(expected[key])
+      )
+    );
+  };
+  let seededCount = 0;
+  const missingResults = competitorSnapshot.docs.filter((competitorDoc) => {
+    const existing = existingPublicResults.get(competitorDoc.id);
+    const competitorData = competitorDoc.data();
+    const expected = createPublicResultDocumentFromFirestore(
+      competitionPath,
+      competitorDoc.id,
+      competitorData,
+      buildRadioSplits(competitorDoc.id, competitorData)
+    );
+    return !projectionMatches(existing, expected);
+  });
+  for (let offset = 0; offset < missingResults.length; offset += 10) {
+    await Promise.all(
+      missingResults.slice(offset, offset + 10).map(async (competitorDoc) => {
+        const competitorId = competitorDoc.id;
+        const competitorRef = doc(
+          db,
+          'competitions',
+          competitionPath,
+          'competitors',
+          competitorId
+        );
+        const publicResultRef = doc(
+          db,
+          'competitions',
+          competitionPath,
+          'publicResults',
+          competitorId
+        );
+        const wasSeeded = await runTransaction(db, async (transaction) => {
+          const [currentCompetitor, currentPublicResult] = await Promise.all([
+            transaction.get(competitorRef),
+            transaction.get(publicResultRef),
+          ]);
+          if (!currentCompetitor.exists()) return false;
+          const rawCompetitor = currentCompetitor.data();
+          const currentPublicData = currentPublicResult.exists()
+            ? (currentPublicResult.data() as Record<string, unknown>)
+            : undefined;
+          const existingRadioSplits = currentPublicData
+            ? parsePublicResultDocument(competitorId, currentPublicData)
+                ?.radioSplits
+            : undefined;
+          const currentRadioSplits =
+            existingRadioSplits && existingRadioSplits.length > 0
+              ? existingRadioSplits
+              : buildRadioSplits(competitorId, rawCompetitor);
+          const expected = createPublicResultDocumentFromFirestore(
+            competitionPath,
+            competitorId,
+            rawCompetitor,
+            currentRadioSplits
+          );
+          if (
+            projectionMatches(
+              currentPublicResult.exists()
+                ? (currentPublicResult.data() as Record<string, unknown>)
+                : undefined,
+              expected
+            )
+          ) {
+            return false;
+          }
+          transaction.set(publicResultRef, {
+            ...expected,
+            updatedAt: serverTimestamp(),
+          });
+          return true;
+        });
+        if (wasSeeded) seededCount += 1;
+      })
+    );
+  }
+  return seededCount;
 }
 
 async function loadRunnerDbFromFirestore(): Promise<RunnerDbEntry[]> {
@@ -4617,6 +5045,7 @@ export async function updateCompetitorInFirestore(
       'checkTimeSec',
       'startTimeSec',
       'finishTimeSec',
+      'manualFinishTimeSec',
       'runningTimeSec',
       'readoutAtIso',
       'punchCodes',
@@ -4637,6 +5066,7 @@ export async function updateCompetitorInFirestore(
       'checkTimeSec',
       'startTimeSec',
       'finishTimeSec',
+      'manualFinishTimeSec',
       'runningTimeSec',
       'readoutAtIso',
       'punchCodes',
@@ -4704,6 +5134,12 @@ export async function updateCompetitorInFirestore(
         }
       }
       transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
+      writePublicResultProjectionInTransaction(
+        transaction,
+        safeCompetitionId,
+        safeCompetitorId,
+        { ...competitor, ...mutable }
+      );
     });
     return;
   }
@@ -4965,6 +5401,12 @@ export async function updateCompetitorInFirestore(
         })}`
       );
       transaction.update(competitorRef, { ...mutable, updatedAt: serverTimestamp() });
+      writePublicResultProjectionInTransaction(
+        transaction,
+        context.competitionId,
+        id,
+        { ...existing, ...mutable }
+      );
       if (typeof mutable.status === 'string') {
         const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
         const previouslyFinished = finishedStatuses.has(String(existing.status));
@@ -5103,6 +5545,9 @@ export async function deleteCompetitorFromFirestore(
         })}`
       );
       transaction.delete(competitorRef);
+      transaction.delete(
+        getPublicResultDocumentRef(context.competitionId, safeCompetitorId)
+      );
       transaction.update(competitionRef, {
         competitorCount: Math.max(0, Number(competition.competitorCount || 0) - 1),
         ...(finished
@@ -5522,7 +5967,12 @@ export async function recalculateCompetitionFromFirestore(
     ),
   };
   const competitors = event.competitors.map((runner) => ({ ...runner }));
-  const updates: Array<{ ref: DocumentReference; data: Record<string, unknown> }> = [];
+  const updates: Array<{
+    ref: DocumentReference;
+    data: Record<string, unknown>;
+    publicResultData: Record<string, unknown>;
+    competitorId: string;
+  }> = [];
   let recalculatedCount = 0;
   for (const runner of competitors) {
     const raw = runner.rawReadout;
@@ -5575,6 +6025,22 @@ export async function recalculateCompetitionFromFirestore(
         punchTimes: runner.cardPunches.map((punch) => clampInt(punch.timeSec, 0, 86400, 0)),
         updatedAt: serverTimestamp(),
       },
+      competitorId: runner.id,
+      publicResultData: createPublicResultDocumentFromFirestore(
+        context.competitionId,
+        runner.id,
+        {
+          bib: runner.bib,
+          fullName: runner.fullName,
+          club: runner.club,
+          classId: runner.classId,
+          status: runner.status,
+          allocatedStartSec: runner.allocatedStartSec,
+          startTimeSec: runner.startTimeSec,
+          finishTimeSec: runner.finishTimeSec,
+          runningTimeSec: runner.runningTimeSec,
+        }
+      ),
     });
     declareCompetitorMutation({
       source: 'recalculateCompetitionFromFirestore',
@@ -5598,6 +6064,11 @@ export async function recalculateCompetitionFromFirestore(
     const batch = writeBatch(db);
     for (const update of updates.slice(offset, offset + 400)) {
       batch.update(update.ref, update.data);
+      batch.set(
+        getPublicResultDocumentRef(context.competitionId, update.competitorId),
+        { ...update.publicResultData, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
     }
     await batch.commit();
   }
@@ -5792,6 +6263,31 @@ export async function submitOnlinePunchToFirestore(
       update.status = 'IN_FOREST';
     }
     transaction.update(competitorRef, update);
+    const publicRadioSplit =
+      stationFunction === 'RADIO' || stationFunction === 'PREWARNING'
+        ? {
+            controlCode: punch.stationCode,
+            stationName: stationName || `(${punch.stationCode})`,
+            punchTimeSec,
+            runningTimeSec: runningTimeSec >= 0 ? runningTimeSec : null,
+            isPrewarning,
+          }
+        : null;
+    transaction.set(
+      getPublicResultDocumentRef(context.competitionId, competitorId),
+      {
+        ...createPublicResultDocumentFromFirestore(
+          context.competitionId,
+          competitorId,
+          { ...competitor, ...update }
+        ),
+        ...(publicRadioSplit
+          ? { radioSplits: arrayUnion(publicRadioSplit) }
+          : {}),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
     return { deduplicated: false };
   });
 }
@@ -6269,6 +6765,19 @@ export async function submitReadoutToFirestore(
       punchTimes: punches.map((punch) => punch.timeSec),
       updatedAt: serverTimestamp(),
     });
+    writePublicResultProjectionInTransaction(
+      transaction,
+      competitionId,
+      competitorId,
+      {
+        ...competitorSnap.data(),
+        status: updatedCompetitor.status,
+        checkTimeSec: encodeNullableSec(updatedCompetitor.checkTimeSec),
+        startTimeSec: encodeNullableSec(updatedCompetitor.startTimeSec),
+        finishTimeSec: encodeNullableSec(updatedCompetitor.finishTimeSec),
+        runningTimeSec: encodeNullableSec(updatedCompetitor.runningTimeSec),
+      }
+    );
     transaction.update(competitionRef, {
       finishedCount: Math.min(
         Number(competitionData.competitorCount) || 0,
@@ -6642,6 +7151,11 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         createdAt: serverTime,
         updatedAt: serverTime,
       });
+      writePublicResultProjectionFromCompetitor(
+        transaction,
+        competitionId,
+        competitor
+      );
 
       const nextCompetitorCount = currentCompetitorCount + 1;
       transaction.update(competitionRef, {
@@ -6806,65 +7320,258 @@ export async function loadPublicRaceFromFirestore(
   eventKey: string,
   options?: { competitionId?: boolean }
 ): Promise<PublicRacePayload | null> {
-  const season = await loadFullSeasonFromFirestore({
-    ...(options?.competitionId ? { competitionId: eventKey } : {}),
-    includeRunnerDb: false,
-  });
-  if (!season) return null;
-
-  const target = season.events.find(
-    (event) =>
-      event.competition.id === eventKey ||
-      event.competition.shortCode.toLowerCase() === eventKey.toLowerCase()
-  );
-  if (!target) return null;
-
-  const competitionsList: CompetitionSummary[] = season.events
-    .map((event) => ({
-      id: event.competition.id,
-      competitionId: event.competition.id,
-      shortCode: event.competition.shortCode,
-      status: event.competition.status,
-      name: event.competition.name,
-      organizer: event.competition.organizer,
-      date: event.competition.date,
-      zeroTimeStr: event.competition.zeroTimeStr,
-      arenaInfo: event.competition.arenaInfo,
-      seriesName: event.competition.seriesName,
-      competitorCount: event.competitors.length,
-      finishedCount: event.competitors.filter(
-        (competitor) => competitor.status === 'OK' || competitor.status === 'MP'
-      ).length,
-      classCount: event.classes.length,
-    }))
-    .sort((a, b) => b.date.localeCompare(a.date));
-
-  return {
-    competition: target.competition,
-    courses: target.courses,
-    classes: target.classes,
-    competitors: target.competitors,
-    radioControls: (target.stations ?? [])
-      .filter(
-        (station) =>
-          station.active &&
-          (station.stationFunction === 'RADIO' || station.stationFunction === 'PREWARNING')
+  const [clubSnapshot, publicSummaries] = await Promise.all([
+    getDoc(doc(db, 'clubSettings', 'default')),
+    loadPublicCompetitionSummariesFromFirestore(),
+  ]);
+  const clubData = clubSnapshot.exists() ? clubSnapshot.data() : {};
+  const listedIds = Array.isArray(clubData.competitionIds)
+    ? clubData.competitionIds.filter(
+        (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
       )
-      .map(({ stationCode, name, stationFunction, active }) => ({
-        stationCode,
-        name,
-        stationFunction,
-        active,
-      })),
+    : [];
+  let competitionId = options?.competitionId
+    ? sanitizeFirestoreId(eventKey, 'evt')
+    : publicSummaries.find(
+        (summary) =>
+          summary.shortCode.toLocaleLowerCase() === eventKey.toLocaleLowerCase()
+      )?.id ?? '';
+  if (!competitionId && options?.competitionId !== true) {
+    const candidates = await Promise.all(
+      listedIds.map(async (id) => {
+        const snapshot = await getDoc(doc(db, 'competitions', id));
+        return snapshot.exists() && snapshot.data().shortCode === eventKey
+          ? id
+          : '';
+      })
+    );
+    competitionId = candidates.find(Boolean) ?? '';
+  }
+  if (!competitionId) return null;
+
+  const competitionRef = doc(db, 'competitions', competitionId);
+  const metadataRef = doc(
+    db,
+    'competitions',
+    competitionId,
+    'publicMetadata',
+    'summary'
+  );
+  const [competitionSnapshot, metadataSnapshot, courseSnapshot, classSnapshot, resultSnapshot] =
+    await Promise.all([
+      getDoc(competitionRef),
+      getDoc(metadataRef),
+      getDocs(collection(db, 'competitions', competitionId, 'courses')),
+      getDocs(collection(db, 'competitions', competitionId, 'classes')),
+      getDocs(collection(db, 'competitions', competitionId, 'publicResults')),
+    ]);
+  if (!competitionSnapshot.exists()) return null;
+  const competitionData =
+    metadataSnapshot.exists() &&
+    metadataSnapshot.data().competition &&
+    typeof metadataSnapshot.data().competition === 'object'
+      ? (metadataSnapshot.data().competition as Record<string, unknown>)
+      : competitionSnapshot.data();
+  const status =
+    competitionData.status === 'LIVE' ||
+    competitionData.status === 'UPCOMING' ||
+    competitionData.status === 'COMPLETED'
+      ? competitionData.status
+      : 'UPCOMING';
+  const competition: CompetitionMeta = {
+    id: competitionId,
+    shortCode:
+      typeof competitionData.shortCode === 'string'
+        ? competitionData.shortCode
+        : '',
+    status,
+    statusOverride: Boolean(competitionData.statusOverride),
+    name: typeof competitionData.name === 'string' ? competitionData.name : 'Tävling',
+    organizer:
+      typeof competitionData.organizer === 'string'
+        ? competitionData.organizer
+        : '',
+    date:
+      typeof competitionData.date === 'string' &&
+      ISO_DATE_REGEX.test(competitionData.date)
+        ? competitionData.date
+        : getStockholmTodayIso(),
+    zeroTimeStr:
+      typeof competitionData.zeroTimeStr === 'string' &&
+      CLOCK_REGEX.test(competitionData.zeroTimeStr)
+        ? competitionData.zeroTimeStr
+        : '18:00:00',
+    zeroTimeSec: clampInt(competitionData.zeroTimeSec, 0, 86400, 64800),
+    arenaInfo:
+      typeof competitionData.arenaInfo === 'string'
+        ? competitionData.arenaInfo
+        : '',
+    seriesName:
+      typeof competitionData.seriesName === 'string'
+        ? competitionData.seriesName
+        : '',
+    allowSelfRegistration: Boolean(competitionData.allowSelfRegistration),
+  };
+  const courses: Course[] = courseSnapshot.docs.map((courseDoc) => {
+    const data = courseDoc.data();
+    return {
+      id: typeof data.courseId === 'string' ? data.courseId : courseDoc.id,
+      name: typeof data.name === 'string' ? data.name : 'Bana',
+      lengthMeters: Number(data.lengthMeters || 0),
+      climbMeters: Number(data.climbMeters || 0),
+      controls: Array.isArray(data.controls) ? data.controls.map(Number) : [],
+    };
+  });
+  const classes: CompClass[] = classSnapshot.docs.map((classDoc) => {
+    const data = classDoc.data();
+    return {
+      id: typeof data.classId === 'string' ? data.classId : classDoc.id,
+      name: typeof data.name === 'string' ? data.name : 'Klass',
+      courseId: typeof data.courseId === 'string' && data.courseId ? data.courseId : null,
+      classFormat:
+        data.classFormat === 'FORKED' || data.classFormat === 'ROGAINING'
+          ? data.classFormat
+          : 'STANDARD',
+      forkCourseIds: Array.isArray(data.forkCourseIds) ? data.forkCourseIds : [],
+      rogainingMaxTimeSec: decodeNullableSec(data.rogainingMaxTimeSec),
+      rogainingPenaltyPerMin: decodeNullableSec(data.rogainingPenaltyPerMin),
+      allowDirectEntry: Boolean(data.allowDirectEntry),
+      freeStart: Boolean(data.freeStart),
+      autoMatchCourse: Boolean(data.autoMatchCourse),
+    };
+  });
+  const metadata = metadataSnapshot.exists() ? metadataSnapshot.data() : {};
+  const emergency =
+    metadata.emergency && typeof metadata.emergency === 'object'
+      ? (metadata.emergency as Record<string, unknown>)
+      : {};
+  const radioControls = Array.isArray(metadata.radioControls)
+    ? metadata.radioControls.flatMap((candidate) => {
+        if (!candidate || typeof candidate !== 'object') return [];
+        const station = candidate as Record<string, unknown>;
+        const stationCode = Number(station.stationCode);
+        const stationFunction: StationFunction | null =
+          station.stationFunction === 'RADIO' ||
+          station.stationFunction === 'PREWARNING'
+            ? station.stationFunction
+            : null;
+        if (
+          !Number.isInteger(stationCode) ||
+          stationCode < 1 ||
+          stationCode > 999 ||
+          stationFunction === null
+        ) {
+          return [];
+        }
+        return [{
+          stationCode,
+          name:
+            typeof station.name === 'string' ? station.name : `(${stationCode})`,
+          stationFunction,
+          active: station.active === true,
+        }];
+      })
+    : [];
+
+  const seriesStandings: SeriesStandingsBundle[] = [];
+  const clubSettings = mapPublicClubSettings(clubData);
+  const competitors = resultSnapshot.docs.flatMap((resultDoc) => {
+    const result = parsePublicResultDocument(
+      resultDoc.id,
+      resultDoc.data() as Record<string, unknown>
+    );
+    return result ? [result] : [];
+  });
+  return {
+    competition,
+    courses,
+    classes,
+    competitors: competitors.sort((left, right) => left.bib - right.bib),
+    radioControls,
     events: [],
     emergency: {
-      brokenControls: target.brokenControls,
+      brokenControls: Array.isArray(emergency.brokenControls)
+        ? emergency.brokenControls.map(Number)
+        : [],
       controlTimeOffsets: {},
     },
-    competitionsList,
-    clubSettings: season.clubSettings,
-    seriesStandings: season.seriesStandings ?? [],
+    competitionsList: publicSummaries,
+    clubSettings,
+    seriesStandings,
     updatedAt: new Date().toISOString(),
+  };
+}
+
+export async function loadPublicCompetitionSummariesFromFirestore(): Promise<
+  CompetitionSummary[]
+> {
+  const clubSnapshot = await getDoc(doc(db, 'clubSettings', 'default'));
+  const clubData = clubSnapshot.exists() ? clubSnapshot.data() : {};
+  const ids = Array.isArray(clubData.competitionIds)
+    ? clubData.competitionIds.filter(
+        (id): id is string => typeof id === 'string' && SAFE_ID_REGEX.test(id)
+      )
+    : [];
+  const snapshots = await Promise.all(
+    ids.map((id) => getDoc(doc(db, 'competitions', id)))
+  );
+  return snapshots
+    .flatMap((snapshot) => {
+      if (!snapshot.exists()) return [];
+      const data = snapshot.data();
+      const status =
+        data.status === 'LIVE' ||
+        data.status === 'UPCOMING' ||
+        data.status === 'COMPLETED'
+          ? data.status
+          : 'UPCOMING';
+      return [{
+        id: snapshot.id,
+        competitionId: snapshot.id,
+        shortCode: typeof data.shortCode === 'string' ? data.shortCode : '',
+        status,
+        name: typeof data.name === 'string' ? data.name : 'Tävling',
+        organizer: typeof data.organizer === 'string' ? data.organizer : '',
+        date:
+          typeof data.date === 'string' && ISO_DATE_REGEX.test(data.date)
+            ? data.date
+            : getStockholmTodayIso(),
+        zeroTimeStr:
+          typeof data.zeroTimeStr === 'string' && CLOCK_REGEX.test(data.zeroTimeStr)
+            ? data.zeroTimeStr
+            : '18:00:00',
+        arenaInfo: typeof data.arenaInfo === 'string' ? data.arenaInfo : '',
+        seriesName: typeof data.seriesName === 'string' ? data.seriesName : '',
+        competitorCount: clampInt(data.competitorCount, 0, 50000, 0),
+        finishedCount: clampInt(data.finishedCount, 0, 50000, 0),
+        classCount: 0,
+      }];
+    })
+    .sort((left, right) => right.date.localeCompare(left.date));
+}
+
+function mapPublicClubSettings(data: Record<string, unknown>): ClubSettings | undefined {
+  if (Object.keys(data).length === 0) return undefined;
+  return {
+    clubName:
+      typeof data.clubName === 'string' ? data.clubName : 'OK Österåker',
+    eventorOrgId: '',
+    portalTitle: typeof data.portalTitle === 'string' ? data.portalTitle : '',
+    logoDataUrl: sanitizeCloudLogoDataUrl(
+      typeof data.logoDataUrl === 'string' ? data.logoDataUrl : null
+    ),
+    customBgColor: sanitizeCloudHexColor(
+      typeof data.customBgColor === 'string' ? data.customBgColor : null
+    ),
+    customTextColor: sanitizeCloudHexColor(
+      typeof data.customTextColor === 'string' ? data.customTextColor : null
+    ),
+    customAccentColor: sanitizeCloudHexColor(
+      typeof data.customAccentColor === 'string' ? data.customAccentColor : null
+    ),
+    seriesScoringSettings: normalizeSeriesScoringSettings(
+      data.seriesScoringSettings
+    ),
   };
 }
 
@@ -7000,7 +7707,10 @@ export function subscribePublicCompetitionSummaries(
 
 export function subscribeCompetitionMetadataFromFirestore(
   competitionId: string,
-  onUpdate: (competition: CompetitionMeta | null) => void,
+  onUpdate: (
+    competition: CompetitionMeta | null,
+    emergency: EmergencySettings | null
+  ) => void,
   onError: (error: Error) => void
 ): () => void {
   const id = sanitizeFirestoreId(competitionId, 'evt');
@@ -7008,7 +7718,7 @@ export function subscribeCompetitionMetadataFromFirestore(
     doc(db, 'competitions', id),
     (snapshot) => {
       if (!snapshot.exists()) {
-        onUpdate(null);
+        onUpdate(null, null);
         return;
       }
       const data = snapshot.data();
@@ -7018,7 +7728,7 @@ export function subscribeCompetitionMetadataFromFirestore(
         data.status === 'COMPLETED'
           ? data.status
           : 'UPCOMING';
-      onUpdate({
+      const competition: CompetitionMeta = {
         id,
         shortCode: typeof data.shortCode === 'string' ? data.shortCode : '',
         status,
@@ -7037,7 +7747,16 @@ export function subscribeCompetitionMetadataFromFirestore(
         arenaInfo: typeof data.arenaInfo === 'string' ? data.arenaInfo : '',
         seriesName: typeof data.seriesName === 'string' ? data.seriesName : '',
         allowSelfRegistration: Boolean(data.allowSelfRegistration),
-      });
+      };
+      onUpdate(
+        competition,
+        {
+          brokenControls: Array.isArray(data.brokenControls)
+            ? data.brokenControls.map(Number)
+            : [],
+          controlTimeOffsets: normalizeControlTimeOffsets(data.controlTimeOffsets),
+        }
+      );
     },
     onError
   );

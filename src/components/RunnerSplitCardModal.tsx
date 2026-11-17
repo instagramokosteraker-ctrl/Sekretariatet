@@ -17,6 +17,7 @@ interface RunnerSplitCardModalProps {
   compClass: CompClass | null;
   course: Course | null;
   classCompetitors: CompetitorWithOptionalEffectiveStatus[];
+  showSiNumber?: boolean;
   onClose: () => void;
 }
 
@@ -25,6 +26,7 @@ export function RunnerSplitCardModal({
   compClass,
   course,
   classCompetitors,
+  showSiNumber = true,
   onClose,
 }: RunnerSplitCardModalProps) {
   const isRogaining = compClass?.classFormat === 'ROGAINING';
@@ -145,7 +147,8 @@ export function RunnerSplitCardModal({
           <span className="text-xs text-slate-500 dark:text-slate-400 truncate">
             {compClass?.name ?? 'Klass'} · {runner.club} ·{' '}
             <span className="font-mono tabular-nums">
-              #{runner.bib} · SI {formatSiNumber(runner.siNumber)}
+              #{runner.bib}
+              {showSiNumber ? ` · SI ${formatSiNumber(runner.siNumber)}` : ''}
             </span>
           </span>
         </div>

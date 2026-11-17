@@ -1655,12 +1655,44 @@ service cloud.firestore {
           );
         }
 
-        allow get: if isValidId(competitionId) &&
-          isValidId(competitorId) &&
-          parentCompetitionExists(competitionId);
+        function isAllowedManualFinishUpdate() {
+          let changed = incoming().diff(existing()).affectedKeys();
+          let assignmentPath = /databases/$(database)/documents/roleAssignments/$(request.auth.uid);
+          return changed.hasOnly([
+              'status',
+              'finishTimeSec',
+              'manualFinishTimeSec',
+              'runningTimeSec',
+              'updatedAt'
+            ]) &&
+            changed.hasAll(['manualFinishTimeSec']) &&
+            isVerifiedUser() &&
+            exists(assignmentPath) &&
+            get(assignmentPath).data.role in ['READOUT', 'FOREST'];
+        }
 
-        allow list: if isValidId(competitionId) &&
-          parentCompetitionExists(competitionId);
+        allow get: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(competitorId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            isAdmin() ||
+            hasOfficialRole('START') ||
+            hasOfficialRole('READOUT') ||
+            hasOfficialRole('FOREST') ||
+            hasOfficialRole('SPEAKER')
+          );
+
+        allow list: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            isAdmin() ||
+            hasOfficialRole('START') ||
+            hasOfficialRole('READOUT') ||
+            hasOfficialRole('FOREST') ||
+            hasOfficialRole('SPEAKER')
+          );
 
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&
@@ -1717,7 +1749,8 @@ service cloud.firestore {
           (
             (existing().ownerUid == request.auth.uid || isAdmin()) ||
             isSuperAdmin() ||
-            isAllowedReadoutUpdate()
+            isAllowedReadoutUpdate() ||
+            isAllowedManualFinishUpdate()
           )
         );
 
@@ -1730,6 +1763,173 @@ service cloud.firestore {
             (existing().ownerUid == request.auth.uid || isAdmin()) ||
             isSuperAdmin()
           );
+      }
+
+      match /publicResults/{competitorId} {
+        function validPublicResult(data) {
+          return data.keys().hasAll([
+              'competitionId',
+              'competitorId',
+              'bib',
+              'fullName',
+              'club',
+              'classId',
+              'status',
+              'allocatedStartSec',
+              'startTimeSec',
+              'finishTimeSec',
+              'runningTimeSec',
+              'updatedAt'
+            ]) &&
+            data.keys().hasOnly([
+              'competitionId',
+              'competitorId',
+              'bib',
+              'fullName',
+              'club',
+              'classId',
+              'status',
+              'allocatedStartSec',
+              'startTimeSec',
+              'finishTimeSec',
+              'runningTimeSec',
+              'radioSplits',
+              'updatedAt'
+            ]) &&
+            data.competitionId == competitionId &&
+            data.competitorId == competitorId &&
+            data.bib is int && data.bib >= 1 && data.bib <= 99999 &&
+            data.fullName is string && data.fullName.size() <= 120 &&
+            data.club is string && data.club.size() <= 100 &&
+            data.classId is string && data.classId.size() <= 64 &&
+            (
+              data.status == 'REGISTERED' ||
+              data.status == 'CHECKED' ||
+              data.status == 'IN_FOREST' ||
+              data.status == 'PRELIMINARY_FIN' ||
+              data.status == 'OK' ||
+              data.status == 'MP' ||
+              data.status == 'DNF' ||
+              data.status == 'DNS'
+            ) &&
+            data.allocatedStartSec is int &&
+            data.allocatedStartSec >= -1 && data.allocatedStartSec <= 86400 &&
+            data.startTimeSec is int &&
+            data.startTimeSec >= -1 && data.startTimeSec <= 86400 &&
+            data.finishTimeSec is int &&
+            data.finishTimeSec >= -1 && data.finishTimeSec <= 86400 &&
+            data.runningTimeSec is int &&
+            data.runningTimeSec >= -1 && data.runningTimeSec <= 86400 &&
+            (!('radioSplits' in data) ||
+              (data.radioSplits is list && data.radioSplits.size() <= 192)) &&
+            data.updatedAt == request.time;
+        }
+
+        function matchesPublicCompetitor(data) {
+          let competitorPath = /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId);
+          let source = getAfter(competitorPath).data;
+          return existsAfter(competitorPath) &&
+            source.competitorId == competitorId &&
+            source.competitionId == competitionId &&
+            data.bib == source.bib &&
+            data.fullName == source.fullName &&
+            data.club == source.club &&
+            data.classId == source.classId &&
+            data.status == source.status &&
+            data.allocatedStartSec == source.allocatedStartSec &&
+            data.startTimeSec == source.startTimeSec &&
+            data.finishTimeSec == source.finishTimeSec &&
+            data.runningTimeSec == source.runningTimeSec;
+        }
+
+        allow get, list: if true;
+
+        allow create, update: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(competitorId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            isAdmin() ||
+            hasOfficialRole('START') ||
+            hasOfficialRole('READOUT') ||
+            hasOfficialRole('FOREST') ||
+            hasOfficialRole('SPEAKER')
+          ) &&
+          validPublicResult(incoming()) &&
+          matchesPublicCompetitor(incoming());
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(competitorId) &&
+          isAdmin() &&
+          !existsAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(competitorId)
+          );
+      }
+
+      match /publicMetadata/{metadataId} {
+        function validPublicMetadata(data) {
+          return data.keys().hasAll([
+              'competition',
+              'radioControls',
+              'emergency',
+              'updatedAt'
+            ]) &&
+            data.keys().hasOnly([
+              'competition',
+              'radioControls',
+              'emergency',
+              'updatedAt'
+            ]) &&
+            data.competition is map &&
+            data.competition.keys().hasAll(['id', 'status', 'name']) &&
+            data.competition.keys().hasOnly([
+              'id',
+              'shortCode',
+              'status',
+              'statusOverride',
+              'name',
+              'organizer',
+              'date',
+              'zeroTimeStr',
+              'zeroTimeSec',
+              'arenaInfo',
+              'seriesName',
+              'allowSelfRegistration'
+            ]) &&
+            data.competition.id == competitionId &&
+            (
+              data.competition.status == 'LIVE' ||
+              data.competition.status == 'UPCOMING' ||
+              data.competition.status == 'COMPLETED'
+            ) &&
+            data.radioControls is list &&
+            data.radioControls.size() <= 100 &&
+            data.emergency is map &&
+            data.emergency.keys().hasOnly([
+              'brokenControls',
+              'controlTimeOffsets'
+            ]) &&
+            data.emergency.brokenControls is list &&
+            data.emergency.brokenControls.size() <= 100 &&
+            data.emergency.controlTimeOffsets is map &&
+            data.updatedAt == request.time;
+        }
+
+        allow get: if isValidId(competitionId) &&
+          metadataId == 'summary' &&
+          parentCompetitionExists(competitionId);
+        allow list: if false;
+        allow create, update: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          metadataId == 'summary' &&
+          parentCompetitionExists(competitionId) &&
+          isAdmin() &&
+          validPublicMetadata(incoming());
+        allow delete: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          metadataId == 'summary' &&
+          isAdmin();
       }
 
       match /readoutReceipts/{receiptId} {
@@ -2037,11 +2237,10 @@ service cloud.firestore {
           isValidId(competitionId) &&
           parentCompetitionExists(competitionId) &&
           (
-            parentCompetitionData(competitionId).ownerUid == request.auth.uid ||
             isAdmin() ||
-            isSuperAdmin()
-          ) &&
-          isAdmin();
+            hasOfficialRole('READOUT') ||
+            hasOfficialRole('FOREST')
+          );
 
         allow create: if isVerifiedUser() &&
           isValidId(competitionId) &&

@@ -1,5 +1,6 @@
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { SI_CARD_ASSIGNMENT_SCHEMA_VERSION } from '../types/sportident';
+import { createPublicResultDocumentFromFirestore } from '../utils/publicResultProjection';
 
 export interface CompetitorCreationActor {
   uid: string;
@@ -350,6 +351,23 @@ export async function createCompetitorWithAssignment(
       createdAt: serverTimestamp,
       updatedAt: serverTimestamp,
     });
+    transaction.create(
+      competitionRef.collection('publicResults').doc(competitorId),
+      {
+        ...createPublicResultDocumentFromFirestore(competitionId, competitorId, {
+          bib: input.bib,
+          fullName,
+          club,
+          classId: input.classId,
+          status: input.status,
+          allocatedStartSec: input.allocatedStartSec,
+          startTimeSec: input.startTimeSec,
+          finishTimeSec: input.finishTimeSec,
+          runningTimeSec: input.runningTimeSec,
+        }, []),
+        updatedAt: serverTimestamp,
+      }
+    );
 
     const isFinished = input.status === 'OK' || input.status === 'MP';
     const nextCompetitorCount = currentCompetitorCount + 1;

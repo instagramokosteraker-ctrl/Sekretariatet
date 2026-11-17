@@ -479,7 +479,7 @@ export interface PublicRacePayload {
   competition: CompetitionMeta;
   courses: Course[];
   classes: CompClass[];
-  competitors: Competitor[];
+  competitors: PublicCompetitorResult[];
   radioControls?: Pick<SIStation, 'stationCode' | 'name' | 'stationFunction' | 'active'>[];
   events: LiveEventItem[];
   emergency: EmergencySettings;
@@ -487,6 +487,26 @@ export interface PublicRacePayload {
   clubSettings?: ClubSettings;
   seriesStandings?: SeriesStandingsBundle[];
   updatedAt: string;
+}
+
+export interface PublicCompetitorResult {
+  id: string;
+  bib: number;
+  fullName: string;
+  club: string;
+  classId: string;
+  status: RunnerStatus;
+  allocatedStartSec: number | null;
+  startTimeSec: number | null;
+  finishTimeSec: number | null;
+  runningTimeSec: number | null;
+  radioSplits: RadioSplit[];
+}
+
+export interface PublicCompetitionMetadata {
+  competition: CompetitionMeta;
+  radioControls: Pick<SIStation, 'stationCode' | 'name' | 'stationFunction' | 'active'>[];
+  emergency: EmergencySettings;
 }
 
 export interface PublicSeasonOverviewPayload {
