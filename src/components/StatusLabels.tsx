@@ -1,12 +1,12 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleSlash,
   Clock,
   Compass,
   Flag,
-  HelpCircle,
-  Slash,
   UserCheck,
+  X,
 } from 'lucide-react';
 import type { RunnerStatus, StationFunction } from '../types/sportident';
 
@@ -87,37 +87,37 @@ export function RunnerStatusIndicator({
     case 'REGISTERED':
       return (
         <span
-          title="Anmäld"
+          title="Start ännu inte registrerad – väntar på start"
           role="img"
-          aria-label="Anmäld"
+          aria-label="Start ännu inte registrerad – väntar på start"
           className={`inline-flex items-center gap-1 ${textClassName} text-slate-600 dark:text-slate-400 whitespace-nowrap`}
         >
           <Clock className={iconClassName} />
-          {!iconOnly && <span>Anmäld</span>}
+          {!iconOnly && <span>Anmäld – ej startat</span>}
         </span>
       );
     case 'DNF':
       return (
         <span
-          title="Utgått (DNF)"
+          title="Avbröt ett påbörjat lopp (DNF)"
           role="img"
-          aria-label="Utgått (DNF)"
-          className={`inline-flex items-center gap-1 ${textClassName} font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap`}
+          aria-label="Avbröt ett påbörjat lopp (DNF)"
+          className={`inline-flex items-center gap-1 ${textClassName} font-medium text-red-700 dark:text-red-400 whitespace-nowrap`}
         >
-          <Slash className={iconClassName} />
-          {!iconOnly && <span>Utgått</span>}
+          <X className={iconClassName} />
+          {!iconOnly && <span>DNF – bröt loppet</span>}
         </span>
       );
     case 'DNS':
       return (
         <span
-          title="Ej start (DNS)"
+          title="Starten blev inte av (DNS)"
           role="img"
-          aria-label="Ej start (DNS)"
+          aria-label="Starten blev inte av (DNS)"
           className={`inline-flex items-center gap-1 ${textClassName} text-slate-500 dark:text-slate-500 whitespace-nowrap`}
         >
-          <HelpCircle className={iconClassName} />
-          {!iconOnly && <span>Ej start</span>}
+          <CircleSlash className={iconClassName} />
+          {!iconOnly && <span>DNS – startade aldrig</span>}
         </span>
       );
   }
