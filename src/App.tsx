@@ -1370,7 +1370,12 @@ export default function App() {
           error instanceof Error ? error.message : 'Readout history could not be saved.';
         await readoutHistoryStore.update(
           record.clientReadoutId,
-          { deliveryState: 'SAVE_FAILED', syncError: message },
+          {
+            deliveryState: 'SAVE_FAILED',
+            issueType: 'LOCAL_PERSISTENCE_FAILURE',
+            issueState: 'OPEN',
+            syncError: message,
+          },
           false
         );
         setReadoutHistoryError(message);

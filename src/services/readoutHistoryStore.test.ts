@@ -170,11 +170,19 @@ describe('readout history ordering', () => {
       issueType: 'WRONG_COMPETITOR' as const,
       issueState: 'IN_PROGRESS' as const,
     };
+    const alreadyRead = {
+      ...createRecord('duplicate-readout', 3),
+      issueType: 'DUPLICATE_READOUT' as const,
+      issueState: 'NONE' as const,
+    };
 
     expect(
-      filterOutstandingReadouts([ordinaryMp, mpReview, inProgressIssue]).map(
-        (record) => record.clientReadoutId
-      )
+      filterOutstandingReadouts([
+        ordinaryMp,
+        mpReview,
+        inProgressIssue,
+        alreadyRead,
+      ]).map((record) => record.clientReadoutId)
     ).toEqual(['mp-review-readout', 'in-progress-readout']);
   });
 

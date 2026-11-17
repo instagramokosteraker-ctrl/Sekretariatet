@@ -39,6 +39,14 @@ import {
   getCompetitorPlacement,
   getMissingPunchExplanation,
 } from '../services/readoutSummary';
+import {
+  getReadoutDeliveryLabel,
+  getReadoutIssueLabel,
+  getReadoutIssueStateLabel,
+  getReadoutIssueSummary,
+  getReadoutStatusPresentation,
+  getReadoutStatusText,
+} from '../utils/readoutStatusPresentation';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { UsbStationBar, UsbStationErrorBanner } from './UsbStationBar';
@@ -251,7 +259,8 @@ export function ReadoutDashboard({
         record.originalCompetitorName ?? '',
         record.resultStatus ?? '',
         record.originalResultStatus ?? '',
-        record.issueType ?? '',
+        getReadoutIssueLabel(record.issueType) ?? '',
+        getReadoutIssueStateLabel(record.issueState) ?? '',
       ].some((value) => value.toLocaleLowerCase().includes(query))
     );
   }, [historySearch, historyView, outstandingReadouts, readoutHistory]);
@@ -293,18 +302,13 @@ export function ReadoutDashboard({
       latestReadout.competitorSnapshot
     );
   }, [competitors, latestReadout]);
+  const latestReadoutPresentation = getReadoutStatusPresentation(latestReadout);
   const latestReadoutResultLabel =
     latestReadout?.resultStatus ??
     latestCompetitor?.status ??
-    (latestReadout?.readoutState === 'UNKNOWN' ? 'Okänt kort' : 'Avläsning sparad');
+    (latestReadout?.readoutState === 'UNKNOWN' ? 'Okänd bricka' : 'Avläsning sparad');
   const latestReadoutSyncLabel = latestReadout
-    ? {
-        PERSISTING: 'Sparar lokalt',
-        LOCAL_SAVED: 'Sparad lokalt',
-        QUEUED: 'Väntar på synk',
-        SYNCED: 'Synkad',
-        SAVE_FAILED: 'Sparfel',
-      }[latestReadout.deliveryState]
+    ? getReadoutDeliveryLabel(latestReadout.deliveryState)
     : null;
   const latestRunnerSuggestion = useMemo(() => {
     if (!latestReadout) return null;
@@ -480,7 +484,7 @@ export function ReadoutDashboard({
 
       <section
         aria-live="polite"
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden shadow-sm"
+        className={`${latestReadoutPresentation.surfaceClass} border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden shadow-sm`}
       >
         <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -533,6 +537,11 @@ export function ReadoutDashboard({
               <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
                 Resultat: {latestReadoutResultLabel}
               </span>
+              {getReadoutIssueSummary(latestReadout) && (
+                <span className="rounded-full bg-white/70 dark:bg-slate-900/60 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-200">
+                  {getReadoutIssueSummary(latestReadout)}
+                </span>
+              )}
             </div>
             <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
               <span>
@@ -565,12 +574,12 @@ export function ReadoutDashboard({
               </span>
             </div>
             {latestMpExplanation && (
-              <p className="mt-1.5 text-xs text-red-700 dark:text-red-300">
+              <p className="mt-1.5 text-xs text-amber-800 dark:text-amber-200">
                 MP: {latestMpExplanation}
               </p>
             )}
             {latestReadout.syncError && (
-              <p className="mt-1.5 text-xs text-red-700 dark:text-red-300">
+              <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-300">
                 {latestReadout.syncError}
               </p>
             )}
@@ -789,7 +798,7 @@ export function ReadoutDashboard({
         <section
           ref={selectedReadoutPanelRef}
           aria-label={`Vald avläsning ${selectedReadout.captureSequence}`}
-          className="scroll-mt-24 bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-900 rounded-lg overflow-hidden"
+          className={`scroll-mt-24 ${getReadoutStatusPresentation(selectedReadout).surfaceClass} border border-sky-200 dark:border-sky-900 rounded-lg overflow-hidden`}
         >
           <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-sky-100 dark:border-sky-900">
             <div>
@@ -853,9 +862,11 @@ export function ReadoutDashboard({
                   : ''}
               </span>
               <span>
-                Ärende: {selectedReadout.issueType ?? 'Inget'} · {selectedReadout.issueState}
+                Ärende: {getReadoutIssueSummary(selectedReadout) ?? 'Inget'}
               </span>
-              <span>Leverans: {selectedReadout.deliveryState}</span>
+              <span>
+                Leverans: {getReadoutDeliveryLabel(selectedReadout.deliveryState)}
+              </span>
             </div>
             {selectedReadout.suggestedRunner && (
               <div className="mt-1">
@@ -1047,13 +1058,16 @@ export function ReadoutDashboard({
                     setHistoryView('OUTSTANDING');
                     setHistoryPage(0);
                   }}
-                  className={`px-2.5 py-1 text-xs rounded-md border ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border ${
                     historyView === 'OUTSTANDING'
-                      ? 'bg-amber-700 text-white border-amber-700'
+                      ? 'bg-orange-100 text-orange-900 border-orange-300 dark:bg-orange-950/60 dark:text-orange-200 dark:border-orange-800'
                       : 'bg-white text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700'
                   }`}
                 >
-                  Outstanding Issues ({outstandingReadouts.length})
+                  Outstanding Issues
+                  <span className="rounded-full bg-white/70 dark:bg-slate-900/70 px-1.5 py-0.5 font-medium tabular-nums">
+                    {outstandingReadouts.length}
+                  </span>
                 </button>
               </div>
               <label className="relative block w-full sm:max-w-xs">
@@ -1071,6 +1085,11 @@ export function ReadoutDashboard({
                 />
               </label>
             </div>
+            {historyView === 'OUTSTANDING' && (
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Visar öppna eller pågående ärenden. Färgen visar ärendets typ; synkstatus visas separat.
+              </p>
+            )}
             <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
               <span>
                 {filteredReadouts.length === 0
@@ -1101,31 +1120,21 @@ export function ReadoutDashboard({
           {visibleReadouts.length > 0 ? (
             <ol className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
               {visibleReadouts.map((record) => {
-                const resultLabel = record.resultStatus
-                  ? record.resultStatus
-                  : record.readoutState === 'UNKNOWN'
-                    ? 'Unknown card'
-                    : 'Captured';
-                const syncLabel =
-                  record.deliveryState === 'SYNCED'
-                    ? 'Synced'
-                    : record.deliveryState === 'QUEUED'
-                      ? 'Sync pending'
-                      : record.deliveryState === 'LOCAL_SAVED'
-                        ? 'Saved locally'
-                        : record.deliveryState === 'SAVE_FAILED'
-                          ? 'Save failed'
-                          : 'Saving';
+                const status = getReadoutStatusPresentation(record);
+                const statusText = getReadoutStatusText(record);
                 return (
-                  <li key={record.clientReadoutId} className="px-3 py-2">
+                  <li
+                    key={record.clientReadoutId}
+                    className={`px-3 py-2 ${status.surfaceClass}`}
+                  >
                     <div className="flex items-start gap-2">
                       <button
                         type="button"
                         aria-pressed={selectedReadoutId === record.clientReadoutId}
                         onClick={() => handleSelectReadout(record)}
-                        className={`flex-1 min-w-0 text-left rounded px-1 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800 ${
+                        className={`flex-1 min-w-0 text-left rounded px-1 py-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600 ${
                           selectedReadoutId === record.clientReadoutId
-                            ? 'bg-sky-50 dark:bg-sky-950/30'
+                            ? 'ring-2 ring-inset ring-sky-600 dark:ring-sky-400'
                             : ''
                         }`}
                       >
@@ -1136,10 +1145,7 @@ export function ReadoutDashboard({
                             {formatSiNumber(record.readout.siNumber)}
                           </span>
                           <span className="shrink-0 text-slate-600 dark:text-slate-300">
-                            {resultLabel} · {syncLabel}
-                            {record.issueType
-                              ? ` · ${record.issueType} ${record.issueState}`
-                              : ''}
+                            {statusText} · {getReadoutDeliveryLabel(record.deliveryState)}
                           </span>
                         </span>
                       </button>
