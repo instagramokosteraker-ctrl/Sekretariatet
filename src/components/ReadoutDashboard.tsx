@@ -1225,7 +1225,7 @@ export function ReadoutDashboard({
             </div>
             {historyView === 'OUTSTANDING' && (
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Visar öppna eller pågående ärenden. Färgen visar ärendets typ; synkstatus visas separat.
+                Visar ärenden som väntar på åtgärd eller hanteras. Synkstatus visas separat.
               </p>
             )}
             <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
@@ -1306,7 +1306,7 @@ export function ReadoutDashboard({
           ) : (
             <p className="px-4 py-5 text-sm text-slate-500 dark:text-slate-400">
               {historyView === 'OUTSTANDING'
-                ? 'Inga öppna eller pågående avläsningsärenden.'
+                ? 'Inga avläsningsärenden väntar på åtgärd.'
                 : 'Historiken visas här efter första SI-avläsningen.'}
             </p>
           )}

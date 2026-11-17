@@ -125,6 +125,6 @@ describe('readout status presentation', () => {
           issueState: 'OPEN',
         })
       )
-    ).toBe('Okänd bricka · Öppen');
+    ).toBe('Okänd bricka');
   });
 });

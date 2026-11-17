@@ -43,7 +43,7 @@ const ISSUE_LABELS: Record<ReadoutIssueType, string> = {
 
 const ISSUE_STATE_LABELS: Record<ReadoutIssueState, string | null> = {
   NONE: null,
-  OPEN: 'Öppen',
+  OPEN: null,
   IN_PROGRESS: 'Pågår',
   RESOLVED: 'Löst',
   DISMISSED: 'Avfärdad',
@@ -105,12 +105,18 @@ export function getReadoutIssueSummary(
 ): string | null {
   const label = getReadoutIssueLabel(record.issueType);
   if (!label) {
-    return record.issueState === 'OPEN' || record.issueState === 'IN_PROGRESS'
-      ? `Åtgärd krävs · ${getReadoutIssueStateLabel(record.issueState)}`
-      : null;
+    if (record.issueState === 'OPEN') return 'Åtgärd krävs';
+    if (record.issueState === 'IN_PROGRESS') {
+      return `Åtgärd krävs · ${getReadoutIssueStateLabel(record.issueState)}`;
+    }
+    return null;
   }
 
   if (record.issueType === 'DUPLICATE_READOUT') {
+    return label;
+  }
+
+  if (record.issueState === 'OPEN') {
     return label;
   }
 
