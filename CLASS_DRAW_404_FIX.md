@@ -53,3 +53,17 @@ large-chunk warnings.
   Vercel function.
 - Firestore fallback behavior and a live competition switch in a browser were
   not exercised.
+
+## Follow-up: Firestore-only competition 404
+
+The draw API looks up competitions in the Express server's `seasonDb.eventsMap`.
+Some competitions (including imports created directly in Firestore) can exist
+in Firestore without an entry in that server-side map. In that case the API
+returns `HTTP 404: Tävlingen hittades ej.` even though the selected competition
+exists.
+
+The client now treats a draw API 404 as a reason to run the draw through
+`saveClassStartDrawToFirestore`, which reads the selected competition and class
+directly from Firestore. Other client errors such as 400 and 403 still surface
+without fallback. This fallback decision is covered by
+`src/utils/classDrawFallback.test.ts`.

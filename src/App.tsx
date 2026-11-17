@@ -169,6 +169,7 @@ import {
   buildEventorClassMapping,
   parseEventorImportApiResponse,
 } from './utils/eventorImport';
+import { shouldUseFirestoreClassDrawFallback } from './utils/classDrawFallback';
 import {
   parseEventorXml,
   type ParsedEventorRunner,
@@ -4522,12 +4523,7 @@ export default function App() {
                         true
                       );
                     } catch (error) {
-                      const backendUnavailable =
-                        error instanceof TypeError ||
-                        (error instanceof Error &&
-                          (/^HTTP 5\d\d:/.test(error.message) ||
-                            error.message.includes('API server initialization failed')));
-                      if (!backendUnavailable) throw error;
+                      if (!shouldUseFirestoreClassDrawFallback(error)) throw error;
 
                       const draw = await saveClassStartDrawToFirestore({
                         competitionId: activeEventId,
