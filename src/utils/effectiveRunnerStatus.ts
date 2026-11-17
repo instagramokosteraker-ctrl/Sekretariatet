@@ -1,8 +1,4 @@
-import type {
-  CompetitionMeta,
-  Competitor,
-  RunnerStatus,
-} from '../types/sportident';
+import type { CompetitionMeta, Competitor, RunnerStatus } from '../types/sportident';
 
 export type CompetitorWithEffectiveStatus = Competitor & {
   effectiveStatus: RunnerStatus;
@@ -34,35 +30,25 @@ const stockholmDateTimeFormatter = new Intl.DateTimeFormat('en-GB', {
 
 function getStockholmDateTime(timestampMs: number): StockholmDateTime | null {
   if (!Number.isFinite(timestampMs)) return null;
-
   const parts = stockholmDateTimeFormatter.formatToParts(new Date(timestampMs));
   const values = new Map(parts.map((part) => [part.type, part.value]));
-  const year = Number(values.get('year'));
-  const month = Number(values.get('month'));
-  const day = Number(values.get('day'));
-  const hour = Number(values.get('hour'));
-  const minute = Number(values.get('minute'));
-  const second = Number(values.get('second'));
-
-  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
-
-  return {
-    year,
-    month,
-    day,
-    hour,
-    minute,
-    second,
+  const result = {
+    year: Number(values.get('year')),
+    month: Number(values.get('month')),
+    day: Number(values.get('day')),
+    hour: Number(values.get('hour')),
+    minute: Number(values.get('minute')),
+    second: Number(values.get('second')),
   };
+  return Object.values(result).every(Number.isFinite) ? result : null;
 }
 
-function parseCompetitionDate(date: string): { year: number; month: number; day: number } | null {
+function parseCompetitionDate(
+  date: string
+): { year: number; month: number; day: number } | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!match) return null;
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
+  const [year, month, day] = match.slice(1).map(Number);
   const check = new Date(Date.UTC(year, month - 1, day));
   if (
     check.getUTCFullYear() !== year ||
@@ -74,7 +60,9 @@ function parseCompetitionDate(date: string): { year: number; month: number; day:
   return { year, month, day };
 }
 
-function isValidAllocatedStart(allocatedStartSec: number | null): allocatedStartSec is number {
+function isValidAllocatedStart(
+  allocatedStartSec: number | null
+): allocatedStartSec is number {
   return (
     Number.isInteger(allocatedStartSec) &&
     allocatedStartSec !== null &&
@@ -89,7 +77,6 @@ export function getScheduledStartTimestamp(
 ): number | null {
   const date = parseCompetitionDate(competitionDate);
   if (!date || !isValidAllocatedStart(allocatedStartSec)) return null;
-
   const hour = Math.floor(allocatedStartSec / 3600);
   const minute = Math.floor((allocatedStartSec % 3600) / 60);
   const second = allocatedStartSec % 60;
@@ -114,8 +101,8 @@ export function getScheduledStartTimestamp(
       local.minute,
       local.second
     );
-    const offsetMs = representedAsUtc - timestamp;
-    const adjustedTimestamp = wallClockAsUtc - offsetMs;
+    const adjustedTimestamp =
+      wallClockAsUtc - (representedAsUtc - timestamp);
     if (adjustedTimestamp === timestamp) break;
     timestamp = adjustedTimestamp;
   }

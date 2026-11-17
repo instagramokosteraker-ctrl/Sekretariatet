@@ -48,7 +48,7 @@ Local builds, TypeScript checks, and focused regression tests passed for the rec
 ### Live ranking and Bom
 
 - Shared live ranking implementation covers Förenklad vy, Sträcka & bom, Speaker results, and public class results.
-- CHECKED → IN_FOREST is derived, not written to Firestore. The finalized projection estimate is rolling elapsed race time (`currentTime - actualStartTime`), with projected display styling and passage ordering as specified.
+- Effective status is derived, not written to Firestore: stored CHECKED becomes effective IN_FOREST at the allocated start time, including immediately when checked after that time. The finalized projection estimate is rolling elapsed race time (`currentTime - actualStartTime`), with projected display styling and passage ordering as specified.
 - Radio/finish ranking, radio sorting, ordinary-control sorting, Plac/status output, and reset-to-LIVE behavior were implemented and unit-tested.
 - Existing Bom calculation and SI readout validation were left unchanged.
 - **Open:** operational/browser verification across views and confirmation that expected live inputs remain correct in a real event.

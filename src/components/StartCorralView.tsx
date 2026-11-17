@@ -1230,18 +1230,24 @@ export function StartCorralView({
                         </span>
                         <span className="text-[11px] text-slate-500 font-mono"> · {cls}</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void onUpdateCompetitor(r.id, {
-                            status: 'IN_FOREST',
-                            startTimeSec: r.allocatedStartSec ?? activeClockSec,
-                          })
-                        }
-                        className="px-2 py-0.5 text-[11px] font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded whitespace-nowrap shrink-0"
-                      >
-                        Starta
-                      </button>
+                      {r.status === 'REGISTERED' ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void onUpdateCompetitor(r.id, {
+                              status: 'CHECKED',
+                              checkTimeSec: activeClockSec,
+                            })
+                          }
+                          className="px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded whitespace-nowrap shrink-0"
+                        >
+                          Check
+                        </button>
+                      ) : r.status === 'CHECKED' ? (
+                        <span className="text-[11px] text-slate-500 whitespace-nowrap shrink-0">
+                          Checkad
+                        </span>
+                      ) : null}
                     </div>
                   );
                 })}

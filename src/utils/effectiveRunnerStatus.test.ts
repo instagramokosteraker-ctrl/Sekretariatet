@@ -41,7 +41,7 @@ describe('effective runner status', () => {
   const scheduledStart = getScheduledStartTimestamp(
     competition.date,
     10 * 3600
-  );
+  )!;
 
   it('resolves allocated starts using Stockholm summer time', () => {
     expect(getScheduledStartTimestamp('2026-07-15', 10 * 3600)).toBe(
@@ -50,53 +50,30 @@ describe('effective runner status', () => {
   });
 
   it('keeps a checked runner checked before the allocated start', () => {
-    expect(scheduledStart).not.toBeNull();
     expect(
-      getEffectiveRunnerStatus(
-        makeCompetitor(),
-        competition,
-        scheduledStart! - 1000
-      )
+      getEffectiveRunnerStatus(makeCompetitor(), competition, scheduledStart - 1000)
     ).toBe('CHECKED');
   });
 
-  it('transitions at the exact allocated start boundary', () => {
-    expect(scheduledStart).not.toBeNull();
+  it('derives in-forest status at the allocated start boundary', () => {
     expect(
-      getEffectiveRunnerStatus(makeCompetitor(), competition, scheduledStart!)
+      getEffectiveRunnerStatus(makeCompetitor(), competition, scheduledStart)
     ).toBe('IN_FOREST');
   });
 
-  it('treats an overdue checked runner as in the forest', () => {
-    expect(scheduledStart).not.toBeNull();
+  it('immediately derives in-forest status for a check after the allocated start', () => {
+    const checkedRunner = makeCompetitor('CHECKED');
     expect(
-      getEffectiveRunnerStatus(
-        makeCompetitor(),
-        competition,
-        scheduledStart! + 1000
-      )
+      getEffectiveRunnerStatus(checkedRunner, competition, scheduledStart + 1000)
     ).toBe('IN_FOREST');
   });
 
-  it('immediately treats a late check-in as in the forest', () => {
-    const registered = makeCompetitor('REGISTERED');
-    const checkedAt = { ...registered, status: 'CHECKED' as const };
-
-    expect(
-      getEffectiveRunnerStatus(
-        checkedAt,
-        competition,
-        scheduledStart! + 1000
-      )
-    ).toBe('IN_FOREST');
-  });
-
-  it('leaves a registered runner unchanged after the allocated start', () => {
+  it('leaves a registered runner unchanged after its allocated start', () => {
     expect(
       getEffectiveRunnerStatus(
         makeCompetitor('REGISTERED'),
         competition,
-        scheduledStart! + 1000
+        scheduledStart + 1000
       )
     ).toBe('REGISTERED');
   });
@@ -106,23 +83,29 @@ describe('effective runner status', () => {
       getEffectiveRunnerStatus(
         makeCompetitor(),
         { ...competition, status: 'COMPLETED' },
-        scheduledStart! + 1000
+        scheduledStart + 1000
       )
     ).toBe('CHECKED');
   });
 
-  it('does not mutate the competitor or persist the computed status', () => {
+  it('does not transition a checked runner without an allocated start', () => {
+    const competitor = { ...makeCompetitor(), allocatedStartSec: null };
+    expect(
+      getEffectiveRunnerStatus(competitor, competition, scheduledStart + 1000)
+    ).toBe('CHECKED');
+  });
+
+  it('does not mutate the competitor or persist the derived status', () => {
     const competitor = makeCompetitor();
     const original = { ...competitor };
     const projected = withEffectiveStatus(
       competitor,
       competition,
-      scheduledStart! + 1000
+      scheduledStart + 1000
     );
 
     expect(projected.effectiveStatus).toBe('IN_FOREST');
     expect(projected.status).toBe('CHECKED');
     expect(competitor).toEqual(original);
-    expect(competitor.status).toBe('CHECKED');
   });
 });
