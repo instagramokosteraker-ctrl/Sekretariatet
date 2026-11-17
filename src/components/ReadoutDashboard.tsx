@@ -47,6 +47,7 @@ import {
   getReadoutStatusPresentation,
   getReadoutStatusText,
 } from '../utils/readoutStatusPresentation';
+import { getRunnerNameSuggestions } from '../utils/runnerNameSuggestions';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { UsbStationBar, UsbStationErrorBanner } from './UsbStationBar';
@@ -152,6 +153,10 @@ export function ReadoutDashboard({
   const [unknownCardRunnerProfileId, setUnknownCardRunnerProfileId] = useState<string | null>(
     null
   );
+  const [unknownCardNameSuggestionOpen, setUnknownCardNameSuggestionOpen] =
+    useState(false);
+  const [unknownCardActiveSuggestionIndex, setUnknownCardActiveSuggestionIndex] =
+    useState(0);
   const [unknownCardIsRental, setUnknownCardIsRental] = useState(false);
   const [unknownCardIsBorrowed, setUnknownCardIsBorrowed] = useState(false);
   const [unknownCardStartClock, setUnknownCardStartClock] = useState('');
@@ -244,6 +249,10 @@ export function ReadoutDashboard({
   const outstandingReadouts = useMemo(
     () => filterOutstandingReadouts(readoutHistory),
     [readoutHistory]
+  );
+  const unknownCardNameSuggestions = useMemo(
+    () => getRunnerNameSuggestions(runnerDb, unknownCardName),
+    [runnerDb, unknownCardName]
   );
   const filteredReadouts = useMemo(() => {
     const records =
@@ -382,6 +391,8 @@ export function ReadoutDashboard({
     setSelectedReadoutId(isClosing ? null : record.clientReadoutId);
     setUnknownCardError(null);
     setUnknownCardSuccess(null);
+    setUnknownCardNameSuggestionOpen(false);
+    setUnknownCardActiveSuggestionIndex(0);
     if (isClosing) return;
 
     if (record.issueType === 'UNKNOWN_CARD') {
@@ -413,6 +424,56 @@ export function ReadoutDashboard({
         behavior: 'smooth',
       });
     });
+  };
+
+  const selectUnknownCardNameSuggestion = (runner: RunnerDbEntry) => {
+    const matchingClass = runner.defaultClassName
+      ? classes.find(
+          (candidate) =>
+            candidate.name.toLocaleLowerCase() ===
+            runner.defaultClassName?.toLocaleLowerCase()
+        )
+      : null;
+    setUnknownCardName(runner.fullName);
+    setUnknownCardClub(runner.club);
+    setUnknownCardClassId(matchingClass?.id ?? '');
+    setUnknownCardRunnerProfileId(runner.id);
+    setUnknownCardNameSuggestionOpen(false);
+    setUnknownCardActiveSuggestionIndex(0);
+  };
+
+  const handleUnknownCardNameKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>
+  ) => {
+    if (!unknownCardNameSuggestionOpen || unknownCardNameSuggestions.length === 0) {
+      if (event.key === 'ArrowDown' && unknownCardNameSuggestions.length > 0) {
+        setUnknownCardNameSuggestionOpen(true);
+        setUnknownCardActiveSuggestionIndex(0);
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      setUnknownCardActiveSuggestionIndex(
+        (index) => (index + 1) % unknownCardNameSuggestions.length
+      );
+      event.preventDefault();
+    } else if (event.key === 'ArrowUp') {
+      setUnknownCardActiveSuggestionIndex(
+        (index) =>
+          (index - 1 + unknownCardNameSuggestions.length) %
+          unknownCardNameSuggestions.length
+      );
+      event.preventDefault();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      selectUnknownCardNameSuggestion(
+        unknownCardNameSuggestions[unknownCardActiveSuggestionIndex]
+      );
+    } else if (event.key === 'Escape') {
+      setUnknownCardNameSuggestionOpen(false);
+    }
   };
 
   const handleResolveUnknownCard = async (
@@ -798,7 +859,7 @@ export function ReadoutDashboard({
         <section
           ref={selectedReadoutPanelRef}
           aria-label={`Vald avläsning ${selectedReadout.captureSequence}`}
-          className={`scroll-mt-24 ${getReadoutStatusPresentation(selectedReadout).surfaceClass} border border-sky-200 dark:border-sky-900 rounded-lg overflow-hidden`}
+          className={`scroll-mt-24 ${getReadoutStatusPresentation(selectedReadout).surfaceClass} border border-sky-200 dark:border-sky-900 rounded-lg overflow-visible`}
         >
           <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-sky-100 dark:border-sky-900">
             <div>
@@ -896,7 +957,7 @@ export function ReadoutDashboard({
             selectedReadout.issueState !== 'DISMISSED' && (
               <form
                 onSubmit={(event) => void handleResolveUnknownCard(event)}
-                className="border-t border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-3"
+                className="border-t border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-3 rounded-b-lg"
               >
                 <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
                   Koppla okänd SI-bricka
@@ -913,15 +974,92 @@ export function ReadoutDashboard({
                       className="mt-1 w-full rounded border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 px-2 py-1.5 font-mono"
                     />
                   </label>
-                  <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
-                    Löparens namn
+                  <div className="relative text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                    <label className="block" htmlFor="unknown-card-runner-name">
+                      Löparens namn
+                    </label>
                     <input
+                      id="unknown-card-runner-name"
                       value={unknownCardName}
-                      onChange={(event) => setUnknownCardName(event.target.value)}
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-expanded={
+                        unknownCardNameSuggestionOpen &&
+                        unknownCardName.trim().length >= 2
+                      }
+                      aria-controls="unknown-card-runner-suggestions"
+                      aria-activedescendant={
+                        unknownCardNameSuggestionOpen &&
+                        unknownCardNameSuggestions.length > 0
+                          ? `unknown-card-runner-suggestion-${unknownCardActiveSuggestionIndex}`
+                          : undefined
+                      }
+                      onFocus={() => {
+                        if (unknownCardNameSuggestions.length > 0) {
+                          setUnknownCardNameSuggestionOpen(true);
+                        }
+                      }}
+                      onBlur={() => setUnknownCardNameSuggestionOpen(false)}
+                      onKeyDown={handleUnknownCardNameKeyDown}
+                      onChange={(event) => {
+                        setUnknownCardName(event.target.value);
+                        setUnknownCardRunnerProfileId(null);
+                        setUnknownCardNameSuggestionOpen(true);
+                        setUnknownCardActiveSuggestionIndex(0);
+                      }}
                       required
-                      className="mt-1 w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5"
+                      className="mt-1 block w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5"
                     />
-                  </label>
+                    {unknownCardNameSuggestionOpen &&
+                      unknownCardName.trim().length >= 2 && (
+                        <div
+                          id="unknown-card-runner-suggestions"
+                          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 py-1 shadow-lg"
+                        >
+                          {unknownCardNameSuggestions.length > 0 ? (
+                            <div role="listbox" aria-label="Löpare i databasen">
+                              {unknownCardNameSuggestions.map((runner, index) => (
+                                <button
+                                  id={`unknown-card-runner-suggestion-${index}`}
+                                  key={`${runner.siNumber}-${runner.id}`}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={
+                                    index === unknownCardActiveSuggestionIndex
+                                  }
+                                  onMouseDown={(event) => event.preventDefault()}
+                                  onClick={() =>
+                                    selectUnknownCardNameSuggestion(runner)
+                                  }
+                                  className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs ${
+                                    index === unknownCardActiveSuggestionIndex
+                                      ? 'bg-slate-100 dark:bg-slate-800'
+                                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/70'
+                                  }`}
+                                >
+                                  <span className="truncate font-medium text-slate-900 dark:text-slate-100">
+                                    {runner.fullName}
+                                    <span className="ml-1.5 font-normal text-slate-500 dark:text-slate-400">
+                                      {runner.club}
+                                    </span>
+                                  </span>
+                                  <span className="shrink-0 font-mono tabular-nums text-[10px] text-slate-500 dark:text-slate-400">
+                                    SI {formatSiNumber(runner.siNumber)}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <p
+                              role="status"
+                              className="px-2.5 py-1.5 text-xs font-normal text-slate-500 dark:text-slate-400"
+                            >
+                              Inga löpare matchar sökningen.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                  </div>
                   <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
                     Klubb
                     <input
