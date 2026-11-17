@@ -29,8 +29,13 @@ import type {
 } from '../types/sportident';
 import type { SerialConnectionStatus, UsbStationMode } from '../services/sportidentWebSerial';
 import { formatStationFunctionLabel } from './StatusLabels';
+import {
+  SportidentHardwareTestbench,
+  type SportidentHardwareTestbenchProps,
+} from './SportidentHardwareTestbench';
 
-interface HardwareStationsViewProps {
+interface HardwareStationsViewProps
+  extends Omit<SportidentHardwareTestbenchProps, 'courses' | 'competitors'> {
   isAdmin?: boolean;
   competition: CompetitionMeta;
   courses: Course[];
@@ -111,6 +116,8 @@ export function HardwareStationsView({
   onSaveStation,
   onDeleteStation,
   onOpenProtocolInspector,
+  onSelectRunner,
+  onSimulateFullReadout,
 }: HardwareStationsViewProps) {
   // New station modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -358,7 +365,7 @@ export function HardwareStationsView({
         <div>
           <h1 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <Radio className="w-5 h-5 text-red-600 dark:text-red-400" />
-            <span>SportIdent, ROC & USB</span>
+            <span>Sportident, ROC och USB</span>
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             SPORTident USB-avläsare, nödlägen i skogen & omräkning, ROC-radiokontroller samt hårdvarustationer.
@@ -998,6 +1005,13 @@ export function HardwareStationsView({
           </table>
         </div>
       </section>
+
+      <SportidentHardwareTestbench
+        courses={courses}
+        competitors={competitors}
+        onSelectRunner={onSelectRunner}
+        onSimulateFullReadout={onSimulateFullReadout}
+      />
     </div>
   );
 }

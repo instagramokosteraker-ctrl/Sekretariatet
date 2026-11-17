@@ -1214,6 +1214,31 @@ export default function App() {
     [readoutHistory, selectedUnknownReadoutId]
   );
 
+  const createMpReviewIssue = useCallback(async (clientReadoutId: string) => {
+    const record = readoutHistoryStore.getRecord(clientReadoutId);
+    if (!record) throw new Error('Avläsningen hittades inte i historiken.');
+    if (record.resultStatus !== 'MP') {
+      throw new Error('Endast en MP-avläsning kan få ett MP-granskningsärende.');
+    }
+    if (record.issueState !== 'NONE') {
+      throw new Error('Avläsningen har redan ett ärendetillstånd.');
+    }
+
+    try {
+      await readoutHistoryStore.update(clientReadoutId, {
+        issueType: 'MP_REVIEW',
+        issueState: 'OPEN',
+      });
+    } catch (error) {
+      await readoutHistoryStore.update(
+        clientReadoutId,
+        { issueType: record.issueType, issueState: record.issueState },
+        false
+      );
+      throw error;
+    }
+  }, []);
+
   useEffect(() => {
     activeEventIdRef.current = activeEventId;
   }, [activeEventId]);
@@ -1238,21 +1263,52 @@ export default function App() {
       return;
     }
     if (res.unknownCardReadout) {
+      const currentRecord = readoutHistoryStore.getRecord(clientReadoutId);
+      const currentUnknownIssue =
+        currentRecord?.issueType === 'UNKNOWN_CARD' ? currentRecord : null;
       await readoutHistoryStore.update(clientReadoutId, {
         deliveryState: 'SYNCED',
-        readoutState: 'UNKNOWN',
+        readoutState:
+          currentRecord?.readoutState === 'PROCESSED' ? 'PROCESSED' : 'UNKNOWN',
+        issueType: 'UNKNOWN_CARD',
+        issueState:
+          currentUnknownIssue && currentUnknownIssue.issueState !== 'NONE'
+            ? currentUnknownIssue.issueState
+            : 'OPEN',
         suggestedRunner: res.suggestedRunner ?? null,
         syncError: null,
       });
       if (soundEnabledRef.current) playMeosFeedbackTone('mp');
     } else if (syncedCompetitor) {
+      const currentRecord = readoutHistoryStore.getRecord(clientReadoutId);
+      const className =
+        classes.find((candidate) => candidate.id === syncedCompetitor.classId)?.name ??
+        null;
+      const wasOriginallyUnknown =
+        currentRecord?.issueType === 'UNKNOWN_CARD' ||
+        currentRecord?.readoutState === 'UNKNOWN';
       await readoutHistoryStore.update(clientReadoutId, {
         deliveryState: 'SYNCED',
         readoutState: 'PROCESSED',
         competitorId: syncedCompetitor.id,
         competitorName: syncedCompetitor.fullName,
+        className,
         resultStatus: syncedCompetitor.status,
         competitorSnapshot: syncedCompetitor,
+        originalCompetitorId:
+          currentRecord?.originalCompetitorId ??
+          (wasOriginallyUnknown ? null : syncedCompetitor.id),
+        originalCompetitorName:
+          currentRecord?.originalCompetitorName ??
+          (wasOriginallyUnknown ? null : syncedCompetitor.fullName),
+        originalClassName:
+          currentRecord?.originalClassName ?? (wasOriginallyUnknown ? null : className),
+        originalResultStatus:
+          currentRecord?.originalResultStatus ??
+          (wasOriginallyUnknown ? null : syncedCompetitor.status),
+        originalCompetitorSnapshot:
+          currentRecord?.originalCompetitorSnapshot ??
+          (wasOriginallyUnknown ? null : syncedCompetitor),
         syncError: null,
       });
       setCompetitors((current) =>
@@ -1269,7 +1325,7 @@ export default function App() {
         syncError: null,
       });
     }
-  }, []);
+  }, [classes]);
 
   useEffect(() => {
     const unsubscribe = readoutHistoryStore.subscribe(setReadoutHistory);
@@ -1306,7 +1362,7 @@ export default function App() {
   const submitFullReadoutToServer = useCallback(
     async (readout: FullCardReadoutPayload) => {
       if (!readoutHistoryStore.isInitialized) {
-        await readoutHistoryStore.initialize();
+        throw new Error('Readout history is not ready to capture a card.');
       }
 
       const eventId = activeEventIdRef.current;
@@ -2128,6 +2184,7 @@ export default function App() {
       const readoutId = payload.pendingReadout?.clientReadoutId;
       if (readoutId) {
         try {
+          const currentReadout = readoutHistoryStore.getRecord(readoutId);
           await readoutHistoryStore.update(readoutId, {
             readoutState: 'PROCESSED',
             deliveryState: 'SYNCED',
@@ -2138,6 +2195,9 @@ export default function App() {
               null,
             resultStatus: saved.competitor.status,
             competitorSnapshot: saved.competitor,
+            ...(currentReadout?.issueType === 'UNKNOWN_CARD'
+              ? { issueState: 'RESOLVED' as const }
+              : {}),
             suggestedRunner: null,
             syncError: null,
           });
@@ -2674,6 +2734,8 @@ export default function App() {
     finishTimeSec: number | null;
     punches: CardPunch[];
   }) => {
+    await readoutHistoryStore.initialize();
+
     if (params.protocolKind === 'SI5_B1') {
       const rawSi5 = buildSi5ReadoutFrame({
         stationCode: 1,
@@ -4149,6 +4211,7 @@ export default function App() {
                   readoutHistory={activeReadoutHistory}
                   latestReadoutId={latestReadoutId}
                   readoutHistoryError={readoutHistoryError}
+                  onCreateMpReviewIssue={createMpReviewIssue}
                   offlineSnap={offlineSnap}
                   serialStatus={serialStatus}
                   onConnectUsb={async () => {
@@ -4192,14 +4255,17 @@ export default function App() {
                   onMarkRentalReturned={async (id) => {
                     await updateActiveCompetitorRentalFields(id, { rentalReturned: true });
                   }}
-                  onSimulateFullReadout={handleSimulateFullReadout}
                   onSimulateOnlinePunch={handleSimulateOnlinePunch}
-                  onLinkUnknownCardToEntry={(siNumber) => {
-                    const unknownReadout = activeReadoutHistory.find(
-                      (record) =>
-                        record.readout.siNumber === siNumber &&
-                        record.readoutState === 'UNKNOWN'
-                    );
+                  onLinkUnknownCardToEntry={(siNumber, clientReadoutId) => {
+                    const unknownReadout = clientReadoutId
+                      ? activeReadoutHistory.find(
+                          (record) => record.clientReadoutId === clientReadoutId
+                        )
+                      : activeReadoutHistory.find(
+                          (record) =>
+                            record.readout.siNumber === siNumber &&
+                            record.readoutState === 'UNKNOWN'
+                        );
                     setSelectedUnknownReadoutId(
                       unknownReadout?.clientReadoutId ?? null
                     );
@@ -5147,14 +5213,18 @@ export default function App() {
                     };
                   }}
                   onConnectUsb={async (baud) => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connect(baud);
                   }}
                   onConnectWebUsb={async (baud) => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connectWebUsb(baud);
                   }}
                   onDisconnectUsb={() => sportidentSerial.disconnect()}
                   onSetUsbMode={(mode) => sportidentSerial.setUsbMode(mode)}
                   onSetBaudRate={(baud) => sportidentSerial.setBaudRate(baud)}
+                  onSelectRunner={(id) => setSelectedRunnerId(id)}
+                  onSimulateFullReadout={handleSimulateFullReadout}
                   onSendDirectMode={async () => {
                     await sportidentSerial.requestDirectMode();
                   }}

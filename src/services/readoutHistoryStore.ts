@@ -11,6 +11,22 @@ export type CapturedReadoutPayload = FullCardReadoutPayload & {
   capturedAt: string;
 };
 
+export type ReadoutIssueType =
+  | 'UNKNOWN_CARD'
+  | 'UNLINKED_COMPETITOR'
+  | 'CLASS_CONFLICT'
+  | 'DUPLICATE_ASSIGNMENT'
+  | 'MANUAL_FINISH_REVIEW'
+  | 'WRONG_COMPETITOR'
+  | 'MP_REVIEW';
+
+export type ReadoutIssueState =
+  | 'NONE'
+  | 'OPEN'
+  | 'IN_PROGRESS'
+  | 'RESOLVED'
+  | 'DISMISSED';
+
 export interface ReadoutHistoryRecord {
   clientReadoutId: string;
   captureSequence: number;
@@ -29,6 +45,13 @@ export interface ReadoutHistoryRecord {
   className: string | null;
   resultStatus: RunnerStatus | null;
   competitorSnapshot: Competitor | null;
+  originalCompetitorId: string | null;
+  originalCompetitorName: string | null;
+  originalClassName: string | null;
+  originalResultStatus: RunnerStatus | null;
+  originalCompetitorSnapshot: Competitor | null;
+  issueType: ReadoutIssueType | null;
+  issueState: ReadoutIssueState;
   suggestedRunner: RunnerDbEntry | null;
   syncError: string | null;
 }
@@ -43,6 +66,13 @@ export type ReadoutHistoryUpdate = Partial<
     | 'className'
     | 'resultStatus'
     | 'competitorSnapshot'
+    | 'originalCompetitorId'
+    | 'originalCompetitorName'
+    | 'originalClassName'
+    | 'originalResultStatus'
+    | 'originalCompetitorSnapshot'
+    | 'issueType'
+    | 'issueState'
     | 'suggestedRunner'
     | 'syncError'
   >
@@ -67,11 +97,29 @@ export function updateReadoutHistoryRecord(
   clientReadoutId: string,
   update: ReadoutHistoryUpdate
 ): ReadoutHistoryRecord[] {
-  if (!records.some((record) => record.clientReadoutId === clientReadoutId)) {
+  const existing = records.find((record) => record.clientReadoutId === clientReadoutId);
+  if (!existing) {
     return records;
   }
   return records.map((record) =>
-    record.clientReadoutId === clientReadoutId ? { ...record, ...update } : record
+    record.clientReadoutId === clientReadoutId
+      ? {
+          ...record,
+          ...update,
+          originalCompetitorId:
+            record.originalCompetitorId ?? update.originalCompetitorId ?? null,
+          originalCompetitorName:
+            record.originalCompetitorName ?? update.originalCompetitorName ?? null,
+          originalClassName:
+            record.originalClassName ?? update.originalClassName ?? null,
+          originalResultStatus:
+            record.originalResultStatus ?? update.originalResultStatus ?? null,
+          originalCompetitorSnapshot:
+            record.originalCompetitorSnapshot ??
+            update.originalCompetitorSnapshot ??
+            null,
+        }
+      : record
   );
 }
 
@@ -99,6 +147,14 @@ export function sortReadoutHistory(
     .filter((record) => record.eventId === eventId)
     .slice()
     .sort((a, b) => b.captureSequence - a.captureSequence);
+}
+
+export function filterOutstandingReadouts(
+  records: ReadoutHistoryRecord[]
+): ReadoutHistoryRecord[] {
+  return records.filter(
+    (record) => record.issueState === 'OPEN' || record.issueState === 'IN_PROGRESS'
+  );
 }
 
 function createReadoutId(): string {
@@ -181,6 +237,13 @@ class ReadoutHistoryStore {
       className: null,
       resultStatus: null,
       competitorSnapshot: null,
+      originalCompetitorId: null,
+      originalCompetitorName: null,
+      originalClassName: null,
+      originalResultStatus: null,
+      originalCompetitorSnapshot: null,
+      issueType: null,
+      issueState: 'NONE',
       suggestedRunner: null,
       syncError: null,
     };
@@ -230,7 +293,62 @@ class ReadoutHistoryStore {
       transaction.onabort = () => reject(transactionError(transaction));
     });
 
-    this.records = loadedRecords;
+    this.records = loadedRecords.map((record) => {
+      const hasField = (field: keyof ReadoutHistoryRecord) =>
+        Object.prototype.hasOwnProperty.call(record, field);
+      return {
+        ...record,
+        originalCompetitorId: hasField('originalCompetitorId')
+          ? record.originalCompetitorId
+          : record.competitorId ?? null,
+        originalCompetitorName: hasField('originalCompetitorName')
+          ? record.originalCompetitorName
+          : record.competitorName ?? null,
+        originalClassName: hasField('originalClassName')
+          ? record.originalClassName
+          : record.className ?? null,
+        originalResultStatus: hasField('originalResultStatus')
+          ? record.originalResultStatus
+          : record.resultStatus ?? null,
+        originalCompetitorSnapshot: hasField('originalCompetitorSnapshot')
+          ? record.originalCompetitorSnapshot
+          : record.competitorSnapshot ?? null,
+        issueType: hasField('issueType')
+          ? record.issueType
+          : record.readoutState === 'UNKNOWN'
+            ? 'UNKNOWN_CARD'
+            : null,
+        issueState: hasField('issueState')
+          ? record.issueState
+          : record.readoutState === 'UNKNOWN'
+            ? 'OPEN'
+            : 'NONE',
+      };
+    });
+    if (
+      loadedRecords.some(
+        (record) =>
+          !Object.prototype.hasOwnProperty.call(record, 'issueState') ||
+          !Object.prototype.hasOwnProperty.call(record, 'issueType') ||
+          !Object.prototype.hasOwnProperty.call(record, 'originalCompetitorId') ||
+          !Object.prototype.hasOwnProperty.call(record, 'originalCompetitorName') ||
+          !Object.prototype.hasOwnProperty.call(record, 'originalClassName') ||
+          !Object.prototype.hasOwnProperty.call(record, 'originalResultStatus') ||
+          !Object.prototype.hasOwnProperty.call(
+            record,
+            'originalCompetitorSnapshot'
+          )
+      )
+    ) {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction(RECORD_STORE, 'readwrite');
+        const store = transaction.objectStore(RECORD_STORE);
+        this.records.forEach((record) => store.put(record));
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transactionError(transaction));
+        transaction.onabort = () => reject(transactionError(transaction));
+      });
+    }
     this.records.forEach((record) => {
       const sequenceKey = record.eventId ?? '__unassigned__';
       this.sequenceByEvent.set(

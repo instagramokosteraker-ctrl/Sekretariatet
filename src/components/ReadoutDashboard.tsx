@@ -15,7 +15,6 @@ import {
   Wifi,
 } from 'lucide-react';
 import type {
-  CardPunch,
   CompClass,
   Competitor,
   Course,
@@ -23,7 +22,10 @@ import type {
   SIStation,
 } from '../types/sportident';
 import type { OfflineQueueSnapshot } from '../services/offlineReadoutQueue';
-import type { ReadoutHistoryRecord } from '../services/readoutHistoryStore';
+import {
+  filterOutstandingReadouts,
+  type ReadoutHistoryRecord,
+} from '../services/readoutHistoryStore';
 import type {
   SerialConnectionStatus,
   UsbStationMode,
@@ -47,6 +49,7 @@ interface ReadoutDashboardProps {
   readoutHistory: ReadoutHistoryRecord[];
   latestReadoutId: string | null;
   readoutHistoryError: string | null;
+  onCreateMpReviewIssue: (clientReadoutId: string) => Promise<void>;
   offlineSnap: OfflineQueueSnapshot;
   serialStatus: SerialConnectionStatus;
   onConnectUsb: () => Promise<void>;
@@ -64,14 +67,6 @@ interface ReadoutDashboardProps {
   selectedRunnerId: string | null;
   onSelectRunner: (id: string) => void;
   onMarkRentalReturned: (competitorId: string) => Promise<void>;
-  onSimulateFullReadout: (params: {
-    protocolKind?: 'SI10_EF' | 'SI6_E1' | 'SI5_B1';
-    siNumber: number;
-    checkTimeSec: number | null;
-    startTimeSec: number | null;
-    finishTimeSec: number | null;
-    punches: CardPunch[];
-  }) => Promise<void>;
   onSimulateOnlinePunch: (params: {
     stationCode: number;
     siNumber: number;
@@ -92,6 +87,7 @@ export function ReadoutDashboard({
   readoutHistory,
   latestReadoutId,
   readoutHistoryError,
+  onCreateMpReviewIssue,
   offlineSnap,
   serialStatus,
   onConnectUsb,
@@ -109,7 +105,6 @@ export function ReadoutDashboard({
   selectedRunnerId,
   onSelectRunner,
   onMarkRentalReturned,
-  onSimulateFullReadout,
   onSimulateOnlinePunch,
   onLinkUnknownCardToEntry,
   onInspectHex,
@@ -122,6 +117,15 @@ export function ReadoutDashboard({
   const [modalRunner, setModalRunner] = useState<Competitor | null>(null);
   const [queueActionId, setQueueActionId] = useState<string | null>(null);
   const [selectedReadoutId, setSelectedReadoutId] = useState<string | null>(null);
+  const [historyView, setHistoryView] = useState<'ALL' | 'OUTSTANDING'>('ALL');
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyPageSize, setHistoryPageSize] = useState<20 | 30 | 50>(30);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [issueActionBusyId, setIssueActionBusyId] = useState<string | null>(null);
+  const [issueActionError, setIssueActionError] = useState<{
+    clientReadoutId: string;
+    message: string;
+  } | null>(null);
 
   const inForestCount = useMemo(
     () =>
@@ -198,7 +202,41 @@ export function ReadoutDashboard({
       readoutHistory.find((record) => record.clientReadoutId === latestReadoutId) ?? null,
     [latestReadoutId, readoutHistory]
   );
-  const recentReadouts = useMemo(() => readoutHistory.slice(0, 30), [readoutHistory]);
+  const outstandingReadouts = useMemo(
+    () => filterOutstandingReadouts(readoutHistory),
+    [readoutHistory]
+  );
+  const filteredReadouts = useMemo(() => {
+    const records =
+      historyView === 'OUTSTANDING' ? outstandingReadouts : readoutHistory;
+    const query = historySearch.trim().toLocaleLowerCase();
+    if (!query) return records;
+    return records.filter((record) =>
+      [
+        record.clientReadoutId,
+        String(record.captureSequence),
+        String(record.readout.siNumber),
+        record.competitorName ?? '',
+        record.originalCompetitorName ?? '',
+        record.resultStatus ?? '',
+        record.originalResultStatus ?? '',
+        record.issueType ?? '',
+      ].some((value) => value.toLocaleLowerCase().includes(query))
+    );
+  }, [historySearch, historyView, outstandingReadouts, readoutHistory]);
+  const historyPageCount = Math.max(
+    1,
+    Math.ceil(filteredReadouts.length / historyPageSize)
+  );
+  const visibleHistoryPage = Math.min(historyPage, historyPageCount - 1);
+  const visibleReadouts = useMemo(
+    () =>
+      filteredReadouts.slice(
+        visibleHistoryPage * historyPageSize,
+        (visibleHistoryPage + 1) * historyPageSize
+      ),
+    [filteredReadouts, visibleHistoryPage, historyPageSize]
+  );
 
   // This detail panel is user-selected and is separate from capture-ordered Latest Readout.
   const inspectedRunner = useMemo(() => {
@@ -262,164 +300,6 @@ export function ReadoutDashboard({
     );
   }, [events, eventSearch]);
 
-  // Preset 1: Read out Henrik Sjöberg (H21, 0xEF SIAC -> OK!)
-  const runScenarioHenrikReadout = async () => {
-    const henrik = competitors.find((c) => c.siNumber === 8190442);
-    const st = henrik?.startTimeSec ?? 36300;
-    const fin = henrik?.finishTimeSec ?? st + 1598;
-    setBusy(true);
-    try {
-      await onSimulateFullReadout({
-        protocolKind: 'SI10_EF',
-        siNumber: 8190442,
-        checkTimeSec: st - 190,
-        startTimeSec: st,
-        finishTimeSec: fin,
-        punches: [
-          { code: 31, timeSec: st + 178 },
-          { code: 38, timeSec: st + 429 },
-          { code: 42, timeSec: st + 679 },
-          { code: 55, timeSec: st + 1058 },
-          { code: 61, timeSec: st + 1354 },
-          { code: 100, timeSec: st + 1559 },
-        ],
-      });
-      if (henrik) onSelectRunner(henrik.id);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Preset 2: Read out Frida Åkesson (D21, 0xEF -> New leader 29:18!)
-  const runScenarioFridaFinishAndReadout = async () => {
-    const frida = competitors.find((c) => c.siNumber === 8339104);
-    const st = frida?.startTimeSec ?? 36360;
-    const fin = st + 1758;
-    setBusy(true);
-    try {
-      await onSimulateFullReadout({
-        protocolKind: 'SI10_EF',
-        siNumber: 8339104,
-        checkTimeSec: st - 180,
-        startTimeSec: st,
-        finishTimeSec: fin,
-        punches: [
-          { code: 31, timeSec: st + 205 },
-          { code: 38, timeSec: st + 482 },
-          { code: 42, timeSec: st + 748 },
-          { code: 55, timeSec: st + 1168 },
-          { code: 61, timeSec: st + 1485 },
-          { code: 100, timeSec: st + 1715 },
-        ],
-      });
-      if (frida) onSelectRunner(frida.id);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Preset 3: Legacy SI-Card 5 (0xB1 128-byte sheet) — Anders Forsberg (SI 342819, Bana 2!)
-  const runScenarioSiCard5Readout = async () => {
-    const anders = competitors.find((c) => c.siNumber === 342819);
-    const st = 37020; // 10:17:00
-    const fin = st + 1580; // 26:20
-    const b2 = courses.find((c) => c.id === 'crs-2') ?? courses[1] ?? courses[0];
-    const ctrls = b2 ? b2.controls : [31, 42, 52, 61, 100];
-    setBusy(true);
-    try {
-      await onSimulateFullReadout({
-        protocolKind: 'SI5_B1',
-        siNumber: 342819,
-        checkTimeSec: st - 70,
-        startTimeSec: st,
-        finishTimeSec: fin,
-        punches: ctrls.map((code, idx) => ({
-          code,
-          timeSec: st + (idx + 1) * 295,
-        })),
-      });
-      if (anders) onSelectRunner(anders.id);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Preset 4: Legacy SI-Card 6 (0xE1 Block 0+6+7) — Helena Karlsson (SI 612480, Bana 2!)
-  const runScenarioSiCard6Readout = async () => {
-    const helena = competitors.find((c) => c.siNumber === 612480);
-    const st = helena?.startTimeSec ?? 36660;
-    const fin = st + 1635; // 27:15
-    const b2 = courses.find((c) => c.id === 'crs-2') ?? courses[1] ?? courses[0];
-    const ctrls = b2 ? b2.controls : [31, 42, 52, 61, 100];
-    setBusy(true);
-    try {
-      await onSimulateFullReadout({
-        protocolKind: 'SI6_E1',
-        siNumber: 612480,
-        checkTimeSec: st - 50,
-        startTimeSec: st,
-        finishTimeSec: fin,
-        punches: ctrls.map((code, idx) => ({
-          code,
-          timeSec: st + (idx + 1) * 304 + (idx === 2 ? 42 : 0),
-        })),
-      });
-      if (helena) onSelectRunner(helena.id);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Preset 5: Read out Johan Wallin (Öppen Motion, Rental Card, auto-matches Bana 2!)
-  const runScenarioJohanAutoCourseRental = async () => {
-    const johan = competitors.find((c) => c.siNumber === 541209);
-    const st = johan?.startTimeSec ?? 36540;
-    const fin = st + 1645;
-    setBusy(true);
-    try {
-      await onSimulateFullReadout({
-        protocolKind: 'SI6_E1',
-        siNumber: 541209,
-        checkTimeSec: st - 40,
-        startTimeSec: st,
-        finishTimeSec: fin,
-        punches: [
-          { code: 31, timeSec: st + 240 },
-          { code: 42, timeSec: st + 610 },
-          { code: 52, timeSec: st + 980 },
-          { code: 61, timeSec: st + 1350 },
-          { code: 100, timeSec: st + 1595 },
-        ],
-      });
-      if (johan) onSelectRunner(johan.id);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Preset 6: Unentered club member found in Eventor / Löpardatabas (SI 8812405 — Anton Lindholm!)
-  const runScenarioEventorDbMemberReadout = async () => {
-    const st = 36600;
-    const coursesRef = courses[2] ?? courses[0];
-    const ctrls = coursesRef ? coursesRef.controls : [32, 42, 58, 100];
-    setBusy(true);
-    try {
-      await onSimulateFullReadout({
-        protocolKind: 'SI10_EF',
-        siNumber: 8812405,
-        checkTimeSec: st - 120,
-        startTimeSec: st,
-        finishTimeSec: st + 1420,
-        punches: ctrls.map((code, idx) => ({
-          code,
-          timeSec: st + (idx + 1) * 310,
-        })),
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleCustomOnlinePunch = async (e: React.FormEvent) => {
     e.preventDefault();
     const si = Number(radioSiInput.replace(/\D/g, ''));
@@ -436,6 +316,24 @@ export function ReadoutDashboard({
   };
 
   const isOfflineActive = offlineSnap.simulatedOffline || !offlineSnap.browserOnline;
+
+  const handleCreateMpReviewIssue = async (clientReadoutId: string) => {
+    setIssueActionBusyId(clientReadoutId);
+    setIssueActionError(null);
+    try {
+      await onCreateMpReviewIssue(clientReadoutId);
+    } catch (error) {
+      setIssueActionError({
+        clientReadoutId,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'MP-granskningsärendet kunde inte sparas.',
+      });
+    } finally {
+      setIssueActionBusyId(null);
+    }
+  };
 
   return (
     <div className="space-y-3.5">
@@ -812,17 +710,93 @@ export function ReadoutDashboard({
         </section>
 
         <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Avläsningshistorik
-            </h2>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Sorterad efter fångstsekvens · {readoutHistory.length} avläsningar
-            </p>
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 space-y-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Avläsningshistorik
+              </h2>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Sorterad efter fångstsekvens · {readoutHistory.length} sparade avläsningar
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="inline-flex items-center gap-1" role="group" aria-label="Historikvy">
+                <button
+                  type="button"
+                  aria-pressed={historyView === 'ALL'}
+                  onClick={() => {
+                    setHistoryView('ALL');
+                    setHistoryPage(0);
+                  }}
+                  className={`px-2.5 py-1 text-xs rounded-md border ${
+                    historyView === 'ALL'
+                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100'
+                      : 'bg-white text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700'
+                  }`}
+                >
+                  Alla
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={historyView === 'OUTSTANDING'}
+                  onClick={() => {
+                    setHistoryView('OUTSTANDING');
+                    setHistoryPage(0);
+                  }}
+                  className={`px-2.5 py-1 text-xs rounded-md border ${
+                    historyView === 'OUTSTANDING'
+                      ? 'bg-amber-700 text-white border-amber-700'
+                      : 'bg-white text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700'
+                  }`}
+                >
+                  Outstanding Issues ({outstandingReadouts.length})
+                </button>
+              </div>
+              <label className="relative block w-full sm:max-w-xs">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                <input
+                  type="search"
+                  value={historySearch}
+                  onChange={(event) => {
+                    setHistorySearch(event.target.value);
+                    setHistoryPage(0);
+                  }}
+                  placeholder="Sök bricka, löpare, status eller ID"
+                  aria-label="Sök i avläsningshistorik"
+                  className="w-full pl-7 pr-2.5 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100"
+                />
+              </label>
+            </div>
+            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+              <span>
+                {filteredReadouts.length === 0
+                  ? 'Inga träffar'
+                  : `Visar ${visibleHistoryPage * historyPageSize + 1}–${Math.min(
+                      (visibleHistoryPage + 1) * historyPageSize,
+                      filteredReadouts.length
+                    )} av ${filteredReadouts.length}`}
+              </span>
+              <label className="flex items-center gap-1.5">
+                Rader
+                <select
+                  value={historyPageSize}
+                  onChange={(event) => {
+                    setHistoryPageSize(Number(event.target.value) as 20 | 30 | 50);
+                    setHistoryPage(0);
+                  }}
+                  className="px-1.5 py-1 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded"
+                  aria-label="Rader per sida"
+                >
+                  <option value={20}>20</option>
+                  <option value={30}>30</option>
+                  <option value={50}>50</option>
+                </select>
+              </label>
+            </div>
           </div>
-          {recentReadouts.length > 0 ? (
+          {visibleReadouts.length > 0 ? (
             <ol className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-              {recentReadouts.map((record) => {
+              {visibleReadouts.map((record) => {
                 const resultLabel = record.resultStatus
                   ? record.resultStatus
                   : record.readoutState === 'UNKNOWN'
@@ -861,10 +835,15 @@ export function ReadoutDashboard({
                           </span>
                           <span className="shrink-0 text-slate-600 dark:text-slate-300">
                             {resultLabel} · {syncLabel}
+                            {record.issueType
+                              ? ` · ${record.issueType} ${record.issueState}`
+                              : ''}
                           </span>
                         </span>
                       </button>
-                      {record.readoutState === 'UNKNOWN' && (
+                      {record.issueType === 'UNKNOWN_CARD' &&
+                        record.issueState !== 'RESOLVED' &&
+                        record.issueState !== 'DISMISSED' && (
                         <button
                           type="button"
                           onClick={() =>
@@ -883,9 +862,85 @@ export function ReadoutDashboard({
                       <div className="mt-2 ml-1 text-[11px] text-slate-600 dark:text-slate-400">
                         <div>
                           Fångad {new Date(record.capturedAt).toLocaleString('sv-SE')}
+                          {' · '}SI {formatSiNumber(record.readout.siNumber)}
+                          {' · '}{record.readout.cardSeries}
                           {' · '}Mål {formatSecondsAsClock(record.readout.finishTimeSec)}
                         </div>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                          <span>
+                            Ursprunglig match:{' '}
+                            {record.originalCompetitorName ?? 'Ingen match vid avläsning'}
+                            {record.originalCompetitorId
+                              ? ` (${record.originalCompetitorId})`
+                              : ''}
+                            {record.originalClassName ? ` · ${record.originalClassName}` : ''}
+                          </span>
+                          <span>
+                            Nuvarande match:{' '}
+                            {record.competitorName ?? 'Ingen aktuell match'}
+                            {record.competitorId ? ` (${record.competitorId})` : ''}
+                            {record.className ? ` · ${record.className}` : ''}
+                          </span>
+                          <span>
+                            Ursprungligt resultat: {record.originalResultStatus ?? 'Ej tilldelat'}
+                            {record.originalCompetitorSnapshot?.runningTimeSec != null
+                              ? ` · tid ${formatDurationMmSs(
+                                  record.originalCompetitorSnapshot.runningTimeSec
+                                )}`
+                              : ''}
+                            {record.originalCompetitorSnapshot?.validation?.totalTimeLossSec != null
+                              ? ` · Bom ${formatDurationMmSs(
+                                  record.originalCompetitorSnapshot.validation.totalTimeLossSec
+                                )}`
+                              : ''}
+                          </span>
+                          <span>
+                            Aktuellt resultat: {record.resultStatus ?? 'Ej tilldelat'}
+                            {record.competitorSnapshot?.runningTimeSec != null
+                              ? ` · tid ${formatDurationMmSs(
+                                  record.competitorSnapshot.runningTimeSec
+                                )}`
+                              : ''}
+                            {record.competitorSnapshot?.validation?.totalTimeLossSec != null
+                              ? ` · Bom ${formatDurationMmSs(
+                                  record.competitorSnapshot.validation.totalTimeLossSec
+                                )}`
+                              : ''}
+                          </span>
+                          <span>
+                            Issue: {record.issueType ?? 'Ingen'} · {record.issueState}
+                          </span>
+                          <span>Leverans: {syncLabel}</span>
+                        </div>
+                        {record.suggestedRunner && (
+                          <div className="mt-1">
+                            Föreslagen löpare: {record.suggestedRunner.fullName}
+                          </div>
+                        )}
+                        {record.syncError && (
+                          <div className="mt-1 text-red-700 dark:text-red-300">
+                            {record.syncError}
+                          </div>
+                        )}
+                        {record.resultStatus === 'MP' && record.issueState === 'NONE' && (
+                          <button
+                            type="button"
+                            disabled={issueActionBusyId === record.clientReadoutId}
+                            onClick={() => void handleCreateMpReviewIssue(record.clientReadoutId)}
+                            className="mt-2 rounded border border-amber-300 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30"
+                          >
+                            {issueActionBusyId === record.clientReadoutId
+                              ? 'Sparar…'
+                              : 'Skapa MP-granskningsärende'}
+                          </button>
+                        )}
+                        {issueActionError?.clientReadoutId === record.clientReadoutId &&
+                          issueActionBusyId === null && (
+                          <div role="alert" className="mt-1 text-red-700 dark:text-red-300">
+                            {issueActionError.message}
+                          </div>
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-1">
                           {record.readout.punches.map((punch, index) => (
                             <span
                               key={`${record.clientReadoutId}-${index}`}
@@ -904,16 +959,40 @@ export function ReadoutDashboard({
             </ol>
           ) : (
             <p className="px-4 py-5 text-sm text-slate-500 dark:text-slate-400">
-              Historiken visas här efter första SI-avläsningen.
+              {historyView === 'OUTSTANDING'
+                ? 'Inga öppna eller pågående avläsningsärenden.'
+                : 'Historiken visas här efter första SI-avläsningen.'}
             </p>
           )}
+          <div className="flex items-center justify-between gap-3 px-4 py-2 border-t border-slate-200 dark:border-slate-800">
+            <button
+              type="button"
+              disabled={visibleHistoryPage === 0}
+              onClick={() => setHistoryPage((current) => Math.max(0, current - 1))}
+              className="px-2.5 py-1 text-xs rounded border border-slate-200 dark:border-slate-700 disabled:opacity-40"
+            >
+              Föregående
+            </button>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              Sida {visibleHistoryPage + 1} av {historyPageCount}
+            </span>
+            <button
+              type="button"
+              disabled={visibleHistoryPage + 1 >= historyPageCount}
+              onClick={() =>
+                setHistoryPage((current) => Math.min(historyPageCount - 1, current + 1))
+              }
+              className="px-2.5 py-1 text-xs rounded border border-slate-200 dark:border-slate-700 disabled:opacity-40"
+            >
+              Nästa
+            </button>
+          </div>
         </section>
       </div>
 
-      {/* Main 12-Column MeOS Readout & Live Timing Split */}
+      {/* Readout & Live Timing */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
-        {/* Left 7 Columns: Digital SI-Card Readout Verification + Live Stream */}
-        <div className="lg:col-span-7 space-y-3.5 min-w-0">
+        <div className="lg:col-span-12 space-y-3.5 min-w-0">
           {inspectedRunner && (
             <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
               <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
@@ -1272,112 +1351,8 @@ export function ReadoutDashboard({
           </section>
         </div>
 
-        {/* Right 5 Columns: Hardware Testbench (0xEF SIAC/10/11 + 0xE1 SI6 + 0xB1 SI5 + 0xD3 Radio) */}
-        <div className="lg:col-span-5 space-y-3.5">
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-            <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800">
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                SPORTident Hårdvarutestbänk
-              </h2>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                Binära <span className="font-mono">0xEF</span>, <span className="font-mono">0xE1</span> &{' '}
-                <span className="font-mono">0xB1</span> ramar med CRC16 via offline-kön.
-              </p>
-            </div>
-
-            <div className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runScenarioHenrikReadout()}
-                title="Verifierar alla 6 kontroller på Bana 1 och bekräftar ledartiden 26:38 i H21."
-                className="w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-2"
-              >
-                <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                  1. Henrik Sjöberg · H21 (Prel → OK)
-                </span>
-                <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 shrink-0">
-                  0xEF SIAC
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runScenarioFridaFinishAndReadout()}
-                title="Avför Frida från Kvar i skogen och uppdaterar Idealtid & Bomtid i D21."
-                className="w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-2"
-              >
-                <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                  2. Frida Åkesson · D21 (I skog → Ledare)
-                </span>
-                <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 shrink-0">
-                  0xEF SIAC
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runScenarioSiCard5Readout()}
-                title="Avkodar SI-Card 5 med CNS-multiplikator och 12h-till-24h tidsupplösning i D/H45."
-                className="w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-2"
-              >
-                <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                  3. Anders Forsberg · SI-Card 5 (342 819)
-                </span>
-                <span className="text-[11px] font-mono text-purple-700 dark:text-purple-400 shrink-0">
-                  0xB1
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runScenarioSiCard6Readout()}
-                title="Avkodar SI-Card 6 minnesblock 0, 6 och 7 och beräknar bomtid i D/H45."
-                className="w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-2"
-              >
-                <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                  4. Helena Karlsson · SI-Card 6 (612 480)
-                </span>
-                <span className="text-[11px] font-mono text-purple-700 dark:text-purple-400 shrink-0">
-                  0xE1
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runScenarioJohanAutoCourseRental()}
-                title="Matchar automatiskt stämplingarna mot Bana 2 (Mellan) och flaggar hyrbricka."
-                className="w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-2"
-              >
-                <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                  5. Johan Wallin · Hyrbricka + Autobana
-                </span>
-                <span className="text-[11px] font-mono text-amber-700 dark:text-amber-400 shrink-0">
-                  Hyrbricka
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void runScenarioEventorDbMemberReadout()}
-                title="Hämtar oanmäld löpare automatiskt ur Löpardatabasen/Eventor vid målavläsning."
-                className="w-full px-3.5 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors flex items-center justify-between gap-2"
-              >
-                <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                  6. Oanmäld medlem · SI 8 812 405
-                </span>
-                <span className="text-[11px] font-mono text-sky-700 dark:text-sky-400 shrink-0">
-                  Eventor
-                </span>
-              </button>
-            </div>
-          </section>
-
+        {/* Online / Radio Control Sender */}
+        <div className="lg:col-span-12 space-y-3.5">
           {/* 0xD3 Online / Radio Control Sender */}
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-2.5">
             <div className="flex items-center gap-1.5">
