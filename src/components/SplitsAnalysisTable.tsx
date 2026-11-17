@@ -478,7 +478,7 @@ export function SplitsAnalysisTable({
                   >
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                        <th className="py-1.5 pl-3 pr-1.5 w-12">Plac</th>
+                        <th className="py-1.5 px-1 w-8 text-center">Plac</th>
                         <th className="py-1.5 px-2 min-w-[140px] max-w-[220px]">
                           Namn / Klubb
                         </th>
@@ -655,7 +655,7 @@ export function SplitsAnalysisTable({
                                 : 'hover:bg-slate-50/90 dark:hover:bg-slate-800/50'
                             }`}
                           >
-                            <td className="py-1.5 pl-3 pr-1.5 font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                            <td className="py-1.5 px-1 w-8 text-center font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap">
                               {r.effectiveStatus === 'OK' && timedIdx !== -1 ? (
                                 `${timedIdx + 1}.`
                               ) : (
