@@ -4,7 +4,6 @@ import {
   Check,
   CloudOff,
   Compass,
-  Cpu,
   Radio,
   RefreshCw,
   Search,
@@ -18,7 +17,6 @@ import type {
   CompClass,
   Competitor,
   Course,
-  LiveEventItem,
   RunnerDbEntry,
   SIStation,
 } from '../types/sportident';
@@ -53,7 +51,6 @@ interface ReadoutDashboardProps {
   runnerDb: RunnerDbEntry[];
   defaultClubName?: string;
   runnerDbCount: number;
-  events: LiveEventItem[];
   readoutHistory: ReadoutHistoryRecord[];
   latestReadoutId: string | null;
   readoutHistoryError: string | null;
@@ -86,14 +83,12 @@ interface ReadoutDashboardProps {
   onRemoveOfflineQueueItem: (itemId: string) => void;
   onClearOfflineQueue: () => void;
   selectedRunnerId: string | null;
-  onSelectRunner: (id: string) => void;
   onMarkRentalReturned: (competitorId: string) => Promise<void>;
   onSimulateOnlinePunch: (params: {
     stationCode: number;
     siNumber: number;
     punchTimeSec?: number;
   }) => Promise<void>;
-  onInspectHex: (hex: string) => void;
   onNavigateForest: () => void;
 }
 
@@ -105,7 +100,6 @@ export function ReadoutDashboard({
   runnerDb,
   defaultClubName,
   runnerDbCount,
-  events,
   readoutHistory,
   latestReadoutId,
   readoutHistoryError,
@@ -126,13 +120,10 @@ export function ReadoutDashboard({
   onRemoveOfflineQueueItem,
   onClearOfflineQueue,
   selectedRunnerId,
-  onSelectRunner,
   onMarkRentalReturned,
   onSimulateOnlinePunch,
-  onInspectHex,
   onNavigateForest,
 }: ReadoutDashboardProps) {
-  const [eventSearch, setEventSearch] = useState('');
   const [radioStationCode, setRadioStationCode] = useState<number>(100);
   const [radioSiInput, setRadioSiInput] = useState<string>('8339104');
   const [busy, setBusy] = useState(false);
@@ -147,7 +138,6 @@ export function ReadoutDashboard({
   const [unknownCardBusyId, setUnknownCardBusyId] = useState<string | null>(null);
   const [unknownCardError, setUnknownCardError] = useState<string | null>(null);
   const [unknownCardSuccess, setUnknownCardSuccess] = useState<string | null>(null);
-  const [standaloneUnknownSi, setStandaloneUnknownSi] = useState<number | null>(null);
   const [unknownCardName, setUnknownCardName] = useState('');
   const [unknownCardClub, setUnknownCardClub] = useState('');
   const [unknownCardClassId, setUnknownCardClassId] = useState('');
@@ -335,19 +325,6 @@ export function ReadoutDashboard({
         'Felstämplingsorsak är inte tillgänglig ännu.'
       : null;
 
-  const filteredEvents = useMemo(() => {
-    const q = eventSearch.trim().toLowerCase();
-    if (!q) return events;
-    return events.filter(
-      (ev) =>
-        String(ev.siNumber).includes(q) ||
-        (ev.competitorName?.toLowerCase().includes(q) ?? false) ||
-        (ev.club?.toLowerCase().includes(q) ?? false) ||
-        (ev.className?.toLowerCase().includes(q) ?? false) ||
-        ev.message.toLowerCase().includes(q)
-    );
-  }, [events, eventSearch]);
-
   const handleCustomOnlinePunch = async (e: React.FormEvent) => {
     e.preventDefault();
     const si = Number(radioSiInput.replace(/\D/g, ''));
@@ -399,7 +376,6 @@ export function ReadoutDashboard({
       return;
     }
     setSelectedReadoutId(isClosing ? null : record.clientReadoutId);
-    setStandaloneUnknownSi(null);
     setUnknownCardError(null);
     setUnknownCardSuccess(null);
     if (isClosing) return;
@@ -435,46 +411,19 @@ export function ReadoutDashboard({
     });
   };
 
-  const handleStandaloneUnknownCard = (siNumber: number) => {
-    const runner = runnerDb.find((candidate) => candidate.siNumber === siNumber) ?? null;
-    const matchingClass = runner?.defaultClassName
-      ? classes.find(
-          (candidate) =>
-            candidate.name.toLocaleLowerCase() ===
-            runner.defaultClassName?.toLocaleLowerCase()
-        )
-      : null;
-    setSelectedReadoutId(null);
-    setStandaloneUnknownSi(siNumber);
-    setUnknownCardName(runner?.fullName ?? '');
-    setUnknownCardClub(runner?.club ?? defaultClubName ?? '');
-    setUnknownCardClassId(matchingClass?.id ?? classes[3]?.id ?? classes[0]?.id ?? '');
-    setUnknownCardRunnerProfileId(runner?.id ?? null);
-    setUnknownCardIsRental(false);
-    setUnknownCardIsBorrowed(false);
-    setUnknownCardStartClock('');
-    setUnknownCardError(null);
-    setUnknownCardSuccess(null);
-    window.requestAnimationFrame(() => {
-      selectedReadoutPanelRef.current?.scrollIntoView({
-        block: 'nearest',
-        behavior: 'smooth',
-      });
-    });
-  };
-
   const handleResolveUnknownCard = async (
     event: React.FormEvent<HTMLFormElement>
   ) => {
     event.preventDefault();
-    const siNumber = selectedReadout?.readout.siNumber ?? standaloneUnknownSi;
-    if (siNumber === null) return;
+    const record = selectedReadout;
+    if (!record) return;
+    const siNumber = record.readout.siNumber;
 
-    setUnknownCardBusyId(selectedReadout?.clientReadoutId ?? String(siNumber));
+    setUnknownCardBusyId(record.clientReadoutId);
     setUnknownCardError(null);
     setUnknownCardSuccess(null);
     try {
-      const error = await onResolveUnknownCard(selectedReadout, siNumber, {
+      const error = await onResolveUnknownCard(record, siNumber, {
         fullName: unknownCardName.trim(),
         club: unknownCardClub.trim() || defaultClubName || 'Klubblös',
         classId: unknownCardClassId,
@@ -489,9 +438,7 @@ export function ReadoutDashboard({
         setUnknownCardError(error);
       } else {
         setUnknownCardSuccess(
-          selectedReadout
-            ? `${unknownCardName.trim()} kopplades till avläsning #${selectedReadout.captureSequence}.`
-            : `${unknownCardName.trim()} anmäld med SI ${formatSiNumber(siNumber)}.`
+          `${unknownCardName.trim()} kopplades till avläsning nr ${record.captureSequence}.`
         );
       }
     } catch (error) {
@@ -533,7 +480,7 @@ export function ReadoutDashboard({
 
       <section
         aria-live="polite"
-        className="sticky top-1 z-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden shadow-sm"
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden shadow-sm"
       >
         <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -541,7 +488,7 @@ export function ReadoutDashboard({
               Senaste SI-avläsning
             </h2>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Fångstsekvens {latestReadout?.captureSequence ?? '—'}
+              Avläsning nr: {latestReadout?.captureSequence ?? '—'}
               {latestReadout
                 ? ` · ${new Date(latestReadout.capturedAt).toLocaleTimeString('sv-SE')}`
                 : ''}
@@ -838,110 +785,27 @@ export function ReadoutDashboard({
         </div>
       </details>
 
-      {/* Compact 4-Column Competition KPI Strip */}
-      <section
-        aria-label="Tävlingsstatus"
-        className="grid grid-cols-2 xl:grid-cols-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y sm:divide-y-0 divide-x divide-slate-200 dark:divide-slate-800"
-      >
-        <div className="px-3.5 py-2.5">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-            Anmälda deltagare
-          </div>
-          <div className="mt-0.5 flex items-baseline justify-between gap-2">
-            <span className="text-xl font-semibold font-mono tabular-nums text-slate-900 dark:text-slate-100">
-              {competitors.length}
-            </span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
-              {classes.length} kl · {runnerDbCount} i DB
-            </span>
-          </div>
-        </div>
-
-        <div className="px-3.5 py-2.5">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-            Kvar i skogen
-          </div>
-          <div className="mt-0.5 flex items-baseline justify-between gap-2">
-            <span
-              className={`text-xl font-semibold font-mono tabular-nums ${
-                inForestCount > 0
-                  ? 'text-amber-700 dark:text-amber-400'
-                  : 'text-emerald-700 dark:text-emerald-400'
-              }`}
-            >
-              {inForestCount}
-            </span>
-            <button
-              type="button"
-              onClick={onNavigateForest}
-              className="text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:underline whitespace-nowrap shrink-0"
-            >
-              Säkerhetslista
-            </button>
-          </div>
-        </div>
-
-        <div className="px-3.5 py-2.5">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-            I mål (Godkända)
-          </div>
-          <div className="mt-0.5 flex items-baseline justify-between gap-2">
-            <span className="text-xl font-semibold font-mono tabular-nums text-slate-900 dark:text-slate-100">
-              {finishedOkCount}
-            </span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
-              +{prelCount} prel.
-            </span>
-          </div>
-        </div>
-
-        <div className="px-3.5 py-2.5">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-            Felstämplade & Hyr
-          </div>
-          <div className="mt-0.5 flex items-baseline justify-between gap-2">
-            <span className="text-xl font-semibold font-mono tabular-nums text-slate-900 dark:text-slate-100">
-              {mpCount}
-            </span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
-              {unreturnedRentals} hyr ute
-            </span>
-          </div>
-        </div>
-      </section>
-
-      {(selectedReadout || standaloneUnknownSi !== null) && (
+      {selectedReadout && (
         <section
           ref={selectedReadoutPanelRef}
-          aria-label={
-            selectedReadout
-              ? `Vald avläsning ${selectedReadout.captureSequence}`
-              : `Okänd SI-bricka ${standaloneUnknownSi}`
-          }
+          aria-label={`Vald avläsning ${selectedReadout.captureSequence}`}
           className="scroll-mt-24 bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-900 rounded-lg overflow-hidden"
         >
           <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-sky-100 dark:border-sky-900">
             <div>
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {selectedReadout
-                  ? `Avläsning #${selectedReadout.captureSequence}`
-                  : 'Okänd SI-bricka'}
+                Avläsning nr {selectedReadout.captureSequence}
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                SI {formatSiNumber(selectedReadout?.readout.siNumber ?? standaloneUnknownSi ?? 0)}
-                {selectedReadout
-                  ? ` · ${selectedReadout.readout.cardSeries} · Mål ${formatSecondsAsClock(
-                      selectedReadout.readout.finishTimeSec
-                    )} · ${new Date(selectedReadout.capturedAt).toLocaleString('sv-SE')}`
-                  : ''}
+                SI {formatSiNumber(selectedReadout.readout.siNumber)}
+                {` · ${selectedReadout.readout.cardSeries} · Mål ${formatSecondsAsClock(
+                  selectedReadout.readout.finishTimeSec
+                )} · ${new Date(selectedReadout.capturedAt).toLocaleString('sv-SE')}`}
               </p>
             </div>
             <button
               type="button"
-              onClick={() => {
-                setSelectedReadoutId(null);
-                setStandaloneUnknownSi(null);
-              }}
+              onClick={() => setSelectedReadoutId(null)}
               className="shrink-0 rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               Stäng
@@ -1016,10 +880,9 @@ export function ReadoutDashboard({
             </div>
           </div>
           )}
-          {((selectedReadout?.issueType === 'UNKNOWN_CARD' &&
+          {selectedReadout.issueType === 'UNKNOWN_CARD' &&
             selectedReadout.issueState !== 'RESOLVED' &&
-            selectedReadout.issueState !== 'DISMISSED') ||
-            standaloneUnknownSi !== null) && (
+            selectedReadout.issueState !== 'DISMISSED' && (
               <form
                 onSubmit={(event) => void handleResolveUnknownCard(event)}
                 className="border-t border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-3"
@@ -1034,9 +897,7 @@ export function ReadoutDashboard({
                   <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
                     SI-bricka
                     <input
-                      value={formatSiNumber(
-                        selectedReadout?.readout.siNumber ?? standaloneUnknownSi ?? 0
-                      )}
+                      value={formatSiNumber(selectedReadout.readout.siNumber)}
                       readOnly
                       className="mt-1 w-full rounded border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 px-2 py-1.5 font-mono"
                     />
@@ -1117,21 +978,15 @@ export function ReadoutDashboard({
                 <button
                   type="submit"
                   disabled={
-                    unknownCardBusyId ===
-                    (selectedReadout?.clientReadoutId ??
-                      String(standaloneUnknownSi ?? '')) ||
-                    selectedReadout?.issueState === 'RESOLVED' ||
+                    unknownCardBusyId === selectedReadout.clientReadoutId ||
                     unknownCardSuccess !== null
                   }
                   className="mt-2 inline-flex items-center gap-1.5 rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-50"
                 >
                   <UserPlus className="h-3.5 w-3.5" />
-                  {unknownCardBusyId ===
-                  (selectedReadout?.clientReadoutId ?? String(standaloneUnknownSi ?? ''))
+                  {unknownCardBusyId === selectedReadout.clientReadoutId
                     ? 'Sparar…'
-                    : selectedReadout
-                      ? 'Anmäl och koppla avläsning'
-                      : 'Spara direktanmälan'}
+                    : 'Anmäl och koppla avläsning'}
                 </button>
               </form>
             )}
@@ -1165,7 +1020,7 @@ export function ReadoutDashboard({
                 Avläsningshistorik
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Sorterad efter fångstsekvens · {readoutHistory.length} sparade avläsningar
+                Nyaste avläsning först · {readoutHistory.length} sparade avläsningar
               </p>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1276,7 +1131,7 @@ export function ReadoutDashboard({
                       >
                         <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
                           <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-200">
-                            #{record.captureSequence} ·{' '}
+                            Avläsning nr {record.captureSequence} ·{' '}
                             {record.competitorName ?? 'SI-bricka'} · SI{' '}
                             {formatSiNumber(record.readout.siNumber)}
                           </span>
@@ -1335,6 +1190,78 @@ export function ReadoutDashboard({
             </button>
           </div>
         </section>
+
+      {/* Competition Overview — below the complete Readout History section */}
+      <section
+        aria-label="Tävlingsstatus"
+        className="grid grid-cols-2 xl:grid-cols-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y sm:divide-y-0 divide-x divide-slate-200 dark:divide-slate-800"
+      >
+        <div className="px-3.5 py-2.5">
+          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            Anmälda deltagare
+          </div>
+          <div className="mt-0.5 flex items-baseline justify-between gap-2">
+            <span className="text-xl font-semibold font-mono tabular-nums text-slate-900 dark:text-slate-100">
+              {competitors.length}
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
+              {classes.length} kl · {runnerDbCount} i DB
+            </span>
+          </div>
+        </div>
+
+        <div className="px-3.5 py-2.5">
+          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            Kvar i skogen
+          </div>
+          <div className="mt-0.5 flex items-baseline justify-between gap-2">
+            <span
+              className={`text-xl font-semibold font-mono tabular-nums ${
+                inForestCount > 0
+                  ? 'text-amber-700 dark:text-amber-400'
+                  : 'text-emerald-700 dark:text-emerald-400'
+              }`}
+            >
+              {inForestCount}
+            </span>
+            <button
+              type="button"
+              onClick={onNavigateForest}
+              className="text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:underline whitespace-nowrap shrink-0"
+            >
+              Säkerhetslista
+            </button>
+          </div>
+        </div>
+
+        <div className="px-3.5 py-2.5">
+          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            I mål (Godkända)
+          </div>
+          <div className="mt-0.5 flex items-baseline justify-between gap-2">
+            <span className="text-xl font-semibold font-mono tabular-nums text-slate-900 dark:text-slate-100">
+              {finishedOkCount}
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
+              +{prelCount} prel.
+            </span>
+          </div>
+        </div>
+
+        <div className="px-3.5 py-2.5">
+          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            Felstämplade & Hyr
+          </div>
+          <div className="mt-0.5 flex items-baseline justify-between gap-2">
+            <span className="text-xl font-semibold font-mono tabular-nums text-slate-900 dark:text-slate-100">
+              {mpCount}
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums truncate">
+              {unreturnedRentals} hyr ute
+            </span>
+          </div>
+        </div>
+      </section>
 
       {/* Readout & Live Timing */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
@@ -1592,122 +1519,6 @@ export function ReadoutDashboard({
             </section>
           )}
 
-          {/* Real-Time Competition Event Stream */}
-          <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-            <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Tävlingshändelser i realtid
-                </h2>
-              </div>
-              <div className="relative w-full sm:w-56">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="search"
-                  value={eventSearch}
-                  onChange={(e) => setEventSearch(e.target.value)}
-                  placeholder="Filtrera löpare, klass, SI..."
-                  className="w-full pl-8 pr-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-red-600/25"
-                />
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-medium text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
-                    <th className="py-1.5 pl-3.5 pr-2 w-16">Tid</th>
-                    <th className="py-1.5 px-2">Deltagare</th>
-                    <th className="hidden sm:table-cell py-1.5 px-2">Händelse</th>
-                    <th className="py-1.5 pl-2 pr-3.5 text-right">Åtgärd</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800/80">
-                  {filteredEvents.slice(0, 16).map((ev) => (
-                    <tr
-                      key={ev.id}
-                      onClick={() => {
-                        if (ev.competitorId) onSelectRunner(ev.competitorId);
-                      }}
-                      className={`transition-colors ${
-                        ev.competitorId
-                          ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                          : ''
-                      }`}
-                    >
-                      <td className="py-1.5 pl-3.5 pr-2 font-mono tabular-nums whitespace-nowrap text-slate-500 dark:text-slate-400">
-                        {ev.clock24h}
-                      </td>
-                      <td className="py-1.5 px-2 max-w-[180px] sm:max-w-none">
-                        <div className="flex flex-wrap items-baseline gap-x-1.5 truncate">
-                          <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                            {ev.competitorName ?? (
-                              <span className="text-amber-700 dark:text-amber-400">
-                                Okänd SI ({formatSiNumber(ev.siNumber)})
-                              </span>
-                            )}
-                          </span>
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                            {ev.className
-                              ? `· ${ev.className}`
-                              : ev.siNumber > 0
-                              ? `· SI ${formatSiNumber(ev.siNumber)}`
-                              : `· ${ev.stationName}`}
-                          </span>
-                        </div>
-                        <div className="sm:hidden text-[11px] text-slate-600 dark:text-slate-400 truncate">
-                          {ev.message}
-                        </div>
-                      </td>
-                      <td className="hidden sm:table-cell py-1.5 px-2 text-slate-700 dark:text-slate-300">
-                        {ev.message}
-                      </td>
-                      <td
-                        className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="inline-flex items-center gap-1.5">
-                          {ev.eventType === 'UNKNOWN_CARD' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const matchingReadout = readoutHistory.find(
-                                  (record) =>
-                                    record.readout.siNumber === ev.siNumber &&
-                                    record.issueType === 'UNKNOWN_CARD' &&
-                                    record.issueState !== 'RESOLVED' &&
-                                    record.issueState !== 'DISMISSED'
-                                );
-                                if (matchingReadout) {
-                                  handleSelectReadout(matchingReadout, true);
-                                } else {
-                                  handleStandaloneUnknownCard(ev.siNumber);
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400 hover:underline"
-                            >
-                              <UserPlus className="w-3 h-3" />
-                              <span>Anmäl</span>
-                            </button>
-                          )}
-                          {ev.rawHex && (
-                            <button
-                              type="button"
-                              onClick={() => onInspectHex(ev.rawHex!)}
-                              className="inline-flex items-center gap-0.5 text-[11px] font-mono text-slate-500 hover:text-slate-900 dark:hover:text-slate-200 hover:underline"
-                            >
-                              <Cpu className="w-3 h-3" />
-                              <span>Hex</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
         </div>
 
         {/* Online / Radio Control Sender */}

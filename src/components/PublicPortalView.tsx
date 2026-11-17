@@ -36,6 +36,7 @@ import {
 } from '../firebase';
 import type { PublicCompetitionTab } from '../utils/competitionNavigation';
 import { toPublicResultCompetitor } from '../utils/publicResultProjection';
+import { mergePublicCompetitionSummaries } from '../utils/publicCompetitionSummaries';
 
 interface PublicPortalViewProps {
   shortCode: string | null;
@@ -113,23 +114,10 @@ export function PublicPortalView({
   }, [publicTab]);
 
   const competitionsList = useMemo(() => {
-    const firestoreById = new Map(
-      firestoreCompetitionsList.map((competition) => [competition.id, competition])
+    return mergePublicCompetitionSummaries(
+      apiCompetitionsList,
+      firestoreCompetitionsList
     );
-    const apiIds = new Set(apiCompetitionsList.map((competition) => competition.id));
-    const merged = apiCompetitionsList.map((competition) => {
-      const firestoreCompetition = firestoreById.get(competition.id);
-      if (!firestoreCompetition) return competition;
-      return {
-        ...competition,
-        ...firestoreCompetition,
-        classCount: firestoreCompetition.classCount || competition.classCount,
-      };
-    });
-    for (const competition of firestoreCompetitionsList) {
-      if (!apiIds.has(competition.id)) merged.push(competition);
-    }
-    return merged;
   }, [apiCompetitionsList, firestoreCompetitionsList]);
 
   const loadData = useCallback(async () => {

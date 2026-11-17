@@ -4189,7 +4189,6 @@ export default function App() {
                   runnerDb={runnerDb}
                   defaultClubName={clubSettings.clubName}
                   runnerDbCount={runnerDb.length}
-                  events={events}
                   readoutHistory={activeReadoutHistory}
                   latestReadoutId={latestReadoutId}
                   readoutHistoryError={readoutHistoryError}
@@ -4257,17 +4256,10 @@ export default function App() {
                     offlineReadoutQueue.clearQueue();
                   }}
                   selectedRunnerId={selectedRunnerId}
-                  onSelectRunner={(id) => setSelectedRunnerId(id)}
                   onMarkRentalReturned={async (id) => {
                     await updateActiveCompetitorRentalFields(id, { rentalReturned: true });
                   }}
                   onSimulateOnlinePunch={handleSimulateOnlinePunch}
-                  onInspectHex={(hex) => {
-                    setInspectHexTarget(hex);
-                    if (ROLE_ALLOWED_TABS[effectiveRoleMode].includes('protocol')) {
-                      setActiveTab('protocol');
-                    }
-                  }}
                   onNavigateForest={() => setActiveTab('forest')}
                 />
               )}
