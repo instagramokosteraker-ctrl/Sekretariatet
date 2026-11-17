@@ -1,101 +1,123 @@
 # PasserSI — project status handoff
 
-**Prepared:** 2026-11-13 12:33 CET
-**Repository:** `instagramokosteraker-ctrl/Sekretariatet`  
-**Branch / HEAD:** `main` / `3062f59`
-**Purpose:** Give a new AI a concise, evidence-based picture of implementation and operational readiness.
+**Updated:** 2026-11-17
+**Repository:** `instagramokosteraker-ctrl/Sekretariatet`
+**Branch / HEAD:** `main` / `e71bb4c`
+**Purpose:** Concise, evidence-based state for continuing work in Cursor, Copilot, or Claude Code.
 
 ## Executive status
 
-**Competitor identity cutover and system-wide enforcement of per-competition SI uniqueness remain NO-GO.**
+Application features for live ranking, Eventor identity preservation/class mapping, IOF ResultList export, and Firestore-backed result synchronization are implemented and locally verified. Manual-finish deployment packaging is fixed in source. The Eventor class draw selector and Firestore fallback for a competition missing from the Express mirror are also fixed in source.
 
-The repository has substantial transaction and Rules hardening, but that is not proof of production enforcement. The latest recorded Firebase Console inspection (2026-11-11) found the identified active Firestore Rules release materially behind repository `firestore.rules`, with assignment create/update/delete and SI-reassignment bypasses. The active release could not be immutably identified or attested. Do not treat source rules as deployed rules.
+**Production readiness is still NO-GO for Firestore identity enforcement.** The latest recorded Firebase Console inspection (2026-11-14) found the currently star-marked production Rules source differs materially from repository `firestore.rules`. No Rules deployment or immutable Ruleset ID/hash attestation is recorded. Do not equate passing source/emulator tests with production enforcement.
 
-There are also six unresolved active `ownerUid` parity findings in the last V2 production scan, incomplete production inventory and trusted-writer assurance, and no recorded concurrency/retry/recovery validation. No production rules or data changes were made in the latest recorded assurance work.
+Local builds, TypeScript checks, and focused regression tests passed for the recent feature work. Production deployment, live Eventor publishing, and end-to-end live competition verification remain outstanding.
 
-## System at a glance
+## Current architecture
 
 - **Client:** React, TypeScript, Vite.
-- **Identity:** Google sign-in with Firebase Auth; Firestore roles include `SUPER_ADMIN`, `RACE_ADMIN`, `START`, `READOUT`, `FOREST`, and `SPEAKER`.
-- **Data:** Firestore is canonical for roles, club settings, runner records, competition metadata, courses/classes, and key competitor identity workflows. Some legacy Express/JSON mirrors remain.
-- **Backend:** Express (`server.ts`) still handles API routes, Eventor/ROC integration, and WebSocket state distribution. Migration to Firebase Functions and replacement of WebSockets are not complete.
-- **Architecture goal:** Vercel + Firebase Auth/Firestore/Functions, with Express retired only after its remaining responsibilities are migrated and validated.
+- **Identity and authorization:** Firebase Auth with Firestore roles (`SUPER_ADMIN`, `RACE_ADMIN`, `START`, `READOUT`, `FOREST`, `SPEAKER`).
+- **Canonical data:** Firestore is the main source for competitions, classes, courses, competitors, SI assignments, live results, and public result projections. Some legacy Express/JSON mirrors remain.
+- **API/runtime:** Express in `server.ts` handles API routes and integrations; `api/index.ts` is the Vercel function entrypoint. The shared server bundle is produced by `npm run build`.
+- **Live result synchronization:** Firestore listeners are used for Secretariat competitor/radio inputs, Speaker result updates, and Public Portal result/metadata updates. Public result listeners use the safe `publicResults` projection, not raw competitor documents.
+- **WebSockets:** `/api/ws` is unsupported/broken on the current Vercel architecture. WebSocket-based public result refresh was removed, but some Secretariat operational/non-result synchronization still depends on the legacy socket path.
+- **Eventor:** API credentials are managed in browser local storage and sent to authenticated backend routes. Do not reintroduce Firestore credential persistence. The active competition import now calls `/api/eventor/import-event`, which fetches the event, dedicated class list, and entries separately.
 
-## Implemented protections and migrations
+## Completed milestones
 
-The following are **repository-level implementation claims**, not production deployment attestations:
+### Eventor import and identity
 
-- Atomic SI assignment/competitor mutations cover create, reassignment, card-series changes, retirement, and deletion. Standalone assignment create/retire exports were removed; relevant paths reread and validate competitor/assignment identity and ownership within transactions.
-- Trusted backend transaction paths were added for competitor creation and READOUT auto-create. READOUT auto-create pairs competitor, assignment, receipt, and counters. Assignment retirement is required to pair with the competitor lifecycle change.
-- Import/snapshot creation uses assignment-aware per-competitor transactions; identity-changing imports are rejected or redirected to canonical paths. These multi-record operations are atomic per competitor, not as one whole batch.
-- Cloud hydration and restore fence competitor identity changes. Unsafe legacy competitor CRUD and Eventor event import remain disabled; single-competition deletion now uses an authenticated owner/SUPER_ADMIN transaction that removes direct child records and SI assignments atomically. Bulk reset and demo-clear remain disabled.
-- Repository Firestore Rules encode paired competitor/assignment changes and parity checks. READOUT competitor updates use narrow field allowlists; competition list permissions were tightened in later work.
-- Google authentication replaces PIN/offline-code login.
-- Admin UI includes the read-only V2 integrity monitor, periodic scans, individual and bulk alert dismissal, and handling for the six previously reported ownerUid cases. Dismissed alert keys now persist in browser `localStorage`. Suppressing an alert in UI is **not** evidence that the underlying data discrepancy was corrected or formally dispositioned.
+- Active Eventor competition import no longer passes `classesXml: eventXml`; it uses the existing import endpoint and dedicated `eventclasses` response.
+- Eventor classes are built from the dedicated list, entry class IDs map competitors to internal classes, and unmatched API-import entries fail explicitly instead of falling back to the first class.
+- Eventor identities are preserved in Firestore and supported by export:
+  - `eventorEventId`
+  - `eventorClassId`
+  - `eventorPersonId`
+  - `eventorOrgId`
+- Vit, Gul, Orange, Svart regression coverage verifies the class identities and competitor mappings. Eventor import classes currently default to allocated-start/draw-eligible (`freeStart: false`), because the import data does not supply a free-start setting.
+- See [EVENTOR_CLASS_MAPPING_FIX.md](./EVENTOR_CLASS_MAPPING_FIX.md), [EVENTOR_IDENTITY_PRESERVATION_IMPLEMENTATION.md](./EVENTOR_IDENTITY_PRESERVATION_IMPLEMENTATION.md), and [EVENTOR_IDENTITY_EXPORT_IMPLEMENTATION.md](./EVENTOR_IDENTITY_EXPORT_IMPLEMENTATION.md).
 
-Detailed implementation references: [ASSIGNMENT_BOUNDARY_HARDENING.md](./ASSIGNMENT_BOUNDARY_HARDENING.md), [SERVER_SIDE_ENFORCEMENT_PHASE2_COMPETITOR_CREATE.md](./SERVER_SIDE_ENFORCEMENT_PHASE2_COMPETITOR_CREATE.md), [SERVER_SIDE_ENFORCEMENT_PHASE3_READOUT.md](./SERVER_SIDE_ENFORCEMENT_PHASE3_READOUT.md), [READOUT_FIELD_PERMISSION_REMEDIATION.md](./READOUT_FIELD_PERMISSION_REMEDIATION.md), [EVENTOR_IOF_IMPORT_MIGRATION.md](./EVENTOR_IOF_IMPORT_MIGRATION.md), and [COMPETITION_DELETION_MIGRATION.md](./COMPETITION_DELETION_MIGRATION.md).
+### IOF ResultList
 
-## Outstanding production and assurance blockers
+- IOF 3.0 ResultList export was corrected for schema ordering, status/snapshot semantics, ties, splits, and synthetic SI handling.
+- Eventor event/class/person/organisation IDs are emitted when present; internal PasserSI IDs are not substituted.
+- The pinned official IOF 3.0 XSD validation passes for representative identity-bearing and identity-absent output.
+- **Not yet proven:** Eventor acceptance/matching of an actual uploaded file.
+- See [IOF_RESULTLIST_PHASE1_IMPLEMENTATION.md](./IOF_RESULTLIST_PHASE1_IMPLEMENTATION.md) and [EVENTOR_IDENTITY_EXPORT_IMPLEMENTATION.md](./EVENTOR_IDENTITY_EXPORT_IMPLEMENTATION.md).
 
-### 1. Deployed Firestore Rules — highest immediate blocker
+### Live ranking and Bom
 
-The 2026-11-11 Console review found the latest identified release allowed independent assignment create/update/delete and lacked repository parity/reassignment checks. No immutable release ID/hash or evidence that the repository rules were deployed was recorded. No production deployment is authorized by this handoff.
+- Shared live ranking implementation covers Förenklad vy, Sträcka & bom, Speaker results, and public class results.
+- CHECKED → IN_FOREST is derived, not written to Firestore. The finalized projection estimate is rolling elapsed race time (`currentTime - actualStartTime`), with projected display styling and passage ordering as specified.
+- Radio/finish ranking, radio sorting, ordinary-control sorting, Plac/status output, and reset-to-LIVE behavior were implemented and unit-tested.
+- Existing Bom calculation and SI readout validation were left unchanged.
+- **Open:** operational/browser verification across views and confirmation that expected live inputs remain correct in a real event.
+- See [LIVE_RANKING_IMPLEMENTATION_RESULT.md](./LIVE_RANKING_IMPLEMENTATION_RESULT.md), [LIVE_RANKING_PROJECTION_DECISION.md](./LIVE_RANKING_PROJECTION_DECISION.md), and [LIVE_RANKING_AND_BOM_COMPATIBILITY.md](./LIVE_RANKING_AND_BOM_COMPATIBILITY.md).
 
-See [DEPLOYED_RULE_CLOSURE.md](./DEPLOYED_RULE_CLOSURE.md), [DEPLOYED_RULE_DIFF.md](./DEPLOYED_RULE_DIFF.md), [DEPLOYED_RULE_ASSURANCE.md](./DEPLOYED_RULE_ASSURANCE.md), and [DEPLOYED_RULE_REMEDIATION_PLAN.md](./DEPLOYED_RULE_REMEDIATION_PLAN.md).
+### Firestore Live Sync
 
-### 2. Firestore Rules regression suite — not green
+- **Phase 1 implemented:** competition-scoped competitor listener for status/time/readout/ranking inputs and RADIO/PREWARNING station-punch listener. Ordinary controls remain SI-readout-derived; the listeners do not write projections, status, ranking, or Bom.
+- **Phase 2 implemented:** Speaker result/radio synchronization and Public Portal result/metadata listeners. Public results use safe `publicResults` projection documents; raw competitor records are not exposed to the public portal. Public result WebSocket refresh was removed.
+- **Phase 3 remains open:** other operational/non-result synchronization (such as staff station configuration and cross-client operational events), and the future role of WebSockets.
+- **Deployment caveat:** the Rules source changes for listeners/projections have not been verified as deployed to production.
+- See [FIRESTORE_LIVE_SYNC_PHASE1_IMPLEMENTATION.md](./FIRESTORE_LIVE_SYNC_PHASE1_IMPLEMENTATION.md), [FIRESTORE_LIVE_SYNC_PHASE2_IMPLEMENTATION.md](./FIRESTORE_LIVE_SYNC_PHASE2_IMPLEMENTATION.md), and [FIRESTORE_LIVE_SYNC_IMPLEMENTATION_PLAN.md](./FIRESTORE_LIVE_SYNC_IMPLEMENTATION_PLAN.md).
 
-The latest recorded run of `runFirestoreRulesDirtyDozenSuite()` exited `0`, and the standalone SI-number update assertion passed. A focused assertion verifies that this update is denied by the Rules condition rather than by the expression ceiling. However, the run still logged **18 Rules expression-limit diagnostics on other paths**. Therefore the suite is not clean and must not be presented as a fully trustworthy, warning-free PASS. Older analysis files refer to earlier failures (assignment retirement, READOUT fields, or competition listing) and have been superseded by later changes.
+### Manual finish and class draw
 
-The user-provided environment report said Java 21, Firebase CLI 15.35.0, Firebase configs, and a working emulator were available. Older readiness documents say the emulator/CLI were unavailable on their assessment date. Previous emulator runs also encountered Rules expression-limit errors on some paths.
+- Manual-finish deployment failure was traced to Vercel ESM resolution of a missing `/var/task/server`; build now emits `server.js` and the API entry imports it explicitly. Local Vercel-mode smoke test loaded the route and returned the expected auth response.
+- Class draw now sends `competitionId`; the server scopes its lookup to that competition instead of `getActiveEvent()`. Class selection reconciles stale IDs and filters out `freeStart` classes using `CompClass.freeStart`.
+- A follow-up 404 was traced to the Express `seasonDb.eventsMap` not containing some Firestore-only competitions (including imported competitions). The client now falls back to the selected competition’s Firestore draw path on API 404, as it already does for unavailable API/network errors. This source change and fallback-classifier tests pass; no live Firestore draw or production deployment has been verified.
+- See [MANUAL_FINISH_DEPLOYMENT_FIX.md](./MANUAL_FINISH_DEPLOYMENT_FIX.md), [CLASS_DRAW_404_FIX.md](./CLASS_DRAW_404_FIX.md), and [DRAW_CLASS_FILTER_FIX.md](./DRAW_CLASS_FILTER_FIX.md).
 
-Rules test artifacts include [firestore.rules.test.ts](./firestore.rules.test.ts), [FIRESTORE_RULES_FAILURE_ANALYSIS_NEXT2.md](./FIRESTORE_RULES_FAILURE_ANALYSIS_NEXT2.md), and [READOUT_FIELD_PERMISSION_REMEDIATION.md](./READOUT_FIELD_PERMISSION_REMEDIATION.md). They have different dates and describe different stages; inspect current test source and run output before selecting the next fix.
+## Firestore Rules and production assurance
 
-### 3. Owner and inventory findings
+### Rules investigation — completed; production mismatch identified
 
-The last V2 production snapshot (2026-11-10 21:52 UTC) covered four returned competitions: 14 competitors and 20 assignments. It found six active assignment/competitor `ownerUid` parity mismatches: four in Reflexcup#2 and two in Lång-TM. Four are consistent with an early bootstrap path; the two Lång-TM records have unresolved writer provenance. No orphan or duplicate-SI ownership findings were reported in that snapshot.
+The latest recorded Console inspection was read-only and targeted project `ai-studio-applet-webapp-72c01`, database `ai-studio-kopiaavoksekreta-4d24d0cc-1fd7-4b98-ba1a-8c6f95c187df`. The star-marked active Rules source required a `feeTrackingEnabled` competition field, while repository `firestore.rules` prohibits it. The captured create payload omitted that field, so the active production rule denies the current competition-create request. Console did not expose immutable release/ruleset resource names or a full-source hash.
 
-This is not proof of complete production coverage: there was no independent expected-competition register. A later standard UI scan was not a V2 owner/parity audit and did not prove the six cases changed or were resolved. Keep these findings unresolved until ownership, provenance, scope, and any approved correction are evidenced and the V2 scan is rerun.
+Earlier production evidence also found assignment create/update/delete, ownership parity, and SI reassignment enforcement gaps versus repository rules. The latest Ruleset comparison resolves the current create-rule discrepancy but does not prove that the other old findings were repaired. Repository test results do not attest production policy.
 
-See [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md), [INVENTORY_COVERAGE_REPORT.md](./INVENTORY_COVERAGE_REPORT.md), [OWNERUID_DISPOSITION.md](./OWNERUID_DISPOSITION.md), and [OWNERUID_REMEDIATION_PLAN.md](./OWNERUID_REMEDIATION_PLAN.md).
+The last recorded broad Firestore Rules test run was not clean: it logged 18 Rules expression-limit diagnostics on other paths, even though its focused SI-number assertion passed. Isolated Phase 2 projection-rule tests passed, but the full suite remains a separate unresolved issue. The Rules investigation is complete as an assessment; **Rules are not fixed or cleared for production**.
 
-### 4. Trusted writers and transaction behavior
+### Other unresolved data and trust risks
 
-Repository writers are substantially inventoried and routed through intended boundaries, but external/Admin SDK writers are not. Prior IAM evidence showed privileged human and Firebase service identities; effective inherited IAM, service-account keys/impersonation, Cloud Functions and scheduled jobs, CI identities, and Cloud Audit Logs remain incomplete or unverified.
+- The last V2 production scan (2026-11-10) found six active assignment/competitor `ownerUid` parity mismatches (four Reflexcup#2, two Lång-TM). They remain unresolved pending provenance, owner disposition, correction approval, and a fresh V2 scan.
+- Production inventory coverage was incomplete; there was no independent expected-competition register.
+- External/Admin SDK writers and effective IAM are not fully inventoried. Required concurrency, retry, timeout, rollback, bootstrap-race, and partial-import recovery evidence is incomplete.
+- No production Rules deployment is recorded. A prior authorized Firebase CLI deployment attempt stopped before publishing because the CLI was unauthenticated. Do not assume production changed or retry deployment without explicit authorization.
 
-No evidence is recorded for the required concurrency, retry, timeout, rollback, bootstrap-race, and partial-import recovery tests. Rules do not constrain Admin SDK writers. See [TRUSTED_WRITER_CLOSURE.md](./TRUSTED_WRITER_CLOSURE.md), [CONCURRENCY_VALIDATION.md](./CONCURRENCY_VALIDATION.md), [RECOVERY_VALIDATION.md](./RECOVERY_VALIDATION.md), and [READINESS_EXECUTION_PLAN.md](./READINESS_EXECUTION_PLAN.md).
+Reference: [ACTIVE_RULESET_ATTESTATION.md](./ACTIVE_RULESET_ATTESTATION.md), [DEPLOYED_RULE_CLOSURE.md](./DEPLOYED_RULE_CLOSURE.md), [DEPLOYED_RULE_DIFF.md](./DEPLOYED_RULE_DIFF.md), [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md), and [INVENTORY_COVERAGE_REPORT.md](./INVENTORY_COVERAGE_REPORT.md).
 
-## Recent application work and current worktree
+## Current open work and recommended next tasks
 
-### Committed
+1. **Verify live ranking operationally:** exercise Förenklad vy, Sträcka & bom, Speaker, and Public Portal with live radio/finish updates; check projections, sorting, derived status, and unchanged Bom behavior.
+2. **Verify class draw after Eventor class fix:** test an imported competition with Vit/Gul/Orange/Svart, allocated-start classes and Fri start classes; confirm correct competitor/class mapping and Firestore allocations. Include the Firestore-only competition 404 case. Current local tests do not replace browser/Firestore verification.
+3. **Implement Firestore Live Sync Phase 3:** inventory and migrate remaining non-result synchronization; decide whether WebSockets are removed, retained only for an explicitly supported environment, or replaced.
+4. **Execute Eventor publication pilot:** get event-owner/admin approval, capture baseline and recovery plan, manually upload a reviewed identity-bearing ResultList, and verify exact event/class/person/organisation matches and no duplicates. The pilot checklist currently says not executed.
+5. **Research direct Eventor publishing:** verify current official write API, authentication, permissions, update/idempotency behavior, and supported payload before implementation. Do not infer write endpoints from the read/import API or use undocumented endpoints.
+6. **Resolve Rules production risk:** obtain authorized immutable active Ruleset identity/source, reconcile it with the repository, address expression-limit diagnostics, and follow the approved deployment/verification process. Keep production readiness NO-GO until attested.
+7. **Close identity/trusted-writer assurance:** resolve the six ownerUid findings, establish full competition inventory, review Admin SDK/IAM writers, and run concurrency/recovery validation.
 
-- Eventor API key, organization ID, and base URL are managed in browser `localStorage`; Eventor requests send them to authenticated backend routes. The Eventor integration no longer depends on a private Firestore config document. Existing legacy Firestore documents were not deleted.
-- The Drift-larm has five-minute read-only scans, individual/bulk alert dismissal, a “show dismissed” toggle, and persistence of dismissed finding keys across reloads.
-- These are client/repository changes, not evidence that production data was changed or audited.
+## Risks and operating notes
 
-The separate Club Profile `eventorOrgId` field remains part of existing club settings/workflows. Do not change that shared field without clarifying scope.
+- Firestore listeners only synchronize durable changes that reach Firestore; keep live writes on canonical paths and scope listeners to the selected competition/class.
+- Public data must remain projection-based. Do not subscribe anonymous users to raw competitor or station-punch documents.
+- Firestore read costs grow with listener count, changed documents, and reconnects; monitor event-scale audiences and avoid broad collection subscriptions.
+- WebSocket non-result dependencies can leave Secretariat operational state stale in production; assess Phase 3 before removing the legacy path.
+- IOF XSD validity is not proof of Eventor acceptance or identity matching.
+- Source-level build/test PASS does not attest production deployments, Firestore Rules, Eventor publication, or real-event workflows.
+- Protect Eventor API keys and personal data. Do not place credentials or unredacted pilot evidence in source control or external reports.
 
-### Uncommitted Eventor connection-test change
+## Verification snapshot
 
-Current worktree modifications are limited to `server.ts` and `src/components/EventorIntegrationSettingsView.tsx`.
+Recent feature-specific verification recorded in implementation reports:
 
-- The “Testa anslutning” action now reads the saved local configuration and sends `{ apiKey, orgId, baseUrl }` to `/api/eventor/test`; unsaved edits are not silently tested.
-- The backend test route reads configuration from `req.body`, calls Eventor `/organisation/apiKey` with the `ApiKey` header, returns a success/message on an HTTP-success response, still checks a parsed organization ID when available, and reports network errors clearly.
-- **Verification after these edits:** `npm run build` PASS and `npm run lint` PASS. Build reported the existing Vite `__dirname` notice and large-chunk warning. The Rules suite was not rerun for this UI/server-only change.
+- `npm run build` — PASS.
+- `npm run lint` (`tsc --noEmit`) — PASS.
+- Live-ranking suite — PASS as recorded in its implementation result.
+- IOF exporter and pinned XSD tests — PASS.
+- Eventor class-mapping regression tests — PASS for Vit, Gul, Orange, Svart.
+- Firestore Live Sync Phase 2 focused projection-rule tests — PASS; broad Rules suite remains blocked by expression-limit diagnostics.
+- Class draw fallback/class selection tests — PASS; local draw fix build/lint passed. Live Firestore/browser verification is still open.
 
-## Recent deployment attempt
-
-A user-authorized `firebase deploy --only firestore:rules --project ai-studio-applet-webapp-72c01` attempt stopped before publishing because Firebase CLI was not authenticated (`Failed to authenticate, have you run firebase login?`). No production Rules were deployed. Do not retry unless separately authorized and authenticated; the Rules suite still has expression-limit diagnostics.
-
-## Recommended next actions for the next AI
-
-1. If further Eventor connection-test changes are made, rerun build/lint and exercise the endpoint with a saved local configuration; do not log API-key values.
-2. Diagnose the 18 Rules expression-limit diagnostics. Keep the Rules suite marked unclean until these are resolved and negative assertions are not passing solely because of evaluation limits.
-3. Keep production readiness **NO-GO**. A prior deployment attempt was authorized but failed authentication before publishing; do not assume production changed.
-4. Complete external writer/IAM review and reconcile the six ownerUid findings with authorized evidence. Reconcile competition coverage against an independent expected set.
-5. Run concurrency/retry/recovery tests in the emulator. Keep readiness NO-GO until every required gate in [READINESS_EXECUTION_PLAN.md](./READINESS_EXECUTION_PLAN.md) passes.
-6. Preserve the local Eventor key boundary; do not reintroduce Firestore credential persistence or delete legacy Firestore data without explicit authorization.
-
-## Source-of-truth note
-
-The canonical blocker order is [COMPETITOR_CUTOVER_READINESS.md](./COMPETITOR_CUTOVER_READINESS.md), but that report was last assessed 2026-11-11. [MIGRATION-STATUS.md](./MIGRATION-STATUS.md) contains useful implementation history and explicitly marks some older phase notes as superseded. This handoff is newer, but does not replace live verification, the current emulator output, a production rules attestation, or authorized data-owner decisions.
+Production deployment, active Rules attestation, controlled Eventor publication, and live-event end-to-end verification are **not** included in these local PASS results.
