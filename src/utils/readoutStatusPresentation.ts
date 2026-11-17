@@ -50,11 +50,11 @@ const ISSUE_STATE_LABELS: Record<ReadoutIssueState, string | null> = {
 };
 
 const SURFACE_CLASSES: Record<ReadoutStatusTone, string> = {
-  success: 'bg-emerald-50 dark:bg-emerald-950/40',
-  mp: 'bg-yellow-50 dark:bg-yellow-950/40',
-  action: 'bg-orange-50 dark:bg-orange-950/40',
-  error: 'bg-red-50 dark:bg-red-950/40',
-  info: 'bg-sky-50 dark:bg-sky-950/40',
+  success: 'bg-emerald-100 dark:bg-emerald-900/60',
+  mp: 'bg-yellow-100 dark:bg-yellow-900/60',
+  action: 'bg-orange-200 dark:bg-orange-900/70',
+  error: 'bg-red-100 dark:bg-red-900/60',
+  info: 'bg-sky-100 dark:bg-sky-900/60',
   neutral: 'bg-white dark:bg-slate-900',
 };
 
