@@ -177,8 +177,11 @@ export function parseEventorEntriesXml(
   fullName: string;
   club: string;
   className: string;
+  eventorClassId: string | null;
   siNumber: number;
   personId: string | null;
+  eventorOrgId: string | null;
+  birthYear: number | null;
 }[] {
   const blocks = [
     ...extractAllBlocks(xml, 'Entry'),
@@ -188,8 +191,11 @@ export function parseEventorEntriesXml(
     fullName: string;
     club: string;
     className: string;
+    eventorClassId: string | null;
     siNumber: number;
     personId: string | null;
+    eventorOrgId: string | null;
+    birthYear: number | null;
   }[] = [];
 
   for (const block of blocks) {
@@ -212,6 +218,13 @@ export function parseEventorEntriesXml(
     const club = (
       (orgBlock ? extractFirstTag(orgBlock, 'Name') : null) || 'Klubblös'
     ).slice(0, 100);
+    const eventorOrgId = orgBlock
+      ? extractFirstTag(orgBlock, 'OrganisationId') ??
+        extractFirstTag(orgBlock, 'OrganizationId') ??
+        extractFirstTag(orgBlock, 'Id')
+      : null;
+    const birthDate = extractFirstTag(personBlock, 'BirthDate') ?? '';
+    const birthYear = Number(birthDate.match(/\b(19\d{2}|20\d{2})\b/)?.[1]) || null;
 
     const entryClassBlock =
       extractFirstTag(block, 'EntryClass') ?? extractFirstTag(block, 'Class') ?? block;
@@ -245,8 +258,11 @@ export function parseEventorEntriesXml(
       fullName,
       club,
       className,
+      eventorClassId: eventClassId.trim().slice(0, 128) || null,
       siNumber,
       personId: personId?.slice(0, 128) ?? null,
+      eventorOrgId: eventorOrgId?.trim().slice(0, 128) || null,
+      birthYear,
     });
   }
   return entries;

@@ -23,6 +23,7 @@ export interface ParsedEventorEntry {
   siNumber: number;
   personId: string | null;
   eventorOrgId: string | null;
+  birthYear?: number | null;
 }
 
 export interface ParsedEventorRunner {

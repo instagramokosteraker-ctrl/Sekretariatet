@@ -166,6 +166,10 @@ import {
 import { readEventorLocalConfig } from './utils/eventorLocalConfig';
 import { EventorNetworkError, fetchEventorXml } from './utils/eventorClient';
 import {
+  buildEventorClassMapping,
+  parseEventorImportApiResponse,
+} from './utils/eventorImport';
+import {
   parseEventorXml,
   type ParsedEventorRunner,
   type ParsedEventorXml,
@@ -2309,62 +2313,8 @@ export default function App() {
         : getStockholmTodayIso();
     const zeroTimeStr = '18:00:00';
     const zeroTimeSec = parseTimeToSec(zeroTimeStr);
-    const classDefinitions = new Map<
-      string,
-      { name: string; eventorClassId?: string }
-    >();
-    const addClassDefinition = (rawName: string, eventorClassId?: string | null) => {
-      const className = rawName.trim().slice(0, 80);
-      if (!className) return;
-      const normalizedName = className.toLocaleLowerCase();
-      const key = eventorClassId
-        ? `eventor:${eventorClassId}`
-        : `name:${normalizedName}`;
-      if (!classDefinitions.has(key)) {
-        classDefinitions.set(key, {
-          name: className,
-          ...(eventorClassId ? { eventorClassId } : {}),
-        });
-      }
-    };
-    for (const eventClass of parsed.classes) {
-      addClassDefinition(eventClass.name, eventClass.id || null);
-    }
-    for (const entry of parsed.entries) {
-      addClassDefinition(entry.className, entry.eventorClassId);
-    }
-    if (classDefinitions.size === 0) {
-      addClassDefinition('Öppen');
-    }
-
-    const classes: CompClass[] = Array.from(classDefinitions.values()).map(
-      (definition, index) => ({
-        id: `evtcls-${now}-${index + 1}`,
-        ...(definition.eventorClassId
-          ? { eventorClassId: definition.eventorClassId }
-          : {}),
-        name: definition.name,
-        courseId: null,
-        classFormat: 'STANDARD',
-        forkCourseIds: [],
-        allowDirectEntry: true,
-        freeStart: true,
-        autoMatchCourse: true,
-      })
-    );
-    const classIdByEventorId = new Map<string, string>();
-    for (const eventClass of classes) {
-      if (eventClass.eventorClassId) {
-        classIdByEventorId.set(eventClass.eventorClassId, eventClass.id);
-      }
-    }
-    const classIdByName = new Map<string, string>();
-    for (const eventClass of classes) {
-      const key = eventClass.name.toLocaleLowerCase();
-      if (!classIdByName.has(key)) {
-        classIdByName.set(key, eventClass.id);
-      }
-    }
+    const classMapping = buildEventorClassMapping(parsed, source, now);
+    const classes = classMapping.classes;
     const seenSiNumbers = new Set<number>();
     for (const entry of parsed.entries) {
       if (entry.siNumber > 0) {
@@ -2386,12 +2336,7 @@ export default function App() {
         bib,
         fullName: entry.fullName.trim(),
         club: entry.club.trim(),
-        classId:
-          (entry.eventorClassId
-            ? classIdByEventorId.get(entry.eventorClassId)
-            : undefined) ??
-          classIdByName.get(entry.className.trim().toLocaleLowerCase()) ??
-          classes[0].id,
+        classId: classMapping.resolveEntryClassId(entry),
         ...(entry.personId ? { eventorPersonId: entry.personId } : {}),
         ...(entry.eventorOrgId ? { eventorOrgId: entry.eventorOrgId } : {}),
         siNumber,
@@ -3696,20 +3641,20 @@ export default function App() {
                       if (!/^\d{1,32}$/.test(sanitizedEventId)) {
                         throw new Error('Ange ett giltigt Eventor-tävlings-ID.');
                       }
-                      const encodedEventId = encodeURIComponent(sanitizedEventId);
-                      const [eventXml, entriesXml] = await fetchEventorXml(
-                        [
-                          `/event/${encodedEventId}`,
-                          `/entries?eventId=${encodedEventId}`,
-                        ],
-                        eventorConfig
-                      );
-                      const data = parseEventorXml({
-                        eventId: sanitizedEventId,
-                        eventXml,
-                        classesXml: eventXml,
-                        entriesXml,
+                      const response = await apiFetch('/api/eventor/import-event', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          eventId: sanitizedEventId,
+                          apiKey: eventorConfig.apiKey,
+                          baseUrl: eventorConfig.baseUrl,
+                        }),
                       });
+                      const responseBody = await response.json() as unknown;
+                      const data = parseEventorImportApiResponse(responseBody);
+                      if (!response.ok) {
+                        throw new Error('Kunde inte hämta tävlingen från Eventor.');
+                      }
                       if (!data.event) {
                         throw new Error('Eventor returnerade ofullständiga tävlingsuppgifter.');
                       }

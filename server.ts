@@ -5781,6 +5781,13 @@ async function startServer() {
         return;
       }
       const classIdToName = parseEventorClassesXml(classesXml);
+      if (classIdToName.size === 0) {
+        res.status(502).json({
+          success: false,
+          error: 'Eventor returnerade ingen klasslista.',
+        });
+        return;
+      }
       const entries = parseEventorEntriesXml(entriesXml, classIdToName);
       res.json({
         success: true,
