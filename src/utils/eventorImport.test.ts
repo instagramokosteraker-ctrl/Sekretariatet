@@ -7,6 +7,7 @@ import {
   buildEventorClassMapping,
   parseEventorImportApiResponse,
 } from './eventorImport';
+import { getDrawEligibleClasses } from './drawClassSelection';
 
 const classRows = [
   { id: 'class-vit', name: 'Vit' },
@@ -49,6 +50,24 @@ describe('Eventor dedicated class-list import', () => {
     expect(mapping.classes.map(({ name, eventorClassId }) => [name, eventorClassId])).toEqual(
       classRows.map(({ id, name }) => [name, id])
     );
+    expect(mapping.classes.every((cls) => cls.freeStart === false)).toBe(true);
+    expect(getDrawEligibleClasses(mapping.classes).map((cls) => cls.name)).toEqual([
+      'Vit',
+      'Gul',
+      'Orange',
+      'Svart',
+    ]);
+    const xmlImportClasses = buildEventorClassMapping(
+      parsed,
+      'EVENTOR_XML',
+      1234
+    ).classes;
+    expect(getDrawEligibleClasses(xmlImportClasses).map((cls) => cls.name)).toEqual([
+      'Vit',
+      'Gul',
+      'Orange',
+      'Svart',
+    ]);
     expect(
       parsed.entries.map((entry) => [
         entry.className,

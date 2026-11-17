@@ -15,7 +15,10 @@ import {
   formatSiNumber,
 } from '../services/sportidentProtocol';
 import { buildIofStartListXml, triggerTextFileDownload } from '../utils/iofXml';
-import { reconcileDrawClassId } from '../utils/drawClassSelection';
+import {
+  getDrawEligibleClasses,
+  reconcileDrawClassId,
+} from '../utils/drawClassSelection';
 import { RunnerStatusIndicator } from './StatusLabels';
 
 interface DrawViewProps {
@@ -47,8 +50,14 @@ export function DrawView({
   competitors,
   onDrawClass,
 }: DrawViewProps) {
+  const drawEligibleClasses = useMemo(
+    () => getDrawEligibleClasses(classes),
+    [classes]
+  );
   // Start Draw state
-  const [drawClassId, setDrawClassId] = useState<string>(classes[0]?.id ?? '');
+  const [drawClassId, setDrawClassId] = useState<string>(
+    drawEligibleClasses[0]?.id ?? ''
+  );
   const [drawMode, setDrawMode] = useState<'INTERVAL' | 'MASS' | 'FREE'>('INTERVAL');
   const [firstStartClock, setFirstStartClock] = useState<string>(competition.zeroTimeStr);
   const [intervalSec, setIntervalSec] = useState<number>(120);
@@ -60,12 +69,14 @@ export function DrawView({
   const [vacantSlotsPreview, setVacantSlotsPreview] = useState<string[]>([]);
 
   useEffect(() => {
-    setDrawClassId((currentClassId) => reconcileDrawClassId(currentClassId, classes));
-  }, [classes]);
+    setDrawClassId((currentClassId) =>
+      reconcileDrawClassId(currentClassId, drawEligibleClasses)
+    );
+  }, [drawEligibleClasses]);
 
   const selectedClass = useMemo(
-    () => classes.find((c) => c.id === drawClassId),
-    [classes, drawClassId]
+    () => drawEligibleClasses.find((c) => c.id === drawClassId),
+    [drawEligibleClasses, drawClassId]
   );
 
   const selectedClassCompetitors = useMemo(() => {
@@ -219,9 +230,12 @@ export function DrawView({
               <select
                 value={selectedClass?.id ?? ''}
                 onChange={(e) => setDrawClassId(e.target.value)}
+                disabled={drawEligibleClasses.length === 0}
                 className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg font-medium"
               >
-                {classes.map((cls) => {
+                {drawEligibleClasses.length === 0 ? (
+                  <option value="">Ingen klass med tilldelad starttid</option>
+                ) : drawEligibleClasses.map((cls) => {
                   const cnt = competitors.filter((c) => c.classId === cls.id).length;
                   return (
                     <option key={cls.id} value={cls.id}>

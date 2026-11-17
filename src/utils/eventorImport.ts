@@ -132,7 +132,7 @@ export function buildEventorClassMapping(
       classFormat: 'STANDARD',
       forkCourseIds: [],
       allowDirectEntry: true,
-      freeStart: true,
+      freeStart: false,
       autoMatchCourse: true,
     })
   );

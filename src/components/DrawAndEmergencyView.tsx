@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Clock,
@@ -22,6 +22,10 @@ import {
   formatSiNumber,
 } from '../services/sportidentProtocol';
 import { buildIofStartListXml, triggerTextFileDownload } from '../utils/iofXml';
+import {
+  getDrawEligibleClasses,
+  reconcileDrawClassId,
+} from '../utils/drawClassSelection';
 import { RunnerStatusIndicator } from './StatusLabels';
 
 interface DrawAndEmergencyViewProps {
@@ -65,8 +69,14 @@ export function DrawAndEmergencyView({
   onRecalculateAll,
   onAssignManualFinish,
 }: DrawAndEmergencyViewProps) {
+  const drawEligibleClasses = useMemo(
+    () => getDrawEligibleClasses(classes),
+    [classes]
+  );
   // Start Draw state
-  const [drawClassId, setDrawClassId] = useState<string>(classes[0]?.id ?? '');
+  const [drawClassId, setDrawClassId] = useState<string>(
+    drawEligibleClasses[0]?.id ?? ''
+  );
   const [drawMode, setDrawMode] = useState<'INTERVAL' | 'MASS' | 'FREE'>('INTERVAL');
   const [firstStartClock, setFirstStartClock] = useState<string>(competition.zeroTimeStr);
   const [intervalSec, setIntervalSec] = useState<number>(120);
@@ -88,6 +98,12 @@ export function DrawAndEmergencyView({
     msg: string;
   } | null>(null);
 
+  useEffect(() => {
+    setDrawClassId((currentClassId) =>
+      reconcileDrawClassId(currentClassId, drawEligibleClasses)
+    );
+  }, [drawEligibleClasses]);
+
   // All unique control codes across courses
   const allCourseControlCodes = useMemo(() => {
     const set = new Set<number>();
@@ -106,7 +122,7 @@ export function DrawAndEmergencyView({
 
   const handleRunDraw = async (e: React.FormEvent) => {
     e.preventDefault();
-    const targetClsId = drawClassId || classes[0]?.id;
+    const targetClsId = drawEligibleClasses.find((cls) => cls.id === drawClassId)?.id;
     if (!targetClsId) return;
     setDrawBusy(true);
     setDrawFeedback(null);
@@ -537,9 +553,12 @@ export function DrawAndEmergencyView({
             <select
               value={drawClassId}
               onChange={(e) => setDrawClassId(e.target.value)}
+              disabled={drawEligibleClasses.length === 0}
               className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg"
             >
-              {classes.map((cls) => (
+            {drawEligibleClasses.length === 0 ? (
+              <option value="">Ingen klass med tilldelad starttid</option>
+            ) : drawEligibleClasses.map((cls) => (
                 <option key={cls.id} value={cls.id}>
                   {cls.name} ({competitors.filter((c) => c.classId === cls.id).length} st)
                 </option>
