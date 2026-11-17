@@ -15,6 +15,7 @@ import type {
   RunnerDbSource,
   SICardSeries,
 } from '../types/sportident';
+import type { ReadoutHistoryRecord } from '../services/readoutHistoryStore';
 import {
   formatSecondsAsClock,
   formatSiNumber,
@@ -60,19 +61,16 @@ interface EntriesRegistrationViewProps {
     capturedAt: number;
     mode: UsbStationMode;
   } | null;
-  pendingUnknownReadout: {
-    siNumber: number;
-    checkTimeSec?: number | null;
-    startTimeSec?: number | null;
-    finishTimeSec?: number | null;
-    punches?: CardPunch[];
-    suggestedRunner?: RunnerDbEntry | null;
-  } | null;
-  onClearPendingUnknown: () => void;
+  selectedUnknownReadout: ReadoutHistoryRecord | null;
+  unknownReadoutSiPrefill: number | null;
+  onClearSelectedUnknownReadout: () => void;
   onSimulateCardScanForEntry: () => void;
   onCreateCompetitor: (
     payload: Partial<Competitor> & {
       pendingReadout?: {
+        clientReadoutId?: string;
+        captureSequence?: number;
+        capturedAt?: string;
         checkTimeSec?: number | null;
         startTimeSec?: number | null;
         finishTimeSec?: number | null;
@@ -99,8 +97,9 @@ export function EntriesRegistrationView({
   onClearUsbError,
   onOpenHardwareSettings,
   capturedCard,
-  pendingUnknownReadout,
-  onClearPendingUnknown,
+  selectedUnknownReadout,
+  unknownReadoutSiPrefill,
+  onClearSelectedUnknownReadout,
   onSimulateCardScanForEntry,
   onCreateCompetitor,
   onUpdateCompetitor,
@@ -231,17 +230,20 @@ export function EntriesRegistrationView({
     }
   }, [capturedCard, runnerDb]);
 
-  // Populate SI-number (and suggested runner if any) when linking an unknown read-out card from Finish
+  // Populate SI-number and suggested runner from the selected unknown history record.
   useEffect(() => {
-    if (pendingUnknownReadout) {
+    if (selectedUnknownReadout) {
       lastAutoFilledSiRef.current = null;
-      setSiInput(String(pendingUnknownReadout.siNumber));
-      if (pendingUnknownReadout.suggestedRunner) {
-        setFullName(pendingUnknownReadout.suggestedRunner.fullName);
-        setClub(pendingUnknownReadout.suggestedRunner.club);
+      setSiInput(String(selectedUnknownReadout.readout.siNumber));
+      if (selectedUnknownReadout.suggestedRunner) {
+        setFullName(selectedUnknownReadout.suggestedRunner.fullName);
+        setClub(selectedUnknownReadout.suggestedRunner.club);
       }
+    } else if (unknownReadoutSiPrefill !== null) {
+      lastAutoFilledSiRef.current = null;
+      setSiInput(String(unknownReadoutSiPrefill));
     }
-  }, [pendingUnknownReadout]);
+  }, [selectedUnknownReadout, unknownReadoutSiPrefill]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -261,7 +263,8 @@ export function EntriesRegistrationView({
 
     const allocSec = startClock.trim() ? parseClockToSeconds(startClock) : null;
     const isLinkingUnknown =
-      pendingUnknownReadout && pendingUnknownReadout.siNumber === parsedSi;
+      selectedUnknownReadout &&
+      selectedUnknownReadout.readout.siNumber === parsedSi;
 
     const err = await onCreateCompetitor({
       siNumber: parsedSi,
@@ -273,14 +276,24 @@ export function EntriesRegistrationView({
       isBorrowedCard,
       runnerProfileId: selectedRunner?.id ?? null,
       allocatedStartSec: allocSec,
-      pendingReadout: isLinkingUnknown ? pendingUnknownReadout : undefined,
+      pendingReadout: isLinkingUnknown
+        ? {
+            clientReadoutId: selectedUnknownReadout.clientReadoutId,
+            captureSequence: selectedUnknownReadout.captureSequence,
+            capturedAt: selectedUnknownReadout.capturedAt,
+            checkTimeSec: selectedUnknownReadout.readout.checkTimeSec,
+            startTimeSec: selectedUnknownReadout.readout.startTimeSec,
+            finishTimeSec: selectedUnknownReadout.readout.finishTimeSec,
+            punches: selectedUnknownReadout.readout.punches,
+          }
+        : undefined,
     });
 
     setSaving(false);
     if (err) {
       setError(err);
     } else {
-      if (isLinkingUnknown) onClearPendingUnknown();
+      if (isLinkingUnknown) onClearSelectedUnknownReadout();
       setSuccessNotice(
         `Anmälan sparad i Firestore. ${fullName.trim()} anmäld med SI ${formatSiNumber(parsedSi)}${
           isLinkingUnknown
@@ -408,17 +421,17 @@ export function EntriesRegistrationView({
           </span>
         </div>
 
-        {pendingUnknownReadout && (
+        {selectedUnknownReadout && (
           <div className="px-4 py-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-lg flex items-center justify-between gap-3 text-xs text-amber-800 dark:text-amber-300">
             <span>
               Kopplar utläst SI-bricka{' '}
-              <strong className="font-mono">{formatSiNumber(pendingUnknownReadout.siNumber)}</strong>{' '}
-              ({pendingUnknownReadout.punches?.length ?? 0} stämplingar i minnet valideras direkt vid
+              <strong className="font-mono">{formatSiNumber(selectedUnknownReadout.readout.siNumber)}</strong>{' '}
+              ({selectedUnknownReadout.readout.punches.length} stämplingar i minnet valideras direkt vid
               sparande).
             </span>
             <button
               type="button"
-              onClick={onClearPendingUnknown}
+              onClick={onClearSelectedUnknownReadout}
               className="underline font-medium shrink-0"
             >
               Rensa

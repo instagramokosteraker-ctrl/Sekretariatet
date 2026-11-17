@@ -6821,6 +6821,9 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   payload: Partial<Competitor> & {
     runnerProfileId?: string | null;
     pendingReadout?: {
+      clientReadoutId?: string;
+      captureSequence?: number;
+      capturedAt?: string;
       checkTimeSec?: number | null;
       startTimeSec?: number | null;
       finishTimeSec?: number | null;

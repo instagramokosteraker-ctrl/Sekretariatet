@@ -31,6 +31,9 @@ export interface QueuedReadoutItem {
 
 export interface ReadoutDeliveryResult {
   queuedOffline: boolean;
+  clientReadoutId?: string;
+  captureSequence?: number;
+  capturedAt?: string;
   competitor?: Competitor | null;
   event?: LiveEventItem;
   suggestedRunner?: RunnerDbEntry | null;
@@ -269,6 +272,13 @@ class OfflineReadoutQueueManager {
       ...readout,
       clientReadoutId,
     };
+    const readoutIdentity = {
+      clientReadoutId,
+      ...(readout.captureSequence !== undefined
+        ? { captureSequence: readout.captureSequence }
+        : {}),
+      ...(readout.capturedAt !== undefined ? { capturedAt: readout.capturedAt } : {}),
+    };
 
     const queueItem: QueuedReadoutItem = {
       id: clientReadoutId,
@@ -285,7 +295,7 @@ class OfflineReadoutQueueManager {
 
     // 2. If offline or simulated forest-offline, keep safely queued!
     if (this.simulatedOffline || !this.browserOnline) {
-      return { queuedOffline: true };
+      return { queuedOffline: true, ...readoutIdentity };
     }
 
     // 3. Try immediate delivery & flush
@@ -299,7 +309,7 @@ class OfflineReadoutQueueManager {
       return delivered;
     }
 
-    return { queuedOffline: true };
+    return { queuedOffline: true, ...readoutIdentity };
   }
 
   public async submitOnlinePunchGuaranteed(
@@ -373,7 +383,13 @@ class OfflineReadoutQueueManager {
           submitReadoutToFirestore(item.eventId, item.readoutPayload)
         );
         this.recordDeliverySuccess();
-        return { queuedOffline: false, ...data };
+        return {
+          queuedOffline: false,
+          ...data,
+          clientReadoutId: item.readoutPayload.clientReadoutId,
+          captureSequence: item.readoutPayload.captureSequence,
+          capturedAt: item.readoutPayload.capturedAt,
+        };
       }
 
       if (item.kind === 'ONLINE_PUNCH' && item.onlinePunchPayload) {

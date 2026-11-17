@@ -23,6 +23,7 @@ import type {
   SIStation,
 } from '../types/sportident';
 import type { OfflineQueueSnapshot } from '../services/offlineReadoutQueue';
+import type { ReadoutHistoryRecord } from '../services/readoutHistoryStore';
 import type {
   SerialConnectionStatus,
   UsbStationMode,
@@ -43,6 +44,9 @@ interface ReadoutDashboardProps {
   competitors: Competitor[];
   runnerDbCount: number;
   events: LiveEventItem[];
+  readoutHistory: ReadoutHistoryRecord[];
+  latestReadoutId: string | null;
+  readoutHistoryError: string | null;
   offlineSnap: OfflineQueueSnapshot;
   serialStatus: SerialConnectionStatus;
   onConnectUsb: () => Promise<void>;
@@ -73,7 +77,7 @@ interface ReadoutDashboardProps {
     siNumber: number;
     punchTimeSec?: number;
   }) => Promise<void>;
-  onLinkUnknownCardToEntry: (siNumber: number) => void;
+  onLinkUnknownCardToEntry: (siNumber: number, clientReadoutId?: string) => void;
   onInspectHex: (hex: string) => void;
   onNavigateForest: () => void;
 }
@@ -85,6 +89,9 @@ export function ReadoutDashboard({
   competitors,
   runnerDbCount,
   events,
+  readoutHistory,
+  latestReadoutId,
+  readoutHistoryError,
   offlineSnap,
   serialStatus,
   onConnectUsb,
@@ -114,6 +121,7 @@ export function ReadoutDashboard({
   const [busy, setBusy] = useState(false);
   const [modalRunner, setModalRunner] = useState<Competitor | null>(null);
   const [queueActionId, setQueueActionId] = useState<string | null>(null);
+  const [selectedReadoutId, setSelectedReadoutId] = useState<string | null>(null);
 
   const inForestCount = useMemo(
     () =>
@@ -185,17 +193,35 @@ export function ReadoutDashboard({
     [competitors]
   );
 
-  // Pick inspected runner (either explicitly selected, or most recently read out)
+  const latestReadout = useMemo(
+    () =>
+      readoutHistory.find((record) => record.clientReadoutId === latestReadoutId) ?? null,
+    [latestReadoutId, readoutHistory]
+  );
+  const recentReadouts = useMemo(() => readoutHistory.slice(0, 30), [readoutHistory]);
+
+  // This detail panel is user-selected and is separate from capture-ordered Latest Readout.
   const inspectedRunner = useMemo(() => {
-    if (selectedRunnerId) {
-      const found = competitors.find((c) => c.id === selectedRunnerId);
-      if (found) return found;
-    }
-    const readOut = competitors
-      .filter((c) => c.readoutAt !== null)
-      .sort((a, b) => (b.readoutAt ?? '').localeCompare(a.readoutAt ?? ''));
-    return readOut[0] ?? competitors[0] ?? null;
+    return selectedRunnerId
+      ? competitors.find((competitor) => competitor.id === selectedRunnerId) ?? null
+      : null;
   }, [competitors, selectedRunnerId]);
+
+  const latestReadoutResultLabel = latestReadout?.resultStatus
+    ? latestReadout.resultStatus
+    : latestReadout?.readoutState === 'UNKNOWN'
+      ? 'Unknown card'
+      : 'Readout captured';
+
+  const latestReadoutSyncLabel = latestReadout
+    ? {
+        PERSISTING: 'Saving locally',
+        LOCAL_SAVED: 'Saved locally',
+        QUEUED: 'Sync pending',
+        SYNCED: 'Synced',
+        SAVE_FAILED: 'Save failed',
+      }[latestReadout.deliveryState]
+    : null;
 
   const inspectedClass = useMemo(
     () => classes.find((c) => c.id === inspectedRunner?.classId) ?? null,
@@ -702,6 +728,187 @@ export function ReadoutDashboard({
           </div>
         </div>
       </section>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
+        <section
+          aria-live="polite"
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden"
+        >
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Senaste SI-avläsning
+              </h2>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Senaste fångade avläsning · sekvens{' '}
+                {latestReadout?.captureSequence ?? '—'}
+              </p>
+            </div>
+            {latestReadoutSyncLabel && (
+              <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                {latestReadoutSyncLabel}
+              </span>
+            )}
+          </div>
+          {readoutHistoryError && (
+            <div className="px-4 py-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/30">
+              Avläsningshistoriken kunde inte laddas eller sparas: {readoutHistoryError}
+            </div>
+          )}
+          {latestReadout ? (
+            <div className="px-4 py-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <div className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                    {latestReadout.competitorName ?? 'SI-bricka'} · SI{' '}
+                    {formatSiNumber(latestReadout.readout.siNumber)}
+                  </div>
+                  {latestReadout.className && (
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      {latestReadout.className}
+                    </div>
+                  )}
+                </div>
+                <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                  {latestReadoutResultLabel}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
+                <span>
+                  Mål:{' '}
+                  <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                    {formatSecondsAsClock(latestReadout.readout.finishTimeSec)}
+                  </strong>
+                </span>
+                {latestReadout.competitorSnapshot?.runningTimeSec !== null &&
+                  latestReadout.competitorSnapshot?.runningTimeSec !== undefined && (
+                    <span>
+                      Tid:{' '}
+                      <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                        {formatDurationMmSs(
+                          latestReadout.competitorSnapshot.runningTimeSec
+                        )}
+                      </strong>
+                    </span>
+                  )}
+                <span>
+                  Fångad:{' '}
+                  <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                    {new Date(latestReadout.capturedAt).toLocaleTimeString('sv-SE')}
+                  </strong>
+                </span>
+              </div>
+              {latestReadout.syncError && (
+                <p className="mt-2 text-xs text-red-700 dark:text-red-300">
+                  {latestReadout.syncError}
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="px-4 py-5 text-sm text-slate-500 dark:text-slate-400">
+              Ingen SI-avläsning har fångats för tävlingen.
+            </p>
+          )}
+        </section>
+
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Avläsningshistorik
+            </h2>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Sorterad efter fångstsekvens · {readoutHistory.length} avläsningar
+            </p>
+          </div>
+          {recentReadouts.length > 0 ? (
+            <ol className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+              {recentReadouts.map((record) => {
+                const resultLabel = record.resultStatus
+                  ? record.resultStatus
+                  : record.readoutState === 'UNKNOWN'
+                    ? 'Unknown card'
+                    : 'Captured';
+                const syncLabel =
+                  record.deliveryState === 'SYNCED'
+                    ? 'Synced'
+                    : record.deliveryState === 'QUEUED'
+                      ? 'Sync pending'
+                      : record.deliveryState === 'LOCAL_SAVED'
+                        ? 'Saved locally'
+                        : record.deliveryState === 'SAVE_FAILED'
+                          ? 'Save failed'
+                          : 'Saving';
+                return (
+                  <li key={record.clientReadoutId} className="px-3 py-2">
+                    <div className="flex items-start gap-2">
+                      <button
+                        type="button"
+                        aria-expanded={selectedReadoutId === record.clientReadoutId}
+                        onClick={() =>
+                          setSelectedReadoutId((current) =>
+                            current === record.clientReadoutId
+                              ? null
+                              : record.clientReadoutId
+                          )
+                        }
+                        className="flex-1 min-w-0 text-left rounded px-1 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800"
+                      >
+                        <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                          <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-200">
+                            #{record.captureSequence} ·{' '}
+                            {record.competitorName ?? 'SI-bricka'} · SI{' '}
+                            {formatSiNumber(record.readout.siNumber)}
+                          </span>
+                          <span className="shrink-0 text-slate-600 dark:text-slate-300">
+                            {resultLabel} · {syncLabel}
+                          </span>
+                        </span>
+                      </button>
+                      {record.readoutState === 'UNKNOWN' && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onLinkUnknownCardToEntry(
+                              record.readout.siNumber,
+                              record.clientReadoutId
+                            )
+                          }
+                          className="shrink-0 text-xs font-medium text-amber-700 dark:text-amber-300 hover:underline"
+                        >
+                          Anmäl
+                        </button>
+                      )}
+                    </div>
+                    {selectedReadoutId === record.clientReadoutId && (
+                      <div className="mt-2 ml-1 text-[11px] text-slate-600 dark:text-slate-400">
+                        <div>
+                          Fångad {new Date(record.capturedAt).toLocaleString('sv-SE')}
+                          {' · '}Mål {formatSecondsAsClock(record.readout.finishTimeSec)}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {record.readout.punches.map((punch, index) => (
+                            <span
+                              key={`${record.clientReadoutId}-${index}`}
+                              className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 font-mono"
+                            >
+                              {punch.code} · {formatSecondsAsClock(punch.timeSec)}
+                            </span>
+                          ))}
+                          {record.readout.punches.length === 0 && <span>Inga stämplingar</span>}
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className="px-4 py-5 text-sm text-slate-500 dark:text-slate-400">
+              Historiken visas här efter första SI-avläsningen.
+            </p>
+          )}
+        </section>
+      </div>
 
       {/* Main 12-Column MeOS Readout & Live Timing Split */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">

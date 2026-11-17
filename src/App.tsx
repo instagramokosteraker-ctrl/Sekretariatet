@@ -82,6 +82,12 @@ import {
   type ReadoutDeliveryResult,
 } from './services/offlineReadoutQueue';
 import {
+  getLatestReadoutId,
+  readoutHistoryStore,
+  sortReadoutHistory,
+  type ReadoutHistoryRecord,
+} from './services/readoutHistoryStore';
+import {
   apiFetch,
   ensureApiResponseOk,
   getStoredAuthSession,
@@ -1181,49 +1187,111 @@ export default function App() {
     }
   }, [activeTab]);
 
-  const [pendingUnknownReadout, setPendingUnknownReadout] = useState<{
-    siNumber: number;
-    checkTimeSec?: number | null;
-    startTimeSec?: number | null;
-    finishTimeSec?: number | null;
-    punches?: CardPunch[];
-    suggestedRunner?: RunnerDbEntry | null;
-  } | null>(null);
+  const [readoutHistory, setReadoutHistory] = useState<ReadoutHistoryRecord[]>(() =>
+    readoutHistoryStore.getSnapshot()
+  );
+  const [readoutHistoryError, setReadoutHistoryError] = useState<string | null>(null);
+  const [selectedUnknownReadoutId, setSelectedUnknownReadoutId] = useState<string | null>(
+    null
+  );
+  const [unknownReadoutSiPrefill, setUnknownReadoutSiPrefill] = useState<number | null>(
+    null
+  );
+
+  const activeReadoutHistory = useMemo(
+    () => sortReadoutHistory(readoutHistory, activeEventId),
+    [readoutHistory, activeEventId]
+  );
+  const latestReadoutId = useMemo(
+    () => getLatestReadoutId(readoutHistory, activeEventId),
+    [readoutHistory, activeEventId]
+  );
+  const selectedUnknownReadout = useMemo(
+    () =>
+      readoutHistory.find(
+        (record) => record.clientReadoutId === selectedUnknownReadoutId
+      ) ?? null,
+    [readoutHistory, selectedUnknownReadoutId]
+  );
 
   useEffect(() => {
     activeEventIdRef.current = activeEventId;
   }, [activeEventId]);
 
-  const handleReadoutResultFeedback = useCallback((res: ReadoutDeliveryResult) => {
+  const handleReadoutResultFeedback = useCallback(async (res: ReadoutDeliveryResult) => {
+    const clientReadoutId = res.clientReadoutId;
+    if (!clientReadoutId || !readoutHistoryStore.getRecord(clientReadoutId)) {
+      console.error(
+        'Readout response did not match a captured history record:',
+        clientReadoutId ?? '(missing clientReadoutId)'
+      );
+      return;
+    }
+
     const syncedCompetitor = res.competitor;
     if (res.queuedOffline) {
+      await readoutHistoryStore.update(clientReadoutId, {
+        deliveryState: 'QUEUED',
+        syncError: null,
+      });
       if (soundEnabledRef.current) playMeosFeedbackTone('registration');
       return;
     }
     if (res.unknownCardReadout) {
-      setPendingUnknownReadout({
-        ...res.unknownCardReadout,
+      await readoutHistoryStore.update(clientReadoutId, {
+        deliveryState: 'SYNCED',
+        readoutState: 'UNKNOWN',
         suggestedRunner: res.suggestedRunner ?? null,
+        syncError: null,
       });
       if (soundEnabledRef.current) playMeosFeedbackTone('mp');
     } else if (syncedCompetitor) {
+      await readoutHistoryStore.update(clientReadoutId, {
+        deliveryState: 'SYNCED',
+        readoutState: 'PROCESSED',
+        competitorId: syncedCompetitor.id,
+        competitorName: syncedCompetitor.fullName,
+        resultStatus: syncedCompetitor.status,
+        competitorSnapshot: syncedCompetitor,
+        syncError: null,
+      });
       setCompetitors((current) =>
         current.map((competitor) =>
           competitor.id === syncedCompetitor.id ? syncedCompetitor : competitor
         )
       );
-      setSelectedRunnerId(syncedCompetitor.id);
       if (soundEnabledRef.current) {
         playMeosFeedbackTone(syncedCompetitor.status === 'OK' ? 'ok' : 'mp');
       }
+    } else {
+      await readoutHistoryStore.update(clientReadoutId, {
+        deliveryState: 'SYNCED',
+        syncError: null,
+      });
     }
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = readoutHistoryStore.subscribe(setReadoutHistory);
+    void readoutHistoryStore
+      .initialize()
+      .then(() => setReadoutHistoryError(null))
+      .catch((error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : 'Readout history could not be loaded.';
+        setReadoutHistoryError(message);
+        console.error('Readout history initialization failed:', error);
+      });
+    return unsubscribe;
   }, []);
 
   // Subscribe to durable offline readout queue
   useEffect(() => {
     const unsubSnap = offlineReadoutQueue.subscribe(setOfflineSnap);
     const unsubSynced = offlineReadoutQueue.onItemSynced((res) => {
-      handleReadoutResultFeedback(res);
+      void handleReadoutResultFeedback(res).catch((error: unknown) => {
+        console.error('Could not update the matching readout history item:', error);
+      });
     });
     return () => {
       unsubSnap();
@@ -1237,14 +1305,52 @@ export default function App() {
 
   const submitFullReadoutToServer = useCallback(
     async (readout: FullCardReadoutPayload) => {
-      const res = await offlineReadoutQueue.submitReadoutGuaranteed(
+      if (!readoutHistoryStore.isInitialized) {
+        await readoutHistoryStore.initialize();
+      }
+
+      const eventId = activeEventIdRef.current;
+      const record = readoutHistoryStore.capture(
         {
           ...readout,
           autoCreateFromRunnerDb: eventor.autoCreateFromRunnerDbOnReadout,
         },
-        activeEventIdRef.current
+        eventId
       );
-      handleReadoutResultFeedback(res);
+
+      try {
+        await readoutHistoryStore.persist(record);
+        await readoutHistoryStore.update(record.clientReadoutId, {
+          deliveryState: 'LOCAL_SAVED',
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Readout history could not be saved.';
+        await readoutHistoryStore.update(
+          record.clientReadoutId,
+          { deliveryState: 'SAVE_FAILED', syncError: message },
+          false
+        );
+        setReadoutHistoryError(message);
+        throw error;
+      }
+
+      try {
+        const res = await offlineReadoutQueue.submitReadoutGuaranteed(
+          record.readout,
+          eventId ?? undefined
+        );
+        await handleReadoutResultFeedback(res);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Readout delivery could not be started.';
+        await readoutHistoryStore.update(
+          record.clientReadoutId,
+          { deliveryState: 'SAVE_FAILED', syncError: message },
+          false
+        );
+        throw error;
+      }
     },
     [eventor.autoCreateFromRunnerDbOnReadout, handleReadoutResultFeedback]
   );
@@ -1310,7 +1416,9 @@ export default function App() {
       }
     });
     const unsubReadout = sportidentSerial.onFullCardReadout((readout) => {
-      void submitFullReadoutToServer(readout);
+      void submitFullReadoutToServer(readout).catch((error: unknown) => {
+        console.error('SI-card readout could not be stored or delivered:', error);
+      });
     });
     const unsubRegCard = sportidentSerial.onRegistrationCard((siNumber, cardSeries) => {
       const currentMode = sportidentSerial.getStatus().usbMode;
@@ -1329,7 +1437,15 @@ export default function App() {
     });
 
     // Silently reconnect previously authorized USB / WebUSB SI-stations without browser popup
-    void sportidentSerial.tryAutoReconnect();
+    void readoutHistoryStore
+      .initialize()
+      .then(() => sportidentSerial.tryAutoReconnect())
+      .catch((error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : 'Readout history could not be loaded.';
+        setReadoutHistoryError(message);
+        console.error('Could not initialize readout history before station reconnect:', error);
+      });
 
     return () => {
       unsubStatus();
@@ -1736,7 +1852,8 @@ export default function App() {
     async (eventId: string) => {
       setCompetitionSwitchError(null);
       setSelectedRunnerId(null);
-      setPendingUnknownReadout(null);
+      setSelectedUnknownReadoutId(null);
+      setUnknownReadoutSiPrefill(null);
       if (eventId === activeEventId) return true;
 
       try {
@@ -2008,6 +2125,29 @@ export default function App() {
   ): Promise<string | null> => {
     try {
       const saved = await saveDirectEntryToFirestore(payload);
+      const readoutId = payload.pendingReadout?.clientReadoutId;
+      if (readoutId) {
+        try {
+          await readoutHistoryStore.update(readoutId, {
+            readoutState: 'PROCESSED',
+            deliveryState: 'SYNCED',
+            competitorId: saved.competitor.id,
+            competitorName: saved.competitor.fullName,
+            className:
+              classes.find((candidate) => candidate.id === saved.competitor.classId)?.name ??
+              null,
+            resultStatus: saved.competitor.status,
+            competitorSnapshot: saved.competitor,
+            suggestedRunner: null,
+            syncError: null,
+          });
+        } catch (error) {
+          console.error(
+            `Direct entry saved, but readout history ${readoutId} could not be updated:`,
+            error
+          );
+        }
+      }
       setCompetitors((current) => [saved.competitor, ...current]);
       const savedIsFinished =
         saved.competitor.status === 'OK' || saved.competitor.status === 'MP';
@@ -2262,7 +2402,8 @@ export default function App() {
       });
 
       setSelectedRunnerId(null);
-      setPendingUnknownReadout(null);
+      setSelectedUnknownReadoutId(null);
+      setUnknownReadoutSiPrefill(null);
       setNewEvtName('');
       setNewEvtSeriesName('');
       setNewEvtCourseParsed(null);
@@ -2459,7 +2600,8 @@ export default function App() {
       ...previous.filter((item) => item.id !== competitionId),
     ]);
     setSelectedRunnerId(null);
-    setPendingUnknownReadout(null);
+    setSelectedUnknownReadoutId(null);
+    setUnknownReadoutSiPrefill(null);
     return {
       name: competition.name,
       addedClasses: classes.length,
@@ -4004,12 +4146,17 @@ export default function App() {
                   competitors={competitors}
                   runnerDbCount={runnerDb.length}
                   events={events}
+                  readoutHistory={activeReadoutHistory}
+                  latestReadoutId={latestReadoutId}
+                  readoutHistoryError={readoutHistoryError}
                   offlineSnap={offlineSnap}
                   serialStatus={serialStatus}
                   onConnectUsb={async () => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connect();
                   }}
                   onConnectWebUsb={async () => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connectWebUsb();
                   }}
                   onDisconnectUsb={async () => {
@@ -4048,12 +4195,16 @@ export default function App() {
                   onSimulateFullReadout={handleSimulateFullReadout}
                   onSimulateOnlinePunch={handleSimulateOnlinePunch}
                   onLinkUnknownCardToEntry={(siNumber) => {
-                    const dbSuggested =
-                      runnerDb.find((r) => r.siNumber === siNumber) ?? null;
-                    setPendingUnknownReadout((prev) =>
-                      prev && prev.siNumber === siNumber
-                        ? prev
-                        : { siNumber, suggestedRunner: dbSuggested }
+                    const unknownReadout = activeReadoutHistory.find(
+                      (record) =>
+                        record.readout.siNumber === siNumber &&
+                        record.readoutState === 'UNKNOWN'
+                    );
+                    setSelectedUnknownReadoutId(
+                      unknownReadout?.clientReadoutId ?? null
+                    );
+                    setUnknownReadoutSiPrefill(
+                      unknownReadout ? null : siNumber
                     );
                     setActiveTab('entries');
                   }}
@@ -4077,9 +4228,11 @@ export default function App() {
                   capturedCard={capturedCard}
                   soundEnabled={soundEnabled}
                   onConnectUsb={async () => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connect();
                   }}
                   onConnectWebUsb={async () => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connectWebUsb();
                   }}
                   onDisconnectUsb={async () => {
@@ -4208,9 +4361,11 @@ export default function App() {
                   clubSettings={clubSettings}
                   serialStatus={serialStatus}
                   onConnectUsb={async () => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connect();
                   }}
                   onConnectWebUsb={async () => {
+                    await readoutHistoryStore.initialize();
                     await sportidentSerial.connectWebUsb();
                   }}
                   onDisconnectUsb={async () => {
@@ -4227,8 +4382,12 @@ export default function App() {
                       : undefined
                   }
                   capturedCard={capturedCard}
-                  pendingUnknownReadout={pendingUnknownReadout}
-                  onClearPendingUnknown={() => setPendingUnknownReadout(null)}
+                  selectedUnknownReadout={selectedUnknownReadout}
+                  unknownReadoutSiPrefill={unknownReadoutSiPrefill}
+                  onClearSelectedUnknownReadout={() => {
+                    setSelectedUnknownReadoutId(null);
+                    setUnknownReadoutSiPrefill(null);
+                  }}
                   onSimulateCardScanForEntry={() => {
                     const enteredSet = new Set(competitors.map((c) => c.siNumber));
                     const unenteredInDb = runnerDb.filter((r) => !enteredSet.has(r.siNumber));
