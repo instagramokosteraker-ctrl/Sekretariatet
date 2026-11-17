@@ -1191,12 +1191,6 @@ export default function App() {
     readoutHistoryStore.getSnapshot()
   );
   const [readoutHistoryError, setReadoutHistoryError] = useState<string | null>(null);
-  const [selectedUnknownReadoutId, setSelectedUnknownReadoutId] = useState<string | null>(
-    null
-  );
-  const [unknownReadoutSiPrefill, setUnknownReadoutSiPrefill] = useState<number | null>(
-    null
-  );
 
   const activeReadoutHistory = useMemo(
     () => sortReadoutHistory(readoutHistory, activeEventId),
@@ -1206,14 +1200,6 @@ export default function App() {
     () => getLatestReadoutId(readoutHistory, activeEventId),
     [readoutHistory, activeEventId]
   );
-  const selectedUnknownReadout = useMemo(
-    () =>
-      readoutHistory.find(
-        (record) => record.clientReadoutId === selectedUnknownReadoutId
-      ) ?? null,
-    [readoutHistory, selectedUnknownReadoutId]
-  );
-
   const createMpReviewIssue = useCallback(async (clientReadoutId: string) => {
     const record = readoutHistoryStore.getRecord(clientReadoutId);
     if (!record) throw new Error('Avläsningen hittades inte i historiken.');
@@ -1908,8 +1894,6 @@ export default function App() {
     async (eventId: string) => {
       setCompetitionSwitchError(null);
       setSelectedRunnerId(null);
-      setSelectedUnknownReadoutId(null);
-      setUnknownReadoutSiPrefill(null);
       if (eventId === activeEventId) return true;
 
       try {
@@ -2462,8 +2446,6 @@ export default function App() {
       });
 
       setSelectedRunnerId(null);
-      setSelectedUnknownReadoutId(null);
-      setUnknownReadoutSiPrefill(null);
       setNewEvtName('');
       setNewEvtSeriesName('');
       setNewEvtCourseParsed(null);
@@ -2660,8 +2642,6 @@ export default function App() {
       ...previous.filter((item) => item.id !== competitionId),
     ]);
     setSelectedRunnerId(null);
-    setSelectedUnknownReadoutId(null);
-    setUnknownReadoutSiPrefill(null);
     return {
       name: competition.name,
       addedClasses: classes.length,
@@ -4206,12 +4186,38 @@ export default function App() {
                   classes={classes}
                   stations={stations}
                   competitors={competitors}
+                  runnerDb={runnerDb}
+                  defaultClubName={clubSettings.clubName}
                   runnerDbCount={runnerDb.length}
                   events={events}
                   readoutHistory={activeReadoutHistory}
                   latestReadoutId={latestReadoutId}
                   readoutHistoryError={readoutHistoryError}
                   onCreateMpReviewIssue={createMpReviewIssue}
+                  onResolveUnknownCard={(record, siNumber, details) =>
+                    handleCreateDirectEntry({
+                      siNumber,
+                      cardSeries: record?.readout.cardSeries ?? inferCardSeries(siNumber),
+                      fullName: details.fullName,
+                      club: details.club,
+                      classId: details.classId,
+                      runnerProfileId: details.runnerProfileId,
+                      isRentalCard: details.isRentalCard,
+                      isBorrowedCard: details.isBorrowedCard,
+                      allocatedStartSec: details.allocatedStartSec,
+                      pendingReadout: record
+                        ? {
+                            clientReadoutId: record.clientReadoutId,
+                            captureSequence: record.captureSequence,
+                            capturedAt: record.capturedAt,
+                            checkTimeSec: record.readout.checkTimeSec,
+                            startTimeSec: record.readout.startTimeSec,
+                            finishTimeSec: record.readout.finishTimeSec,
+                            punches: record.readout.punches,
+                          }
+                        : undefined,
+                    })
+                  }
                   offlineSnap={offlineSnap}
                   serialStatus={serialStatus}
                   onConnectUsb={async () => {
@@ -4256,24 +4262,6 @@ export default function App() {
                     await updateActiveCompetitorRentalFields(id, { rentalReturned: true });
                   }}
                   onSimulateOnlinePunch={handleSimulateOnlinePunch}
-                  onLinkUnknownCardToEntry={(siNumber, clientReadoutId) => {
-                    const unknownReadout = clientReadoutId
-                      ? activeReadoutHistory.find(
-                          (record) => record.clientReadoutId === clientReadoutId
-                        )
-                      : activeReadoutHistory.find(
-                          (record) =>
-                            record.readout.siNumber === siNumber &&
-                            record.readoutState === 'UNKNOWN'
-                        );
-                    setSelectedUnknownReadoutId(
-                      unknownReadout?.clientReadoutId ?? null
-                    );
-                    setUnknownReadoutSiPrefill(
-                      unknownReadout ? null : siNumber
-                    );
-                    setActiveTab('entries');
-                  }}
                   onInspectHex={(hex) => {
                     setInspectHexTarget(hex);
                     if (ROLE_ALLOWED_TABS[effectiveRoleMode].includes('protocol')) {
@@ -4448,12 +4436,6 @@ export default function App() {
                       : undefined
                   }
                   capturedCard={capturedCard}
-                  selectedUnknownReadout={selectedUnknownReadout}
-                  unknownReadoutSiPrefill={unknownReadoutSiPrefill}
-                  onClearSelectedUnknownReadout={() => {
-                    setSelectedUnknownReadoutId(null);
-                    setUnknownReadoutSiPrefill(null);
-                  }}
                   onSimulateCardScanForEntry={() => {
                     const enteredSet = new Set(competitors.map((c) => c.siNumber));
                     const unenteredInDb = runnerDb.filter((r) => !enteredSet.has(r.siNumber));

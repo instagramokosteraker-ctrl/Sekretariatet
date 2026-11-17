@@ -7,7 +7,6 @@ import {
   UserPlus,
 } from 'lucide-react';
 import type {
-  CardPunch,
   ClubSettings,
   CompClass,
   Competitor,
@@ -15,7 +14,6 @@ import type {
   RunnerDbSource,
   SICardSeries,
 } from '../types/sportident';
-import type { ReadoutHistoryRecord } from '../services/readoutHistoryStore';
 import {
   formatSecondsAsClock,
   formatSiNumber,
@@ -61,21 +59,9 @@ interface EntriesRegistrationViewProps {
     capturedAt: number;
     mode: UsbStationMode;
   } | null;
-  selectedUnknownReadout: ReadoutHistoryRecord | null;
-  unknownReadoutSiPrefill: number | null;
-  onClearSelectedUnknownReadout: () => void;
   onSimulateCardScanForEntry: () => void;
   onCreateCompetitor: (
     payload: Partial<Competitor> & {
-      pendingReadout?: {
-        clientReadoutId?: string;
-        captureSequence?: number;
-        capturedAt?: string;
-        checkTimeSec?: number | null;
-        startTimeSec?: number | null;
-        finishTimeSec?: number | null;
-        punches?: CardPunch[];
-      };
       runnerProfileId?: string | null;
     }
   ) => Promise<string | null>;
@@ -97,9 +83,6 @@ export function EntriesRegistrationView({
   onClearUsbError,
   onOpenHardwareSettings,
   capturedCard,
-  selectedUnknownReadout,
-  unknownReadoutSiPrefill,
-  onClearSelectedUnknownReadout,
   onSimulateCardScanForEntry,
   onCreateCompetitor,
   onUpdateCompetitor,
@@ -230,21 +213,6 @@ export function EntriesRegistrationView({
     }
   }, [capturedCard, runnerDb]);
 
-  // Populate SI-number and suggested runner from the selected unknown history record.
-  useEffect(() => {
-    if (selectedUnknownReadout) {
-      lastAutoFilledSiRef.current = null;
-      setSiInput(String(selectedUnknownReadout.readout.siNumber));
-      if (selectedUnknownReadout.suggestedRunner) {
-        setFullName(selectedUnknownReadout.suggestedRunner.fullName);
-        setClub(selectedUnknownReadout.suggestedRunner.club);
-      }
-    } else if (unknownReadoutSiPrefill !== null) {
-      lastAutoFilledSiRef.current = null;
-      setSiInput(String(unknownReadoutSiPrefill));
-    }
-  }, [selectedUnknownReadout, unknownReadoutSiPrefill]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsedSi = Number(siInput.replace(/\D/g, ''));
@@ -262,10 +230,6 @@ export function EntriesRegistrationView({
     setSuccessNotice(null);
 
     const allocSec = startClock.trim() ? parseClockToSeconds(startClock) : null;
-    const isLinkingUnknown =
-      selectedUnknownReadout &&
-      selectedUnknownReadout.readout.siNumber === parsedSi;
-
     const err = await onCreateCompetitor({
       siNumber: parsedSi,
       cardSeries: inferCardSeries(parsedSi),
@@ -276,29 +240,15 @@ export function EntriesRegistrationView({
       isBorrowedCard,
       runnerProfileId: selectedRunner?.id ?? null,
       allocatedStartSec: allocSec,
-      pendingReadout: isLinkingUnknown
-        ? {
-            clientReadoutId: selectedUnknownReadout.clientReadoutId,
-            captureSequence: selectedUnknownReadout.captureSequence,
-            capturedAt: selectedUnknownReadout.capturedAt,
-            checkTimeSec: selectedUnknownReadout.readout.checkTimeSec,
-            startTimeSec: selectedUnknownReadout.readout.startTimeSec,
-            finishTimeSec: selectedUnknownReadout.readout.finishTimeSec,
-            punches: selectedUnknownReadout.readout.punches,
-          }
-        : undefined,
     });
 
     setSaving(false);
     if (err) {
       setError(err);
     } else {
-      if (isLinkingUnknown) onClearSelectedUnknownReadout();
       setSuccessNotice(
         `Anmälan sparad i Firestore. ${fullName.trim()} anmäld med SI ${formatSiNumber(parsedSi)}${
-          isLinkingUnknown
-            ? ' — sparade stämplingar validerades direkt!'
-            : isBorrowedCard || isRentalCard
+          isBorrowedCard || isRentalCard
             ? ' (lånad/hyrbricka — ägare i Löpardatabasen ändrades ej)!'
             : '!'
         }`
@@ -420,24 +370,6 @@ export function EntriesRegistrationView({
             Läser bricknummer direkt vid dopp utan att radera eller kräva tömning
           </span>
         </div>
-
-        {selectedUnknownReadout && (
-          <div className="px-4 py-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-lg flex items-center justify-between gap-3 text-xs text-amber-800 dark:text-amber-300">
-            <span>
-              Kopplar utläst SI-bricka{' '}
-              <strong className="font-mono">{formatSiNumber(selectedUnknownReadout.readout.siNumber)}</strong>{' '}
-              ({selectedUnknownReadout.readout.punches.length} stämplingar i minnet valideras direkt vid
-              sparande).
-            </span>
-            <button
-              type="button"
-              onClick={onClearSelectedUnknownReadout}
-              className="underline font-medium shrink-0"
-            >
-              Rensa
-            </button>
-          </div>
-        )}
 
         {/* Instant Runner Database Match Banner */}
         {matchedRunnerFromDb && !alreadyEnteredCompetitor && (

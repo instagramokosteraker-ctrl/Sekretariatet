@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -19,6 +19,7 @@ import type {
   Competitor,
   Course,
   LiveEventItem,
+  RunnerDbEntry,
   SIStation,
 } from '../types/sportident';
 import type { OfflineQueueSnapshot } from '../services/offlineReadoutQueue';
@@ -34,7 +35,12 @@ import {
   formatDurationMmSs,
   formatSecondsAsClock,
   formatSiNumber,
+  parseClockToSeconds,
 } from '../services/sportidentProtocol';
+import {
+  getCompetitorPlacement,
+  getMissingPunchExplanation,
+} from '../services/readoutSummary';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { UsbStationBar, UsbStationErrorBanner } from './UsbStationBar';
@@ -44,12 +50,27 @@ interface ReadoutDashboardProps {
   classes: CompClass[];
   stations: SIStation[];
   competitors: Competitor[];
+  runnerDb: RunnerDbEntry[];
+  defaultClubName?: string;
   runnerDbCount: number;
   events: LiveEventItem[];
   readoutHistory: ReadoutHistoryRecord[];
   latestReadoutId: string | null;
   readoutHistoryError: string | null;
   onCreateMpReviewIssue: (clientReadoutId: string) => Promise<void>;
+  onResolveUnknownCard: (
+    record: ReadoutHistoryRecord | null,
+    siNumber: number,
+    details: {
+      fullName: string;
+      club: string;
+      classId: string;
+      runnerProfileId: string | null;
+      isRentalCard: boolean;
+      isBorrowedCard: boolean;
+      allocatedStartSec: number | null;
+    }
+  ) => Promise<string | null>;
   offlineSnap: OfflineQueueSnapshot;
   serialStatus: SerialConnectionStatus;
   onConnectUsb: () => Promise<void>;
@@ -72,7 +93,6 @@ interface ReadoutDashboardProps {
     siNumber: number;
     punchTimeSec?: number;
   }) => Promise<void>;
-  onLinkUnknownCardToEntry: (siNumber: number, clientReadoutId?: string) => void;
   onInspectHex: (hex: string) => void;
   onNavigateForest: () => void;
 }
@@ -82,12 +102,15 @@ export function ReadoutDashboard({
   classes,
   stations,
   competitors,
+  runnerDb,
+  defaultClubName,
   runnerDbCount,
   events,
   readoutHistory,
   latestReadoutId,
   readoutHistoryError,
   onCreateMpReviewIssue,
+  onResolveUnknownCard,
   offlineSnap,
   serialStatus,
   onConnectUsb,
@@ -106,7 +129,6 @@ export function ReadoutDashboard({
   onSelectRunner,
   onMarkRentalReturned,
   onSimulateOnlinePunch,
-  onLinkUnknownCardToEntry,
   onInspectHex,
   onNavigateForest,
 }: ReadoutDashboardProps) {
@@ -122,6 +144,20 @@ export function ReadoutDashboard({
   const [historyPageSize, setHistoryPageSize] = useState<20 | 30 | 50>(30);
   const [historyPage, setHistoryPage] = useState(0);
   const [issueActionBusyId, setIssueActionBusyId] = useState<string | null>(null);
+  const [unknownCardBusyId, setUnknownCardBusyId] = useState<string | null>(null);
+  const [unknownCardError, setUnknownCardError] = useState<string | null>(null);
+  const [unknownCardSuccess, setUnknownCardSuccess] = useState<string | null>(null);
+  const [standaloneUnknownSi, setStandaloneUnknownSi] = useState<number | null>(null);
+  const [unknownCardName, setUnknownCardName] = useState('');
+  const [unknownCardClub, setUnknownCardClub] = useState('');
+  const [unknownCardClassId, setUnknownCardClassId] = useState('');
+  const [unknownCardRunnerProfileId, setUnknownCardRunnerProfileId] = useState<string | null>(
+    null
+  );
+  const [unknownCardIsRental, setUnknownCardIsRental] = useState(false);
+  const [unknownCardIsBorrowed, setUnknownCardIsBorrowed] = useState(false);
+  const [unknownCardStartClock, setUnknownCardStartClock] = useState('');
+  const selectedReadoutPanelRef = useRef<HTMLElement | null>(null);
   const [issueActionError, setIssueActionError] = useState<{
     clientReadoutId: string;
     message: string;
@@ -202,6 +238,11 @@ export function ReadoutDashboard({
       readoutHistory.find((record) => record.clientReadoutId === latestReadoutId) ?? null,
     [latestReadoutId, readoutHistory]
   );
+  const selectedReadout = useMemo(
+    () =>
+      readoutHistory.find((record) => record.clientReadoutId === selectedReadoutId) ?? null,
+    [readoutHistory, selectedReadoutId]
+  );
   const outstandingReadouts = useMemo(
     () => filterOutstandingReadouts(readoutHistory),
     [readoutHistory]
@@ -245,47 +286,54 @@ export function ReadoutDashboard({
       : null;
   }, [competitors, selectedRunnerId]);
 
-  const latestReadoutResultLabel = latestReadout?.resultStatus
-    ? latestReadout.resultStatus
-    : latestReadout?.readoutState === 'UNKNOWN'
-      ? 'Unknown card'
-      : 'Readout captured';
-
-  const latestReadoutSyncLabel = latestReadout
-    ? {
-        PERSISTING: 'Saving locally',
-        LOCAL_SAVED: 'Saved locally',
-        QUEUED: 'Sync pending',
-        SYNCED: 'Synced',
-        SAVE_FAILED: 'Save failed',
-      }[latestReadout.deliveryState]
-    : null;
-
   const inspectedClass = useMemo(
     () => classes.find((c) => c.id === inspectedRunner?.classId) ?? null,
     [classes, inspectedRunner]
   );
 
-  const inspectedPlacement = useMemo(() => {
-    if (!inspectedRunner || inspectedRunner.status !== 'OK' || !inspectedClass) return null;
-    const okInClass = competitors
-      .filter(
-        (c) =>
-          c.classId === inspectedClass.id &&
-          c.status === 'OK' &&
-          c.runningTimeSec !== null
-      )
-      .sort((a, b) => (a.runningTimeSec ?? 999999) - (b.runningTimeSec ?? 999999));
-    const idx = okInClass.findIndex((c) => c.id === inspectedRunner.id);
-    return idx !== -1
-      ? {
-          pos: idx + 1,
-          total: okInClass.length,
-          diffSec:
-            (inspectedRunner.runningTimeSec ?? 0) - (okInClass[0]?.runningTimeSec ?? 0),
-        }
+  const inspectedPlacement = useMemo(
+    () => getCompetitorPlacement(inspectedRunner, competitors),
+    [competitors, inspectedRunner]
+  );
+
+  const latestCompetitor = useMemo(() => {
+    if (!latestReadout) return null;
+    return (
+      competitors.find((competitor) => competitor.id === latestReadout.competitorId) ??
+      latestReadout.competitorSnapshot
+    );
+  }, [competitors, latestReadout]);
+  const latestReadoutResultLabel =
+    latestReadout?.resultStatus ??
+    latestCompetitor?.status ??
+    (latestReadout?.readoutState === 'UNKNOWN' ? 'Okänt kort' : 'Avläsning sparad');
+  const latestReadoutSyncLabel = latestReadout
+    ? {
+        PERSISTING: 'Sparar lokalt',
+        LOCAL_SAVED: 'Sparad lokalt',
+        QUEUED: 'Väntar på synk',
+        SYNCED: 'Synkad',
+        SAVE_FAILED: 'Sparfel',
+      }[latestReadout.deliveryState]
+    : null;
+  const latestRunnerSuggestion = useMemo(() => {
+    if (!latestReadout) return null;
+    return (
+      latestReadout.suggestedRunner ??
+      runnerDb.find((runner) => runner.siNumber === latestReadout.readout.siNumber) ??
+      null
+    );
+  }, [latestReadout, runnerDb]);
+  const latestPlacement = useMemo(
+    () => getCompetitorPlacement(latestCompetitor, competitors),
+    [competitors, latestCompetitor]
+  );
+  const latestValidation = latestCompetitor?.validation ?? null;
+  const latestMpExplanation =
+    latestReadout?.resultStatus === 'MP' || latestCompetitor?.status === 'MP'
+      ? getMissingPunchExplanation(latestValidation) ??
+        'Felstämplingsorsak är inte tillgänglig ännu.'
       : null;
-  }, [competitors, inspectedRunner, inspectedClass]);
 
   const filteredEvents = useMemo(() => {
     const q = eventSearch.trim().toLowerCase();
@@ -335,6 +383,126 @@ export function ReadoutDashboard({
     }
   };
 
+  const handleSelectReadout = (
+    record: ReadoutHistoryRecord,
+    forceOpen = false
+  ) => {
+    const alreadySelected = selectedReadoutId === record.clientReadoutId;
+    const isClosing = alreadySelected && !forceOpen;
+    if (alreadySelected && forceOpen) {
+      window.requestAnimationFrame(() => {
+        selectedReadoutPanelRef.current?.scrollIntoView({
+          block: 'nearest',
+          behavior: 'smooth',
+        });
+      });
+      return;
+    }
+    setSelectedReadoutId(isClosing ? null : record.clientReadoutId);
+    setStandaloneUnknownSi(null);
+    setUnknownCardError(null);
+    setUnknownCardSuccess(null);
+    if (isClosing) return;
+
+    if (record.issueType === 'UNKNOWN_CARD') {
+      const runner =
+        record.suggestedRunner ??
+        runnerDb.find((candidate) => candidate.siNumber === record.readout.siNumber) ??
+        null;
+      const matchingClass = runner?.defaultClassName
+        ? classes.find(
+            (candidate) =>
+              candidate.name.toLocaleLowerCase() ===
+              runner.defaultClassName?.toLocaleLowerCase()
+          )
+        : null;
+      setUnknownCardName(runner?.fullName ?? '');
+      setUnknownCardClub(runner?.club ?? defaultClubName ?? '');
+      setUnknownCardClassId(
+        matchingClass?.id ?? classes[3]?.id ?? classes[0]?.id ?? ''
+      );
+      setUnknownCardRunnerProfileId(runner?.id ?? null);
+      setUnknownCardIsRental(false);
+      setUnknownCardIsBorrowed(false);
+      setUnknownCardStartClock('');
+    }
+
+    window.requestAnimationFrame(() => {
+      selectedReadoutPanelRef.current?.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      });
+    });
+  };
+
+  const handleStandaloneUnknownCard = (siNumber: number) => {
+    const runner = runnerDb.find((candidate) => candidate.siNumber === siNumber) ?? null;
+    const matchingClass = runner?.defaultClassName
+      ? classes.find(
+          (candidate) =>
+            candidate.name.toLocaleLowerCase() ===
+            runner.defaultClassName?.toLocaleLowerCase()
+        )
+      : null;
+    setSelectedReadoutId(null);
+    setStandaloneUnknownSi(siNumber);
+    setUnknownCardName(runner?.fullName ?? '');
+    setUnknownCardClub(runner?.club ?? defaultClubName ?? '');
+    setUnknownCardClassId(matchingClass?.id ?? classes[3]?.id ?? classes[0]?.id ?? '');
+    setUnknownCardRunnerProfileId(runner?.id ?? null);
+    setUnknownCardIsRental(false);
+    setUnknownCardIsBorrowed(false);
+    setUnknownCardStartClock('');
+    setUnknownCardError(null);
+    setUnknownCardSuccess(null);
+    window.requestAnimationFrame(() => {
+      selectedReadoutPanelRef.current?.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      });
+    });
+  };
+
+  const handleResolveUnknownCard = async (
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
+    event.preventDefault();
+    const siNumber = selectedReadout?.readout.siNumber ?? standaloneUnknownSi;
+    if (siNumber === null) return;
+
+    setUnknownCardBusyId(selectedReadout?.clientReadoutId ?? String(siNumber));
+    setUnknownCardError(null);
+    setUnknownCardSuccess(null);
+    try {
+      const error = await onResolveUnknownCard(selectedReadout, siNumber, {
+        fullName: unknownCardName.trim(),
+        club: unknownCardClub.trim() || defaultClubName || 'Klubblös',
+        classId: unknownCardClassId,
+        runnerProfileId: unknownCardRunnerProfileId,
+        isRentalCard: unknownCardIsRental,
+        isBorrowedCard: unknownCardIsBorrowed,
+        allocatedStartSec: unknownCardStartClock.trim()
+          ? parseClockToSeconds(unknownCardStartClock)
+          : null,
+      });
+      if (error) {
+        setUnknownCardError(error);
+      } else {
+        setUnknownCardSuccess(
+          selectedReadout
+            ? `${unknownCardName.trim()} kopplades till avläsning #${selectedReadout.captureSequence}.`
+            : `${unknownCardName.trim()} anmäld med SI ${formatSiNumber(siNumber)}.`
+        );
+      }
+    } catch (error) {
+      setUnknownCardError(
+        error instanceof Error ? error.message : 'Avläsningen kunde inte kopplas.'
+      );
+    } finally {
+      setUnknownCardBusyId(null);
+    }
+  };
+
   return (
     <div className="space-y-3.5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
@@ -363,14 +531,127 @@ export function ReadoutDashboard({
         </div>
       </div>
 
-      <UsbStationErrorBanner
-        serialStatus={serialStatus}
-        onConnectWebUsb={onConnectWebUsb}
-        onClearError={onClearUsbError}
-        onOpenHardwareSettings={onOpenHardwareSettings}
-      />
+      <section
+        aria-live="polite"
+        className="sticky top-1 z-20 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden shadow-sm"
+      >
+        <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Senaste SI-avläsning
+            </h2>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Fångstsekvens {latestReadout?.captureSequence ?? '—'}
+              {latestReadout
+                ? ` · ${new Date(latestReadout.capturedAt).toLocaleTimeString('sv-SE')}`
+                : ''}
+            </p>
+          </div>
+          {latestReadoutSyncLabel && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-200">
+              {latestReadoutSyncLabel}
+            </span>
+          )}
+        </div>
+        {readoutHistoryError && (
+          <div className="px-4 py-1.5 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/30">
+            Avläsningshistoriken kunde inte laddas eller sparas: {readoutHistoryError}
+          </div>
+        )}
+        {latestReadout ? (
+          <div className="px-4 py-2.5">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <div className="min-w-0">
+                <div className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  {latestCompetitor?.fullName ??
+                    latestRunnerSuggestion?.fullName ??
+                    'Okänd SI-bricka'}{' '}
+                  · SI {formatSiNumber(latestReadout.readout.siNumber)}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500 dark:text-slate-400">
+                  <span>
+                    {classes.find((candidate) => candidate.id === latestCompetitor?.classId)
+                      ?.name ??
+                      latestReadout.className ??
+                      latestRunnerSuggestion?.defaultClassName ??
+                      'Klass saknas'}
+                  </span>
+                  {latestRunnerSuggestion && !latestCompetitor && (
+                    <span className="rounded bg-sky-50 dark:bg-sky-950/40 px-1.5 py-0.5 text-sky-800 dark:text-sky-300">
+                      Preliminär match
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                Resultat: {latestReadoutResultLabel}
+              </span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
+              <span>
+                Mål:{' '}
+                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                  {formatSecondsAsClock(latestReadout.readout.finishTimeSec)}
+                </strong>
+              </span>
+              <span>
+                Placering:{' '}
+                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                  {latestPlacement ? `${latestPlacement.pos}/${latestPlacement.total}` : '—'}
+                </strong>
+              </span>
+              <span>
+                Bom:{' '}
+                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                  {latestValidation?.totalTimeLossSec != null
+                    ? formatDurationMmSs(latestValidation.totalTimeLossSec)
+                    : '—'}
+                </strong>
+              </span>
+              <span>
+                Löptid:{' '}
+                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                  {latestCompetitor?.runningTimeSec != null
+                    ? formatDurationMmSs(latestCompetitor.runningTimeSec)
+                    : '—'}
+                </strong>
+              </span>
+            </div>
+            {latestMpExplanation && (
+              <p className="mt-1.5 text-xs text-red-700 dark:text-red-300">
+                MP: {latestMpExplanation}
+              </p>
+            )}
+            {latestReadout.syncError && (
+              <p className="mt-1.5 text-xs text-red-700 dark:text-red-300">
+                {latestReadout.syncError}
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
+            Ingen SI-avläsning har fångats för tävlingen.
+          </p>
+        )}
+      </section>
 
-      {/* Forest Offline-Queue Resilience Bar (IndexedDB + localStorage) */}
+      <details className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <summary className="cursor-pointer list-none px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+          Offlinekö och tekniska verktyg
+          <span className="ml-2 font-mono tabular-nums text-slate-500 dark:text-slate-400">
+            {isOfflineActive ? 'Offline aktivt' : 'Nätverk anslutet'} ·{' '}
+            {offlineSnap.pendingItems.length} väntande
+          </span>
+        </summary>
+        <div className="space-y-2.5 border-t border-slate-200 dark:border-slate-800 p-2.5">
+          <UsbStationErrorBanner
+            serialStatus={serialStatus}
+            onConnectWebUsb={onConnectWebUsb}
+            onClearError={onClearUsbError}
+            onOpenHardwareSettings={onOpenHardwareSettings}
+          />
+
+          {/* Forest Offline-Queue Resilience Bar (IndexedDB + localStorage) */}
       <section
         className={`rounded-xl border px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs ${
           isOfflineActive || offlineSnap.pendingItems.length > 0
@@ -554,6 +835,8 @@ export function ReadoutDashboard({
           </ul>
         </section>
       )}
+        </div>
+      </details>
 
       {/* Compact 4-Column Competition KPI Strip */}
       <section
@@ -627,89 +910,255 @@ export function ReadoutDashboard({
         </div>
       </section>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
+      {(selectedReadout || standaloneUnknownSi !== null) && (
         <section
-          aria-live="polite"
-          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden"
+          ref={selectedReadoutPanelRef}
+          aria-label={
+            selectedReadout
+              ? `Vald avläsning ${selectedReadout.captureSequence}`
+              : `Okänd SI-bricka ${standaloneUnknownSi}`
+          }
+          className="scroll-mt-24 bg-white dark:bg-slate-900 border border-sky-200 dark:border-sky-900 rounded-lg overflow-hidden"
         >
-          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+          <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-sky-100 dark:border-sky-900">
             <div>
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Senaste SI-avläsning
+                {selectedReadout
+                  ? `Avläsning #${selectedReadout.captureSequence}`
+                  : 'Okänd SI-bricka'}
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Senaste fångade avläsning · sekvens{' '}
-                {latestReadout?.captureSequence ?? '—'}
+                SI {formatSiNumber(selectedReadout?.readout.siNumber ?? standaloneUnknownSi ?? 0)}
+                {selectedReadout
+                  ? ` · ${selectedReadout.readout.cardSeries} · Mål ${formatSecondsAsClock(
+                      selectedReadout.readout.finishTimeSec
+                    )} · ${new Date(selectedReadout.capturedAt).toLocaleString('sv-SE')}`
+                  : ''}
               </p>
             </div>
-            {latestReadoutSyncLabel && (
-              <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                {latestReadoutSyncLabel}
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedReadoutId(null);
+                setStandaloneUnknownSi(null);
+              }}
+              className="shrink-0 rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              Stäng
+            </button>
           </div>
-          {readoutHistoryError && (
-            <div className="px-4 py-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/30">
-              Avläsningshistoriken kunde inte laddas eller sparas: {readoutHistoryError}
+          {selectedReadout && (
+          <div className="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+              <span>
+                Ursprunglig match:{' '}
+                {selectedReadout.originalCompetitorName ?? 'Ingen match vid avläsning'}
+                {selectedReadout.originalClassName
+                  ? ` · ${selectedReadout.originalClassName}`
+                  : ''}
+              </span>
+              <span>
+                Nuvarande match:{' '}
+                {selectedReadout.competitorName ?? 'Ingen aktuell match'}
+                {selectedReadout.className ? ` · ${selectedReadout.className}` : ''}
+              </span>
+              <span>
+                Ursprungligt resultat: {selectedReadout.originalResultStatus ?? 'Ej tilldelat'}
+                {selectedReadout.originalCompetitorSnapshot?.runningTimeSec != null
+                  ? ` · tid ${formatDurationMmSs(
+                      selectedReadout.originalCompetitorSnapshot.runningTimeSec
+                    )}`
+                  : ''}
+                {selectedReadout.originalCompetitorSnapshot?.validation?.totalTimeLossSec != null
+                  ? ` · Bom ${formatDurationMmSs(
+                      selectedReadout.originalCompetitorSnapshot.validation.totalTimeLossSec
+                    )}`
+                  : ''}
+              </span>
+              <span>
+                Aktuellt resultat: {selectedReadout.resultStatus ?? 'Ej tilldelat'}
+                {selectedReadout.competitorSnapshot?.runningTimeSec != null
+                  ? ` · tid ${formatDurationMmSs(
+                      selectedReadout.competitorSnapshot.runningTimeSec
+                    )}`
+                  : ''}
+                {selectedReadout.competitorSnapshot?.validation?.totalTimeLossSec != null
+                  ? ` · Bom ${formatDurationMmSs(
+                      selectedReadout.competitorSnapshot.validation.totalTimeLossSec
+                    )}`
+                  : ''}
+              </span>
+              <span>
+                Ärende: {selectedReadout.issueType ?? 'Inget'} · {selectedReadout.issueState}
+              </span>
+              <span>Leverans: {selectedReadout.deliveryState}</span>
             </div>
+            {selectedReadout.suggestedRunner && (
+              <div className="mt-1">
+                Föreslagen löpare: {selectedReadout.suggestedRunner.fullName}
+              </div>
+            )}
+            {selectedReadout.syncError && (
+              <div className="mt-1 text-red-700 dark:text-red-300">
+                {selectedReadout.syncError}
+              </div>
+            )}
+            <div className="mt-2 flex flex-wrap gap-1">
+              {selectedReadout.readout.punches.map((punch, index) => (
+                <span
+                  key={`${selectedReadout.clientReadoutId}-${index}`}
+                  className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 font-mono"
+                >
+                  {punch.code} · {formatSecondsAsClock(punch.timeSec)}
+                </span>
+              ))}
+              {selectedReadout.readout.punches.length === 0 && <span>Inga stämplingar</span>}
+            </div>
+          </div>
           )}
-          {latestReadout ? (
-            <div className="px-4 py-3">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <div>
-                  <div className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                    {latestReadout.competitorName ?? 'SI-bricka'} · SI{' '}
-                    {formatSiNumber(latestReadout.readout.siNumber)}
-                  </div>
-                  {latestReadout.className && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {latestReadout.className}
-                    </div>
-                  )}
-                </div>
-                <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                  {latestReadoutResultLabel}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
-                <span>
-                  Mål:{' '}
-                  <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-                    {formatSecondsAsClock(latestReadout.readout.finishTimeSec)}
-                  </strong>
-                </span>
-                {latestReadout.competitorSnapshot?.runningTimeSec !== null &&
-                  latestReadout.competitorSnapshot?.runningTimeSec !== undefined && (
-                    <span>
-                      Tid:{' '}
-                      <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-                        {formatDurationMmSs(
-                          latestReadout.competitorSnapshot.runningTimeSec
-                        )}
-                      </strong>
-                    </span>
-                  )}
-                <span>
-                  Fångad:{' '}
-                  <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-                    {new Date(latestReadout.capturedAt).toLocaleTimeString('sv-SE')}
-                  </strong>
-                </span>
-              </div>
-              {latestReadout.syncError && (
-                <p className="mt-2 text-xs text-red-700 dark:text-red-300">
-                  {latestReadout.syncError}
+          {((selectedReadout?.issueType === 'UNKNOWN_CARD' &&
+            selectedReadout.issueState !== 'RESOLVED' &&
+            selectedReadout.issueState !== 'DISMISSED') ||
+            standaloneUnknownSi !== null) && (
+              <form
+                onSubmit={(event) => void handleResolveUnknownCard(event)}
+                className="border-t border-slate-200 dark:border-slate-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-3"
+              >
+                <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                  Koppla okänd SI-bricka
+                </h3>
+                <p className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400">
+                  Läsaren är fortsatt aktiv. Nästa bricka kan läsas medan denna avläsning hanteras.
                 </p>
-              )}
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                  <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                    SI-bricka
+                    <input
+                      value={formatSiNumber(
+                        selectedReadout?.readout.siNumber ?? standaloneUnknownSi ?? 0
+                      )}
+                      readOnly
+                      className="mt-1 w-full rounded border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 px-2 py-1.5 font-mono"
+                    />
+                  </label>
+                  <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                    Löparens namn
+                    <input
+                      value={unknownCardName}
+                      onChange={(event) => setUnknownCardName(event.target.value)}
+                      required
+                      className="mt-1 w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5"
+                    />
+                  </label>
+                  <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                    Klubb
+                    <input
+                      value={unknownCardClub}
+                      onChange={(event) => setUnknownCardClub(event.target.value)}
+                      className="mt-1 w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5"
+                    />
+                  </label>
+                  <label className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                    Klass
+                    <select
+                      value={unknownCardClassId}
+                      onChange={(event) => setUnknownCardClassId(event.target.value)}
+                      required={classes.length > 0}
+                      className="mt-1 w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5"
+                    >
+                      <option value="">Välj klass</option>
+                      {classes.map((compClass) => (
+                        <option key={compClass.id} value={compClass.id}>
+                          {compClass.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
+                  <label className="inline-flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={unknownCardIsRental}
+                      onChange={(event) => setUnknownCardIsRental(event.target.checked)}
+                      className="h-3.5 w-3.5 rounded"
+                    />
+                    Klubbens hyrbricka
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={unknownCardIsBorrowed}
+                      onChange={(event) => setUnknownCardIsBorrowed(event.target.checked)}
+                      className="h-3.5 w-3.5 rounded"
+                    />
+                    Lånad privatbricka
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-[11px] text-slate-700 dark:text-slate-300">
+                    Valfri starttid
+                    <input
+                      value={unknownCardStartClock}
+                      onChange={(event) => setUnknownCardStartClock(event.target.value)}
+                      placeholder="HH:MM:SS"
+                      className="w-24 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1"
+                    />
+                  </label>
+                </div>
+                {unknownCardError && (
+                  <p role="alert" className="mt-2 text-xs text-red-700 dark:text-red-300">
+                    {unknownCardError}
+                  </p>
+                )}
+                {unknownCardSuccess && (
+                  <p role="status" className="mt-2 text-xs text-emerald-700 dark:text-emerald-300">
+                    {unknownCardSuccess}
+                  </p>
+                )}
+                <button
+                  type="submit"
+                  disabled={
+                    unknownCardBusyId ===
+                    (selectedReadout?.clientReadoutId ??
+                      String(standaloneUnknownSi ?? '')) ||
+                    selectedReadout?.issueState === 'RESOLVED' ||
+                    unknownCardSuccess !== null
+                  }
+                  className="mt-2 inline-flex items-center gap-1.5 rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-50"
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  {unknownCardBusyId ===
+                  (selectedReadout?.clientReadoutId ?? String(standaloneUnknownSi ?? ''))
+                    ? 'Sparar…'
+                    : selectedReadout
+                      ? 'Anmäl och koppla avläsning'
+                      : 'Spara direktanmälan'}
+                </button>
+              </form>
+            )}
+          {selectedReadout?.resultStatus === 'MP' && selectedReadout.issueState === 'NONE' && (
+            <div className="border-t border-slate-200 dark:border-slate-800 px-4 py-2">
+              <button
+                type="button"
+                disabled={issueActionBusyId === selectedReadout.clientReadoutId}
+                onClick={() => void handleCreateMpReviewIssue(selectedReadout.clientReadoutId)}
+                className="rounded border border-amber-300 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30"
+              >
+                {issueActionBusyId === selectedReadout.clientReadoutId
+                  ? 'Sparar…'
+                  : 'Skapa MP-granskningsärende'}
+              </button>
+              {issueActionError?.clientReadoutId === selectedReadout.clientReadoutId &&
+                issueActionBusyId === null && (
+                  <div role="alert" className="mt-1 text-xs text-red-700 dark:text-red-300">
+                    {issueActionError.message}
+                  </div>
+                )}
             </div>
-          ) : (
-            <p className="px-4 py-5 text-sm text-slate-500 dark:text-slate-400">
-              Ingen SI-avläsning har fångats för tävlingen.
-            </p>
           )}
         </section>
+      )}
 
-        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 space-y-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -817,15 +1266,13 @@ export function ReadoutDashboard({
                     <div className="flex items-start gap-2">
                       <button
                         type="button"
-                        aria-expanded={selectedReadoutId === record.clientReadoutId}
-                        onClick={() =>
-                          setSelectedReadoutId((current) =>
-                            current === record.clientReadoutId
-                              ? null
-                              : record.clientReadoutId
-                          )
-                        }
-                        className="flex-1 min-w-0 text-left rounded px-1 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800"
+                        aria-pressed={selectedReadoutId === record.clientReadoutId}
+                        onClick={() => handleSelectReadout(record)}
+                        className={`flex-1 min-w-0 text-left rounded px-1 py-0.5 hover:bg-slate-50 dark:hover:bg-slate-800 ${
+                          selectedReadoutId === record.clientReadoutId
+                            ? 'bg-sky-50 dark:bg-sky-950/30'
+                            : ''
+                        }`}
                       >
                         <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
                           <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-200">
@@ -846,113 +1293,13 @@ export function ReadoutDashboard({
                         record.issueState !== 'DISMISSED' && (
                         <button
                           type="button"
-                          onClick={() =>
-                            onLinkUnknownCardToEntry(
-                              record.readout.siNumber,
-                              record.clientReadoutId
-                            )
-                          }
+                          onClick={() => handleSelectReadout(record, true)}
                           className="shrink-0 text-xs font-medium text-amber-700 dark:text-amber-300 hover:underline"
                         >
                           Anmäl
                         </button>
                       )}
                     </div>
-                    {selectedReadoutId === record.clientReadoutId && (
-                      <div className="mt-2 ml-1 text-[11px] text-slate-600 dark:text-slate-400">
-                        <div>
-                          Fångad {new Date(record.capturedAt).toLocaleString('sv-SE')}
-                          {' · '}SI {formatSiNumber(record.readout.siNumber)}
-                          {' · '}{record.readout.cardSeries}
-                          {' · '}Mål {formatSecondsAsClock(record.readout.finishTimeSec)}
-                        </div>
-                        <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
-                          <span>
-                            Ursprunglig match:{' '}
-                            {record.originalCompetitorName ?? 'Ingen match vid avläsning'}
-                            {record.originalCompetitorId
-                              ? ` (${record.originalCompetitorId})`
-                              : ''}
-                            {record.originalClassName ? ` · ${record.originalClassName}` : ''}
-                          </span>
-                          <span>
-                            Nuvarande match:{' '}
-                            {record.competitorName ?? 'Ingen aktuell match'}
-                            {record.competitorId ? ` (${record.competitorId})` : ''}
-                            {record.className ? ` · ${record.className}` : ''}
-                          </span>
-                          <span>
-                            Ursprungligt resultat: {record.originalResultStatus ?? 'Ej tilldelat'}
-                            {record.originalCompetitorSnapshot?.runningTimeSec != null
-                              ? ` · tid ${formatDurationMmSs(
-                                  record.originalCompetitorSnapshot.runningTimeSec
-                                )}`
-                              : ''}
-                            {record.originalCompetitorSnapshot?.validation?.totalTimeLossSec != null
-                              ? ` · Bom ${formatDurationMmSs(
-                                  record.originalCompetitorSnapshot.validation.totalTimeLossSec
-                                )}`
-                              : ''}
-                          </span>
-                          <span>
-                            Aktuellt resultat: {record.resultStatus ?? 'Ej tilldelat'}
-                            {record.competitorSnapshot?.runningTimeSec != null
-                              ? ` · tid ${formatDurationMmSs(
-                                  record.competitorSnapshot.runningTimeSec
-                                )}`
-                              : ''}
-                            {record.competitorSnapshot?.validation?.totalTimeLossSec != null
-                              ? ` · Bom ${formatDurationMmSs(
-                                  record.competitorSnapshot.validation.totalTimeLossSec
-                                )}`
-                              : ''}
-                          </span>
-                          <span>
-                            Issue: {record.issueType ?? 'Ingen'} · {record.issueState}
-                          </span>
-                          <span>Leverans: {syncLabel}</span>
-                        </div>
-                        {record.suggestedRunner && (
-                          <div className="mt-1">
-                            Föreslagen löpare: {record.suggestedRunner.fullName}
-                          </div>
-                        )}
-                        {record.syncError && (
-                          <div className="mt-1 text-red-700 dark:text-red-300">
-                            {record.syncError}
-                          </div>
-                        )}
-                        {record.resultStatus === 'MP' && record.issueState === 'NONE' && (
-                          <button
-                            type="button"
-                            disabled={issueActionBusyId === record.clientReadoutId}
-                            onClick={() => void handleCreateMpReviewIssue(record.clientReadoutId)}
-                            className="mt-2 rounded border border-amber-300 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30"
-                          >
-                            {issueActionBusyId === record.clientReadoutId
-                              ? 'Sparar…'
-                              : 'Skapa MP-granskningsärende'}
-                          </button>
-                        )}
-                        {issueActionError?.clientReadoutId === record.clientReadoutId &&
-                          issueActionBusyId === null && (
-                          <div role="alert" className="mt-1 text-red-700 dark:text-red-300">
-                            {issueActionError.message}
-                          </div>
-                        )}
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {record.readout.punches.map((punch, index) => (
-                            <span
-                              key={`${record.clientReadoutId}-${index}`}
-                              className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 font-mono"
-                            >
-                              {punch.code} · {formatSecondsAsClock(punch.timeSec)}
-                            </span>
-                          ))}
-                          {record.readout.punches.length === 0 && <span>Inga stämplingar</span>}
-                        </div>
-                      </div>
-                    )}
                   </li>
                 );
               })}
@@ -988,7 +1335,6 @@ export function ReadoutDashboard({
             </button>
           </div>
         </section>
-      </div>
 
       {/* Readout & Live Timing */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
@@ -1324,7 +1670,20 @@ export function ReadoutDashboard({
                           {ev.eventType === 'UNKNOWN_CARD' && (
                             <button
                               type="button"
-                              onClick={() => onLinkUnknownCardToEntry(ev.siNumber)}
+                              onClick={() => {
+                                const matchingReadout = readoutHistory.find(
+                                  (record) =>
+                                    record.readout.siNumber === ev.siNumber &&
+                                    record.issueType === 'UNKNOWN_CARD' &&
+                                    record.issueState !== 'RESOLVED' &&
+                                    record.issueState !== 'DISMISSED'
+                                );
+                                if (matchingReadout) {
+                                  handleSelectReadout(matchingReadout, true);
+                                } else {
+                                  handleStandaloneUnknownCard(ev.siNumber);
+                                }
+                              }}
                               className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400 hover:underline"
                             >
                               <UserPlus className="w-3 h-3" />
