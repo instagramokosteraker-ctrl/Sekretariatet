@@ -24,7 +24,7 @@ describe('readout status presentation', () => {
     expect(getReadoutStatusPresentation(createStatus()).tone).toBe('success');
     expect(
       getReadoutStatusPresentation(createStatus({ resultStatus: 'MP' })).tone
-    ).toBe('missing');
+    ).toBe('mp');
   });
 
   it('uses orange for human issues and red for technical issues requiring action', () => {

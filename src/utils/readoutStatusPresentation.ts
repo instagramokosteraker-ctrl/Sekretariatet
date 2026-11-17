@@ -6,7 +6,7 @@ import type {
 
 export type ReadoutStatusTone =
   | 'success'
-  | 'missing'
+  | 'mp'
   | 'action'
   | 'error'
   | 'info'
@@ -51,7 +51,7 @@ const ISSUE_STATE_LABELS: Record<ReadoutIssueState, string | null> = {
 
 const SURFACE_CLASSES: Record<ReadoutStatusTone, string> = {
   success: 'bg-emerald-50 dark:bg-emerald-950/40',
-  missing: 'bg-amber-50 dark:bg-amber-950/40',
+  mp: 'bg-yellow-50 dark:bg-yellow-950/40',
   action: 'bg-orange-50 dark:bg-orange-950/40',
   error: 'bg-red-50 dark:bg-red-950/40',
   info: 'bg-sky-50 dark:bg-sky-950/40',
@@ -79,7 +79,7 @@ export function getReadoutStatusPresentation(record: ReadoutStatusInput | null):
     ) {
       tone = 'info';
     } else if (record.resultStatus === 'MP') {
-      tone = 'missing';
+      tone = 'mp';
     } else if (record.resultStatus === 'OK') {
       tone = 'success';
     }
