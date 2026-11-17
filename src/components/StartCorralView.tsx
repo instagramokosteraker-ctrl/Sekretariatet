@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
+  CircleSlash,
   Play,
   RefreshCw,
   Search,
@@ -1369,7 +1370,13 @@ export function StartCorralView({
                 <th className="hidden sm:table-cell py-1.5 px-2">Klubb</th>
                 <th className="py-1.5 px-2 font-mono w-20">Starttid</th>
                 <th className="hidden md:table-cell py-1.5 px-2">Klass</th>
-                <th className="hidden lg:table-cell py-1.5 px-2">Status</th>
+                <th
+                  className="py-1.5 px-1 w-7 text-center"
+                  title="Status"
+                  aria-label="Status"
+                >
+                  <span className="sr-only">Status</span>
+                </th>
                 <th className="py-1.5 pl-2 pr-3.5 text-right">Åtgärd</th>
               </tr>
             </thead>
@@ -1473,7 +1480,7 @@ export function StartCorralView({
                       {cls?.name ?? '-'}
                     </td>
 
-                    <td className="hidden lg:table-cell py-1.5 px-2 whitespace-nowrap">
+                    <td className="py-1.5 px-1 w-7 text-center whitespace-nowrap">
                       <RunnerStatusIndicator status={r.effectiveStatus} compact />
                     </td>
 
@@ -1520,9 +1527,10 @@ export function StartCorralView({
                             })
                           }
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[11px] font-medium text-slate-500 hover:text-red-600 dark:hover:text-red-400 rounded"
-                          title="Ej start (DNS)"
+                          title="Starten blev inte av (DNS)"
+                          aria-label="Markera DNS – starten blev inte av"
                         >
-                          <span>DNS</span>
+                          <CircleSlash className="w-3 h-3" />
                         </button>
                       </div>
                     </td>
