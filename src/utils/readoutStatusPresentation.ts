@@ -31,6 +31,7 @@ const ISSUE_LABELS: Record<ReadoutIssueType, string> = {
   CLASS_CONFLICT: 'Klasskonflikt',
   DUPLICATE_ASSIGNMENT: 'Dubblettkoppling',
   MANUAL_FINISH_REVIEW: 'Manuell måltid kräver granskning',
+  MANUAL_RESULT_APPROVAL: 'Manuell godkännande av resultat',
   WRONG_COMPETITOR: 'Fel löpare',
   MP_REVIEW: 'MP-granskning',
   LOCAL_PERSISTENCE_FAILURE: 'Kunde inte spara lokalt',

@@ -31,6 +31,10 @@ import {
   ReadoutAutoCreateError,
 } from './src/server/readoutAutocreate';
 import {
+  approveManualResult,
+  ManualResultApprovalError,
+} from './src/server/manualResultApproval';
+import {
   deleteCompetitionWithAssignments,
   CompetitionDeletionError,
 } from './src/server/competitionDeletion';
@@ -2792,6 +2796,11 @@ async function startServer() {
         path: /^\/firestore\/competitions\/[^/]+\/readouts\/[^/]+\/auto-create$/,
         roles: ['READOUT', 'FOREST', 'SPEAKER'],
       },
+      {
+        method: 'POST',
+        path: /^\/firestore\/competitions\/[^/]+\/competitors\/[^/]+\/manual-result-approval$/,
+        roles: ['READOUT', 'FOREST'],
+      },
       { method: 'POST', path: /^\/draw\/class$/, roles: ['START'] },
       { method: 'POST', path: /^\/competitors$/, roles: ['START', 'READOUT'] },
       { method: 'PUT', path: /^\/competitors\/[^/]+$/, roles: ['START', 'READOUT', 'FOREST'] },
@@ -4209,7 +4218,7 @@ async function startServer() {
     if (runner.rawReadout || runner.cardPunches.length > 0) {
       recalculateEventFromRawReadouts(db);
     } else {
-      runner.status = 'OK';
+      runner.status = 'PRELIMINARY_FIN';
       recomputeAllSplitRanks(db);
     }
 
@@ -4401,6 +4410,48 @@ async function startServer() {
         }
         console.error('Trusted readout auto-create failed:', error);
         res.status(500).json({ error: 'The readout competitor could not be created.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/firestore/competitions/:competitionId/competitors/:competitorId/manual-result-approval',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (!sessionUser) {
+        res.status(401).json({ error: 'Authentication is required.' });
+        return;
+      }
+
+      const role =
+        sessionUser.adminTier ??
+        (sessionUser.officialRole === 'READOUT' ||
+        sessionUser.officialRole === 'FOREST'
+          ? sessionUser.officialRole
+          : null);
+      if (role !== 'SUPER_ADMIN' && role !== 'RACE_ADMIN' && role !== 'READOUT' && role !== 'FOREST') {
+        res.status(403).json({ error: 'A result administrator or readout official is required.' });
+        return;
+      }
+
+      try {
+        const result = await approveManualResult(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid, role },
+          req.params.competitionId,
+          req.params.competitorId,
+          req.body
+        );
+        res.status(result.status === 'REPLAYED' ? 200 : 201).json(result);
+      } catch (error) {
+        if (error instanceof ManualResultApprovalError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Manual result approval failed:', error);
+        res.status(500).json({ error: 'The result approval could not be saved.' });
       }
     }
   );

@@ -35,6 +35,10 @@ export type RunnerStatus =
   | 'DNF'
   | 'DNS';
 
+export type ResultVerification =
+  | 'SI_VERIFIED_OK'
+  | 'MANUALLY_APPROVED_OK';
+
 export type EventLifecycleStatus = 'LIVE' | 'UPCOMING' | 'COMPLETED';
 
 export type ClassCompetitionFormat = 'STANDARD' | 'FORKED' | 'ROGAINING';
@@ -202,6 +206,7 @@ export interface Competitor {
   isBorrowedCard?: boolean;
   rentalReturned: boolean;
   status: RunnerStatus;
+  resultVerification?: ResultVerification;
   allocatedStartSec: number | null;
   checkTimeSec: number | null;
   startTimeSec: number | null;

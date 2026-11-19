@@ -19,6 +19,8 @@ Planning only; no application code is changed by this plan update.
 7. Preserve durable offline capture, delayed synchronization, automatic retry, receipt idempotency, and existing Bom calculation behavior.
 8. **Keep diagnostics off the finish-line workstation.** Move the existing SPORTident Hårdvarutestbänk without removing or reducing its functionality.
 9. **Keep the operational information ahead of overview metrics.** Order the workstation as Latest Readout, Outstanding Issues/actions, Readout History, then Competition Overview. Keep every current KPI and action intact.
+10. **Manual completion is a separate, explicit approval.** A reserve-clock manual finish may prepare a preliminary result, but it does not by itself prove a missing SI readout. Only an authorized operator can approve a `PRELIMINARY_FIN` result as `OK` through `MANUAL_RESULT_APPROVAL`; the approval requires a finish time and operator-provided reason.
+11. **Readout verification remains distinguishable from manual approval.** `OK` from a matched, validated SI-card readout is SI-verified. `OK` approved without a usable SI-card readout is manually approved and must show that provenance in result details and history. Keep every current KPI and action intact.
 
 ## Workstation layout
 
@@ -100,6 +102,8 @@ Each physical readout creates one durable history record at capture. Required fi
 | `linkedCompetitor` | Original matching result plus current/corrected linked competitor, kept separately. |
 | `issueType` | Explicit human-action issue, intervention-required technical/operational error, or informational duplicate marker. |
 | `issueState` | `NONE`, `OPEN`, `IN_PROGRESS`, `RESOLVED` or `DISMISSED`, independent from result and delivery state. |
+| `resultVerification` | Verification provenance for the result, for example `SI_VERIFIED_OK` or `MANUALLY_APPROVED_OK`. |
+| `approvalAuditId` | Stable reference to the append-only approval record when a preliminary result has been manually approved. Manual approval must not be inferred from status alone. |
 
 ### Result statuses
 
@@ -126,6 +130,7 @@ Each physical readout creates one durable history record at capture. Required fi
 - `CORRUPTED_PAYLOAD`
 - `UNRECOVERABLE_VALIDATION_FAILURE`
 - `DUPLICATE_READOUT` — informational only; use `issueState=NONE`, and never count it as an outstanding issue by itself.
+- `MANUAL_RESULT_APPROVAL` — human-action issue/action for converting an eligible `PRELIMINARY_FIN` with a recorded finish time into a manually approved `OK` after explicit authorization and reason.
 
 The first seven types above are human-action issues (including `MP_REVIEW`); the five technical/operational types represent errors requiring intervention when their state is `OPEN` or `IN_PROGRESS`. `DUPLICATE_READOUT` is an informational classification, not a human issue. It is distinct from `DUPLICATE_ASSIGNMENT`, which requires operator action.
 
@@ -142,6 +147,7 @@ Internal identifiers below remain unchanged in records and code. Never display t
 | `CLASS_CONFLICT` | **Klasskonflikt** |
 | `WRONG_COMPETITOR` / `RESULT_REASSIGNMENT` | **Fel löpare** |
 | `MANUAL_FINISH_REVIEW` | **Manuell måltid kräver granskning** |
+| `MANUAL_RESULT_APPROVAL` | **Manuell godkännande av resultat** |
 | `MP_REVIEW` | **MP-granskning** |
 
 Use the same terminology in Latest Readout, history, Outstanding Issues, action labels, and operator-facing explanations. Technical failure identifiers are also internal only; explain the failure in concise Swedish and state what the operator can do.
@@ -234,6 +240,38 @@ At every step, the operator can read the next SI card. The correction panel must
 
 For MP, provide an optional **Skapa MP-granskning** action. Until selected, retain `issueState=NONE` and do not increment the outstanding counter. If selected, create `MP_REVIEW`, preserve `resultStatus=MP`, and include the readout in the filtered issues view until resolved/dismissed.
 
+### Manual result approval
+
+A result entered through **Manuell måltid (Reservklocka vid målet)** remains
+preliminary unless an authorized operator explicitly approves it. Approval is
+available only when:
+
+- the competitor currently has `resultStatus=PRELIMINARY_FIN`;
+- a valid finish time exists, including the reserve-clock/manual finish time;
+- the actor has the authorized role and competition scope; and
+- the operator enters an explicit, non-empty reason.
+
+The action is recorded as `MANUAL_RESULT_APPROVAL`. It is a human-action issue
+or action context, not a replacement for the race result. A successful approval
+changes the current result to `OK`, while preserving the original
+`PRELIMINARY_FIN` status and the complete manual-finish provenance. A failed or
+cancelled approval does not change the result or resolve the action.
+
+Use these valid verification values:
+
+- `SI_VERIFIED_OK` — a normal OK result backed by a usable, matched SI-card
+  readout.
+- `MANUALLY_APPROVED_OK` — the final OK was explicitly approved by an authorized
+  operator after a reserve-clock/manual finish and no usable SI-card readout
+  was available.
+
+The result color remains green for both values because the current result is
+`OK`. The distinction is shown in history/detail text and is never inferred
+from `readoutAt`, sync state or the presence of a manual finish field alone.
+A later SI-card readout or successful reassignment must not silently overwrite
+manual-approval provenance; the server must retain both the original
+manual approval and any subsequent correction.
+
 ## Audit trail
 
 Keep append-only correction history associated with the readout. Each entry records:
@@ -244,6 +282,19 @@ Keep append-only correction history associated with the readout. Each entry reco
 - Previous and new linked competitor IDs (plus useful name/class snapshots).
 - Whether future SI-card assignment changed and its previous/new value, if applicable.
 - Correction transaction/result reference and validation outcome.
+
+Manual-result approval entries additionally record:
+
+- `MANUAL_RESULT_APPROVAL` action identifier.
+- The competitor ID, bib and class snapshot.
+- Previous status `PRELIMINARY_FIN` and new status `OK`.
+- Manual finish source (`Manuell måltid (Reservklocka)`) and finish timestamp.
+- Explicit operator reason.
+- Actor UID and authorized role.
+- Server-authoritative approval timestamp.
+- Idempotency/transaction reference.
+- Presence or absence of an available SI-card readout and, if later received,
+  the separate SI receipt/readout reference.
 
 Never overwrite the original payload, original match or original result to make a correction appear initial. Preserve failed/conflicting attempts without marking the issue resolved. Restrict raw card and audit data to authorized staff; do not expose these records through public result projections.
 
@@ -269,10 +320,10 @@ Duplicate delivery of one readout reuses its ID/sequence and updates one history
 | **Sportident, ROC och USB page** | Own setup and troubleshooting controls, including the relocated testbench section at the bottom of the page. |
 | **SPORTident Hårdvarutestbänk** | Preserve existing test scenarios, controls and outputs; render inside a collapsed-by-default **Diagnostik och verktyg** section on the Sportident, ROC och USB page. This is placement only, not a feature reduction. |
 | `src/services/offlineReadoutQueue.ts` | Preserve ID/sequence and delivery context across replay; continue to own technical retries only. |
-| `src/firebase.ts` | Preserve receipt semantics; return ID-keyed outcomes; support validated corrections/reassignment and audit recording; guard against stale current-result updates if needed. |
+| `src/firebase.ts` | Preserve receipt semantics; return ID-keyed outcomes; support validated corrections/reassignment and `MANUAL_RESULT_APPROVAL` audit recording; guard against stale current-result updates if needed. |
 | `src/utils/readoutValidation.ts` | Reuse existing validation and Bom calculations; do not alter Bom behavior. |
 | `src/components/EntriesRegistrationView.tsx` | Reuse unknown-card linking inside the inline correction workflow without navigating away. |
-| Firestore rules/types | Review and add minimal staff-only readout/correction access if needed. Keep raw records private from public projections. |
+| Firestore rules/types | Review and add minimal staff-only readout/correction access if needed. Add a narrowly authorized manual-approval operation and immutable append-only audit model. Keep raw records, approval audit and private result provenance out of public projections. |
 
 ## Implementation phases
 
@@ -315,12 +366,28 @@ Duplicate delivery of one readout reuses its ID/sequence and updates one history
 - Implement unknown/unlinked/conflict correction and `WRONG_COMPETITOR`/`RESULT_REASSIGNMENT`.
 - Add the successful-readout reassignment preview and authorized idempotent transaction.
 - Retain original matching, corrected current link and append-only audit; update derived results safely.
+- Add `MANUAL_RESULT_APPROVAL` for eligible `PRELIMINARY_FIN` results.
+- Require a valid finish time, authorized role/competition scope, and explicit reason before server acceptance.
+- Preserve `PRELIMINARY_FIN` as original status history and write the approved `OK` plus `MANUALLY_APPROVED_OK` provenance separately.
+- Append a server-authoritative audit entry and make approval idempotent and replay-safe.
+- Show “SI-verified OK” and “Manually approved OK” in history/detail UI without changing the underlying green result color.
+- Prevent approval of a result that is not preliminary, lacks a finish time, lacks authorization or lacks a reason.
+- Do not infer manual approval automatically from setting a reserve-clock finish time.
+- Preserve a later received SI-card readout, receipt and audit event as separate evidence rather than erasing manual approval history.
 - Keep a correction failure explicitly open/red when intervention is required; do not mark it resolved or recolor it as a valid result until correction succeeds or is dismissed.
 - Keep the V5 workstation ordering and do not move the KPI panel above readout or issue work.
 
 ### Phase 4 — Pilot
 
 - Test rapid reads, offline/reconnect, reverse response order, duplicate delivery, multiple unknown cards, multiple MPs and an `OK` reassignment.
+- Test reserve-clock/manual-finish preliminary results and approval:
+  - lost card;
+  - damaged card;
+  - forgotten readout; and
+  - reserve timing procedure.
+- Verify approval is rejected without finish time, authorization or explicit reason.
+- Verify successful approval changes only the current result to `OK` and retains the original `PRELIMINARY_FIN`, manual-finish timestamp and audit trail.
+- Verify replay/duplicate approval returns the same outcome without a second status mutation or audit entry.
 - Reconcile physical reads, IDs/sequences, history rows, receipts, outstanding issues and audit records.
 - Verify the testbench remains fully functional at its new location and that the readout workstation no longer contains it.
 - Verify the KPI panel appears below the complete history, all values remain correct, and **Säkerhetslista** still opens the safety view.
@@ -347,6 +414,12 @@ Duplicate delivery of one readout reuses its ID/sequence and updates one history
 - A delayed response cannot move Latest Readout backward; rows are updated by ID and latest is determined only by capture sequence.
 - Replaying a receipt updates one row; a new physical read creates a new row.
 - Correcting an `OK` result from Anna to Erik preserves the original match, updates the current link/derived result safely, appends an audit record, and leaves the readout in history.
+- A competitor with `PRELIMINARY_FIN` and a valid manual finish time may be changed to `OK` only through an authorized `MANUAL_RESULT_APPROVAL` containing an explicit reason.
+- Manual approval is rejected if the finish time is missing, the actor is unauthorized, or the reason is empty.
+- Successful manual approval preserves original `PRELIMINARY_FIN` status history, the manual-finish source/time and an append-only approval audit record.
+- History/details distinguish **SI-verified OK** (`SI_VERIFIED_OK`) from **Manually approved OK** (`MANUALLY_APPROVED_OK`) without treating the provenance as a different race-result status.
+- Duplicate/replayed manual approval does not create a second mutation or duplicate audit entry and remains tied to the same approval operation/ID.
+- If an SI-card readout arrives later, the readout/receipt and manual approval remain separately attributable; neither silently erases the other.
 - Reading the next card remains possible while any readout is syncing, being reviewed or being corrected.
 - Existing validation/Bom behavior is preserved and public views receive no raw readout/audit documents.
 - **The workstation sections appear in this order:** Latest Readout; Outstanding Issues/actions; Readout History; Competition Overview.

@@ -4198,6 +4198,42 @@ export default function App() {
                   latestReadoutId={latestReadoutId}
                   readoutHistoryError={readoutHistoryError}
                   onCreateMpReviewIssue={createMpReviewIssue}
+                  onApproveManualResult={async (competitorId, reason) => {
+                    try {
+                      const operationKey =
+                        `manual-result-approval:${activeEventId}:${competitorId}`;
+                      const existingOperationId =
+                        localStorage.getItem(operationKey);
+                      const operationId =
+                        existingOperationId && /^manual-approval-[a-zA-Z0-9_-]+$/.test(existingOperationId)
+                          ? existingOperationId
+                          : `manual-approval-${crypto.randomUUID()}`;
+                      localStorage.setItem(operationKey, operationId);
+                      const res = await apiFetch(
+                        `/api/firestore/competitions/${encodeURIComponent(activeEventId)}/competitors/${encodeURIComponent(competitorId)}/manual-result-approval`,
+                        {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            operationId,
+                            reason,
+                          }),
+                        }
+                      );
+                      if (!res.ok) {
+                        const body = (await res.json().catch(() => ({}))) as { error?: string };
+                        return body.error ?? 'Resultatet kunde inte godkännas manuellt.';
+                      }
+                      localStorage.removeItem(operationKey);
+                      const result = await recalculateCompetitionFromFirestore(activeEventId);
+                      setCompetitors(result.competitors);
+                      return null;
+                    } catch (error) {
+                      return error instanceof Error
+                        ? error.message
+                        : 'Resultatet kunde inte godkännas manuellt.';
+                    }
+                  }}
                   onResolveUnknownCard={(record, siNumber, details) =>
                     handleCreateDirectEntry({
                       siNumber,
@@ -5152,7 +5188,7 @@ export default function App() {
                         finishTimeSec >= startTimeSec
                           ? finishTimeSec - startTimeSec
                           : null,
-                      ...(hasReadout ? {} : { status: 'OK' as RunnerStatus }),
+                      ...(hasReadout ? {} : { status: 'PRELIMINARY_FIN' as RunnerStatus }),
                     });
                     const result = await recalculateCompetitionFromFirestore(activeEventId);
                     setEmergency(result.emergency);

@@ -64,6 +64,10 @@ interface ReadoutDashboardProps {
   latestReadoutId: string | null;
   readoutHistoryError: string | null;
   onCreateMpReviewIssue: (clientReadoutId: string) => Promise<void>;
+  onApproveManualResult: (
+    competitorId: string,
+    reason: string
+  ) => Promise<string | null>;
   onResolveUnknownCard: (
     record: ReadoutHistoryRecord | null,
     siNumber: number,
@@ -113,6 +117,7 @@ export function ReadoutDashboard({
   latestReadoutId,
   readoutHistoryError,
   onCreateMpReviewIssue,
+  onApproveManualResult,
   onResolveUnknownCard,
   offlineSnap,
   serialStatus,
@@ -144,6 +149,9 @@ export function ReadoutDashboard({
   const [historyPageSize, setHistoryPageSize] = useState<20 | 30 | 50>(30);
   const [historyPage, setHistoryPage] = useState(0);
   const [issueActionBusyId, setIssueActionBusyId] = useState<string | null>(null);
+  const [manualApprovalBusy, setManualApprovalBusy] = useState(false);
+  const [manualApprovalReason, setManualApprovalReason] = useState('');
+  const [manualApprovalError, setManualApprovalError] = useState<string | null>(null);
   const [unknownCardBusyId, setUnknownCardBusyId] = useState<string | null>(null);
   const [unknownCardError, setUnknownCardError] = useState<string | null>(null);
   const [unknownCardSuccess, setUnknownCardSuccess] = useState<string | null>(null);
@@ -370,6 +378,43 @@ export function ReadoutDashboard({
       });
     } finally {
       setIssueActionBusyId(null);
+    }
+  };
+
+  const handleApproveManualResult = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const competitorId = selectedReadout?.competitorId;
+    if (!competitorId) {
+      setManualApprovalError('Ingen löpare är kopplad till avläsningen.');
+      return;
+    }
+    const competitor = competitors.find((candidate) => candidate.id === competitorId);
+    if (!competitor || competitor.status !== 'PRELIMINARY_FIN') {
+      setManualApprovalError('Endast ett preliminärt resultat kan godkännas manuellt.');
+      return;
+    }
+    if (
+      competitor.manualFinishTimeSec == null &&
+      competitor.finishTimeSec == null
+    ) {
+      setManualApprovalError('En giltig måltid saknas.');
+      return;
+    }
+    if (manualApprovalReason.trim().length < 3) {
+      setManualApprovalError('Ange en tydlig anledning för det manuella godkännandet.');
+      return;
+    }
+    setManualApprovalBusy(true);
+    setManualApprovalError(null);
+    try {
+      const error = await onApproveManualResult(
+        competitorId,
+        manualApprovalReason.trim()
+      );
+      setManualApprovalError(error);
+      if (!error) setManualApprovalReason('');
+    } finally {
+      setManualApprovalBusy(false);
     }
   };
 
@@ -911,6 +956,11 @@ export function ReadoutDashboard({
               </span>
               <span>
                 Aktuellt resultat: {selectedReadout.resultStatus ?? 'Ej tilldelat'}
+                {selectedReadout.resultStatus === 'OK'
+                  ? selectedReadout.competitorSnapshot?.resultVerification === 'MANUALLY_APPROVED_OK'
+                    ? ' · Manuellt godkänt OK'
+                    : ' · SI-verifierat OK'
+                  : ''}
                 {selectedReadout.competitorSnapshot?.runningTimeSec != null
                   ? ` · tid ${formatDurationMmSs(
                       selectedReadout.competitorSnapshot.runningTimeSec
@@ -939,6 +989,62 @@ export function ReadoutDashboard({
                 {selectedReadout.syncError}
               </div>
             )}
+            {(() => {
+              const approvalCompetitor = selectedReadout.competitorId
+                ? competitors.find(
+                    (competitor) =>
+                      competitor.id === selectedReadout.competitorId
+                  ) ?? null
+                : null;
+              const canApproveManually =
+                approvalCompetitor?.status === 'PRELIMINARY_FIN' &&
+                (approvalCompetitor.manualFinishTimeSec != null ||
+                  approvalCompetitor.finishTimeSec != null);
+              if (!canApproveManually) return null;
+              return (
+                <form
+                  onSubmit={(event) => void handleApproveManualResult(event)}
+                  className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-slate-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-slate-100"
+                >
+                  <h3 className="text-xs font-semibold">
+                    Manuell godkännande av resultat
+                  </h3>
+                  <p className="mt-0.5 text-[11px]">
+                    Måltid: {formatSecondsAsClock(
+                      approvalCompetitor.manualFinishTimeSec ??
+                        approvalCompetitor.finishTimeSec
+                    )}. Ange anledning innan resultatet godkänns som OK.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <input
+                      value={manualApprovalReason}
+                      onChange={(event) =>
+                        setManualApprovalReason(event.target.value)
+                      }
+                      placeholder="Anledning, t.ex. förlorad SI-bricka"
+                      className="min-w-64 flex-1 rounded border border-slate-300 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                    />
+                    <button
+                      type="submit"
+                      disabled={
+                        manualApprovalBusy ||
+                        manualApprovalReason.trim().length < 3
+                      }
+                      className="rounded bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {manualApprovalBusy
+                        ? 'Godkänner...'
+                        : 'Godkänn resultat som OK'}
+                    </button>
+                  </div>
+                  {manualApprovalError && (
+                    <p className="mt-1.5 text-xs text-red-700 dark:text-red-300">
+                      {manualApprovalError}
+                    </p>
+                  )}
+                </form>
+              );
+            })()}
             <div className="mt-2 flex flex-wrap gap-1">
               {selectedReadout.readout.punches.map((punch, index) => (
                 <span

@@ -7,6 +7,7 @@ import type {
   EmergencySettings,
   RadioSplit,
   RunnerStatus,
+  ResultVerification,
   SICardSeries,
   StationFunction,
 } from '../types/sportident';
@@ -81,6 +82,10 @@ export function mapFirestoreCompetitor(
       : {}),
     rentalReturned: Boolean(data.rentalReturned),
     status: (data.status || 'REGISTERED') as RunnerStatus,
+    ...(data.resultVerification === 'SI_VERIFIED_OK' ||
+    data.resultVerification === 'MANUALLY_APPROVED_OK'
+      ? { resultVerification: data.resultVerification as ResultVerification }
+      : {}),
     allocatedStartSec,
     checkTimeSec: checkSec,
     startTimeSec: startSec,
