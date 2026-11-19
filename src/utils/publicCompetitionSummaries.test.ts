@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { CompetitionSummary } from '../types/sportident';
-import { mergePublicCompetitionSummaries } from './publicCompetitionSummaries';
+import {
+  applyPublicCompetitionCounts,
+  mergePublicCompetitionSummaries,
+} from './publicCompetitionSummaries';
 
 function createSummary(
   id: string,
@@ -26,6 +29,20 @@ function createSummary(
 }
 
 describe('mergePublicCompetitionSummaries', () => {
+  it('derives 46 registered and 4 finished from public result projections', () => {
+    const summary = createSummary('event-1', 4, 4);
+    const publicResults = [
+      ...Array.from({ length: 42 }, () => ({ status: 'REGISTERED' })),
+      ...Array.from({ length: 3 }, () => ({ status: 'OK' })),
+      { status: 'PRELIMINARY_FIN' },
+    ];
+
+    expect(applyPublicCompetitionCounts(summary, publicResults)).toMatchObject({
+      competitorCount: 46,
+      finishedCount: 4,
+    });
+  });
+
   it('uses Firestore counts for matching competitions and preserves unrelated merge behavior', () => {
     const apiSummary = createSummary('event-1', 0, 0, { classCount: 5 });
     const firestoreSummary = createSummary('event-1', 24, 6, {

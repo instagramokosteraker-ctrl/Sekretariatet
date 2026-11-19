@@ -1,5 +1,19 @@
 import type { CompetitionSummary } from '../types/sportident';
 
+export function applyPublicCompetitionCounts(
+  competition: CompetitionSummary,
+  publicResults: ReadonlyArray<{ status?: unknown }>
+): CompetitionSummary {
+  const finishedStatuses = new Set(['OK', 'MP', 'PRELIMINARY_FIN']);
+  return {
+    ...competition,
+    competitorCount: publicResults.length,
+    finishedCount: publicResults.filter(
+      (result) => typeof result.status === 'string' && finishedStatuses.has(result.status)
+    ).length,
+  };
+}
+
 export function mergePublicCompetitionSummaries(
   apiCompetitions: CompetitionSummary[],
   firestoreCompetitions: CompetitionSummary[]

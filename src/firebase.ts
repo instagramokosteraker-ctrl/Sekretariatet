@@ -40,6 +40,7 @@ import {
   type FirestoreCompetitorContext,
   type FirestoreLiveRadioPunch,
 } from './utils/firestoreLiveResults';
+import { applyPublicCompetitionCounts } from './utils/publicCompetitionSummaries';
 import {
   addPublicRadioSplit,
   createPublicResultDocument,
@@ -7658,21 +7659,30 @@ export async function loadPublicCompetitionSummariesFromFirestore(): Promise<
       )
     : [];
   const snapshots = await Promise.all(
-    ids.map((id) => getDoc(doc(db, 'competitions', id)))
+    ids.map(async (id) => {
+      const [competitionSnapshot, publicResultSnapshot] = await Promise.all([
+        getDoc(doc(db, 'competitions', id)),
+        getDocs(collection(db, 'competitions', id, 'publicResults')),
+      ]);
+      return { competitionSnapshot, publicResultSnapshot };
+    })
   );
   return snapshots
-    .flatMap((snapshot) => {
-      if (!snapshot.exists()) return [];
-      const data = snapshot.data();
+    .flatMap(({ competitionSnapshot, publicResultSnapshot }) => {
+      if (!competitionSnapshot.exists()) return [];
+      const data = competitionSnapshot.data();
       const status =
         data.status === 'LIVE' ||
         data.status === 'UPCOMING' ||
         data.status === 'COMPLETED'
           ? data.status
           : 'UPCOMING';
-      return [{
-        id: snapshot.id,
-        competitionId: snapshot.id,
+      const publicResults = publicResultSnapshot.docs.map((resultSnapshot) =>
+        resultSnapshot.data()
+      );
+      return [applyPublicCompetitionCounts({
+        id: competitionSnapshot.id,
+        competitionId: competitionSnapshot.id,
         shortCode: typeof data.shortCode === 'string' ? data.shortCode : '',
         status,
         name: typeof data.name === 'string' ? data.name : 'Tävling',
@@ -7690,7 +7700,7 @@ export async function loadPublicCompetitionSummariesFromFirestore(): Promise<
         competitorCount: clampInt(data.competitorCount, 0, 50000, 0),
         finishedCount: clampInt(data.finishedCount, 0, 50000, 0),
         classCount: 0,
-      }];
+      }, publicResults)];
     })
     .sort((left, right) => right.date.localeCompare(left.date));
 }
@@ -7725,14 +7735,43 @@ export function subscribePublicCompetitionSummaries(
   onError: (error: Error) => void
 ): () => void {
   const competitionUnsubscribers = new Map<string, () => void>();
+  const publicResultUnsubscribers = new Map<string, () => void>();
+  const publicResultsById = new Map<string, Array<{ status?: unknown }>>();
   const competitionsById = new Map<string, CompetitionSummary>();
 
   const publish = () => {
     onUpdate(
-      Array.from(competitionsById.values()).sort((a, b) =>
-        b.date.localeCompare(a.date)
-      )
+      Array.from(competitionsById.values())
+        .map((competition) =>
+          publicResultsById.has(competition.id)
+            ? applyPublicCompetitionCounts(
+                competition,
+                publicResultsById.get(competition.id) ?? []
+              )
+            : competition
+        )
+        .sort((a, b) => b.date.localeCompare(a.date))
     );
+  };
+
+  const ensurePublicResultSubscription = (competitionId: string) => {
+    if (publicResultUnsubscribers.has(competitionId)) return;
+    try {
+      const unsubscribe = onSnapshot(
+        collection(db, 'competitions', competitionId, 'publicResults'),
+        (snapshot) => {
+          publicResultsById.set(
+            competitionId,
+            snapshot.docs.map((resultSnapshot) => resultSnapshot.data())
+          );
+          publish();
+        },
+        (error) => onError(error)
+      );
+      publicResultUnsubscribers.set(competitionId, unsubscribe);
+    } catch {
+      // Keep the competition counters as a fallback.
+    }
   };
 
   const parseCompDoc = (docId: string, data: Partial<CompetitionSummary>): CompetitionSummary => {
@@ -7771,8 +7810,12 @@ export function subscribePublicCompetitionSummaries(
           const docId = change.doc.id;
           if (change.type === 'removed') {
             competitionsById.delete(docId);
+            publicResultsById.delete(docId);
+            publicResultUnsubscribers.get(docId)?.();
+            publicResultUnsubscribers.delete(docId);
           } else {
             competitionsById.set(docId, parseCompDoc(docId, change.doc.data() as Partial<CompetitionSummary>));
+            ensurePublicResultSubscription(docId);
           }
         }
         publish();
@@ -7807,10 +7850,14 @@ export function subscribePublicCompetitionSummaries(
         if (!desiredIds.has(competitionId)) {
           unsubscribe();
           competitionUnsubscribers.delete(competitionId);
+          publicResultUnsubscribers.get(competitionId)?.();
+          publicResultUnsubscribers.delete(competitionId);
+          publicResultsById.delete(competitionId);
         }
       }
 
       for (const competitionId of competitionIds) {
+        ensurePublicResultSubscription(competitionId);
         if (competitionUnsubscribers.has(competitionId)) continue;
         const unsubscribe = onSnapshot(
           doc(db, 'competitions', competitionId),
@@ -7845,7 +7892,12 @@ export function subscribePublicCompetitionSummaries(
     for (const unsubscribe of competitionUnsubscribers.values()) {
       unsubscribe();
     }
+    for (const unsubscribe of publicResultUnsubscribers.values()) {
+      unsubscribe();
+    }
     competitionUnsubscribers.clear();
+    publicResultUnsubscribers.clear();
+    publicResultsById.clear();
     competitionsById.clear();
   };
 }
