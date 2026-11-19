@@ -58,6 +58,10 @@ import type {
   SICardSeries,
   SIStation,
 } from './types/sportident';
+import type {
+  ReadoutReassignmentAuditEntry,
+  ResultReassignmentResponse,
+} from './types/readoutReassignment';
 import {
   buildSi5ReadoutFrame,
   buildSi6ReadoutBlockFrames,
@@ -1226,6 +1230,109 @@ export default function App() {
     }
   }, []);
 
+  const createWrongCompetitorIssue = useCallback(
+    async (clientReadoutId: string) => {
+      const record = readoutHistoryStore.getRecord(clientReadoutId);
+      if (!record) throw new Error('Avläsningen hittades inte i historiken.');
+      if (record.resultStatus !== 'OK' || record.correctionOperationId) {
+        throw new Error('Endast ett okorrigerat OK-resultat kan få ärendet Fel löpare.');
+      }
+      if (record.issueState !== 'NONE') {
+        throw new Error('Avläsningen har redan ett ärendetillstånd.');
+      }
+      await readoutHistoryStore.update(clientReadoutId, {
+        issueType: 'WRONG_COMPETITOR',
+        issueState: 'OPEN',
+      });
+    },
+    []
+  );
+
+  const loadResultReassignmentAudits = useCallback(
+    async (readoutId: string): Promise<ReadoutReassignmentAuditEntry[]> => {
+      const response = await apiFetch(
+        `/api/firestore/competitions/${encodeURIComponent(activeEventId)}/readouts/${encodeURIComponent(readoutId)}/corrections`
+      );
+      const body = await readApiResponseJson<{
+        audits: ReadoutReassignmentAuditEntry[];
+      }>(response, 'Korrigeringshistoriken kunde inte hämtas.');
+      return body.audits;
+    },
+    [activeEventId]
+  );
+
+  const applyReadoutResultReassignment = useCallback(
+    async (
+      record: ReadoutHistoryRecord,
+      targetCompetitorId: string,
+      reason: string
+    ): Promise<ReadoutReassignmentAuditEntry> => {
+      const storageKey = [
+        'readout-reassignment',
+        activeEventId,
+        record.clientReadoutId,
+        targetCompetitorId,
+        reason.trim(),
+      ].join(':');
+      const storedOperationId = localStorage.getItem(storageKey);
+      const operationId =
+        storedOperationId && /^readout-correction-[a-zA-Z0-9_-]+$/.test(storedOperationId)
+          ? storedOperationId
+          : `readout-correction-${crypto.randomUUID()}`;
+      if (!storedOperationId) localStorage.setItem(storageKey, operationId);
+
+      const response = await apiFetch(
+        `/api/firestore/competitions/${encodeURIComponent(activeEventId)}/readouts/${encodeURIComponent(record.clientReadoutId)}/reassignment`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            operationId,
+            targetCompetitorId,
+            reason: reason.trim(),
+          }),
+        }
+      );
+      const result = await readApiResponseJson<ResultReassignmentResponse>(
+        response,
+        'Resultatet kunde inte korrigeras.'
+      );
+      const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
+      const correctedCompetitor = recalculated.competitors.find(
+        (competitor) => competitor.id === result.correctedCompetitorId
+      );
+      if (!correctedCompetitor) {
+        throw new Error('Korrigeringen sparades, men den nya löparen kunde inte läsas in.');
+      }
+      setCompetitors(recalculated.competitors);
+      const currentRecord =
+        readoutHistoryStore.getRecord(record.clientReadoutId) ?? record;
+      const correctionAudit = [
+        result.audit,
+        ...currentRecord.correctionAudit.filter(
+          (entry) => entry.operationId !== result.operationId
+        ),
+      ];
+      await readoutHistoryStore.update(record.clientReadoutId, {
+        competitorId: correctedCompetitor.id,
+        competitorName: correctedCompetitor.fullName,
+        className:
+          classes.find((candidate) => candidate.id === correctedCompetitor.classId)
+            ?.name ?? null,
+        resultStatus: correctedCompetitor.status,
+        competitorSnapshot: correctedCompetitor,
+        correctionOperationId: result.operationId,
+        correctionAudit,
+        issueType: 'WRONG_COMPETITOR',
+        issueState: 'RESOLVED',
+        syncError: null,
+      });
+      localStorage.removeItem(storageKey);
+      return result.audit;
+    },
+    [activeEventId, classes]
+  );
+
   useEffect(() => {
     activeEventIdRef.current = activeEventId;
   }, [activeEventId]);
@@ -1237,6 +1344,9 @@ export default function App() {
         'Readout response did not match a captured history record:',
         clientReadoutId ?? '(missing clientReadoutId)'
       );
+      return;
+    }
+    if (readoutHistoryStore.getRecord(clientReadoutId)?.correctionOperationId) {
       return;
     }
 
@@ -4190,6 +4300,8 @@ export default function App() {
                 <ReadoutDashboard
                   courses={courses}
                   classes={classes}
+                  emergency={emergency}
+                  zeroTimeSec={competition.zeroTimeSec}
                   stations={stations}
                   competitors={competitors}
                   runnerDb={runnerDb}
@@ -4199,6 +4311,9 @@ export default function App() {
                   latestReadoutId={latestReadoutId}
                   readoutHistoryError={readoutHistoryError}
                   onCreateMpReviewIssue={createMpReviewIssue}
+                  onCreateWrongCompetitorIssue={createWrongCompetitorIssue}
+                  onApplyResultReassignment={applyReadoutResultReassignment}
+                  onLoadResultReassignmentAudits={loadResultReassignmentAudits}
                   onApproveManualResult={async (competitorId, reason) => {
                     try {
                       const operationKey =

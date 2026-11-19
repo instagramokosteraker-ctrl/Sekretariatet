@@ -1,6 +1,6 @@
 # PasserSI — project status handoff
 
-**Updated:** 2026-11-18
+**Updated:** 2026-11-19
 **Repository:** `instagramokosteraker-ctrl/Sekretariatet`
 **Branch / HEAD:** `main` / `e71bb4c`
 **Purpose:** Concise, evidence-based state for continuing work in Cursor, Copilot, or Claude Code.
@@ -61,8 +61,12 @@ Local builds, TypeScript checks, and focused regression tests passed for the rec
 - Physical readouts retain `clientReadoutId`, `captureSequence`, and `capturedAt`; latest-readout selection and history ordering remain capture-sequence based. History rows remain reopenable, and Outstanding Issues includes open and in-progress issues.
 - Unknown-card resolution remains inline while the reader can capture the next SI card. The runner-name field now searches the runner database as the operator types; selecting a suggestion fills the name, club, profile, and matching class when available. The captured SI number stays read-only.
 - Offline queue, receipts, retries, validation, and Bom behavior remain in place.
-- **Not implemented:** Phase 3 correction/reassignment transactions, WRONG_COMPETITOR workflow, RESULT_REASSIGNMENT, or audit trail.
-- See [READOUT_OVERVIEW_V5_IMPLEMENTATION.md](./READOUT_OVERVIEW_V5_IMPLEMENTATION.md).
+- ✅ `WRONG_COMPETITOR` issue workflow implemented for reopening eligible historical `OK` readouts.
+- ✅ `RESULT_REASSIGNMENT` implemented with target preview, server-side role revalidation, Firestore transaction, and replay-safe operation IDs.
+- ✅ `MANUAL_RESULT_APPROVAL` implemented for eligible preliminary results.
+- ✅ Append-only correction audit trail implemented with actor UID/role, timestamp, reason, original/corrected competitors, operation ID, and result details. Original readout receipts and punches remain unchanged.
+- Local Phase 3 verification passed; production deployment and live-event verification are not attested. Unknown/unlinked-card, class-conflict, and other ambiguous-assignment correction workflows remain outside this reassignment implementation.
+- See [READOUT_OVERVIEW_V5_IMPLEMENTATION.md](./READOUT_OVERVIEW_V5_IMPLEMENTATION.md), [READOUT_ROW_CLICKABILITY_FIX.md](./READOUT_ROW_CLICKABILITY_FIX.md), and [READOUT_PHASE3_RESULT_REASSIGNMENT.md](./READOUT_PHASE3_RESULT_REASSIGNMENT.md).
 
 ### Firestore Live Sync
 
@@ -129,6 +133,6 @@ Recent feature-specific verification recorded in implementation reports:
 - Eventor class-mapping regression tests — PASS for Vit, Gul, Orange, Svart.
 - Firestore Live Sync Phase 2 focused projection-rule tests — PASS; broad Rules suite remains blocked by expression-limit diagnostics.
 - Class draw fallback/class selection tests — PASS; local draw fix build/lint passed. Live Firestore/browser verification is still open.
-- Readout workstation full source suite — PASS (149 passed, 12 skipped) before the runner-name autocomplete follow-up; after autocomplete, build and lint passed and the focused autocomplete/presentation tests passed (16 tests).
+- Readout workstation current verification — `npm run build` PASS, `npm run lint` PASS, full source suite PASS (164 passed, 16 skipped), and Firestore emulator reassignment suite PASS (4 tests: Anna → Erik, idempotent replay/payload conflict, unauthorized actor, missing target).
 
 Production deployment, active Rules attestation, controlled Eventor publication, and live-event end-to-end verification are **not** included in these local PASS results.

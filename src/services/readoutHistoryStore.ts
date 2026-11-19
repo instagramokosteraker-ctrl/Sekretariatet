@@ -4,6 +4,7 @@ import type {
   RunnerDbEntry,
   RunnerStatus,
 } from '../types/sportident';
+import type { ReadoutReassignmentAuditEntry } from '../types/readoutReassignment';
 
 export type CapturedReadoutPayload = FullCardReadoutPayload & {
   clientReadoutId: string;
@@ -59,6 +60,8 @@ export interface ReadoutHistoryRecord {
   originalCompetitorSnapshot: Competitor | null;
   issueType: ReadoutIssueType | null;
   issueState: ReadoutIssueState;
+  correctionOperationId: string | null;
+  correctionAudit: ReadoutReassignmentAuditEntry[];
   suggestedRunner: RunnerDbEntry | null;
   syncError: string | null;
 }
@@ -80,6 +83,8 @@ export type ReadoutHistoryUpdate = Partial<
     | 'originalCompetitorSnapshot'
     | 'issueType'
     | 'issueState'
+    | 'correctionOperationId'
+    | 'correctionAudit'
     | 'suggestedRunner'
     | 'syncError'
   >
@@ -251,6 +256,8 @@ class ReadoutHistoryStore {
       originalCompetitorSnapshot: null,
       issueType: null,
       issueState: 'NONE',
+      correctionOperationId: null,
+      correctionAudit: [],
       suggestedRunner: null,
       syncError: null,
     };
@@ -330,6 +337,12 @@ class ReadoutHistoryStore {
           : record.readoutState === 'UNKNOWN'
             ? 'OPEN'
             : 'NONE',
+        correctionOperationId: hasField('correctionOperationId')
+          ? record.correctionOperationId
+          : null,
+        correctionAudit: hasField('correctionAudit')
+          ? record.correctionAudit
+          : [],
       };
     });
     if (
@@ -344,7 +357,9 @@ class ReadoutHistoryStore {
           !Object.prototype.hasOwnProperty.call(
             record,
             'originalCompetitorSnapshot'
-          )
+          ) ||
+          !Object.prototype.hasOwnProperty.call(record, 'correctionOperationId') ||
+          !Object.prototype.hasOwnProperty.call(record, 'correctionAudit')
       )
     ) {
       await new Promise<void>((resolve, reject) => {

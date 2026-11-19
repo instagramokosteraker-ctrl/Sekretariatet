@@ -2104,6 +2104,20 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      match /readoutCorrections/{operationId} {
+        allow get, list: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(operationId) &&
+          parentCompetitionExists(competitionId) &&
+          (
+            isAdmin() ||
+            hasOfficialRole('READOUT') ||
+            hasOfficialRole('FOREST')
+          );
+
+        allow create, update, delete: if false;
+      }
+
       match /stations/{stationId} {
         function isValidCloudStation(data) {
           return data.keys().hasAll([

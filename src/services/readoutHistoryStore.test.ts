@@ -51,12 +51,44 @@ function createRecord(
     originalCompetitorSnapshot: null,
     issueType: readoutState === 'UNKNOWN' ? 'UNKNOWN_CARD' : null,
     issueState: readoutState === 'UNKNOWN' ? 'OPEN' : 'NONE',
+    correctionOperationId: null,
+    correctionAudit: [],
     suggestedRunner: null,
     syncError: null,
   };
 }
 
 describe('readout history ordering', () => {
+  it('keeps the original match while recording the corrected current competitor', () => {
+    const record = {
+      ...createRecord('readout-corrected', 1, 'PROCESSED'),
+      competitorId: 'anna',
+      competitorName: 'Anna',
+      originalCompetitorId: 'anna',
+      originalCompetitorName: 'Anna',
+      resultStatus: 'OK' as const,
+      issueType: 'WRONG_COMPETITOR' as const,
+      issueState: 'OPEN' as const,
+    };
+
+    const corrected = updateReadoutHistoryRecord([record], record.clientReadoutId, {
+      competitorId: 'erik',
+      competitorName: 'Erik',
+      issueState: 'RESOLVED',
+      correctionOperationId: 'readout-correction-op-1',
+    })[0];
+
+    expect(corrected).toMatchObject({
+      competitorId: 'erik',
+      competitorName: 'Erik',
+      originalCompetitorId: 'anna',
+      originalCompetitorName: 'Anna',
+      issueType: 'WRONG_COMPETITOR',
+      issueState: 'RESOLVED',
+      correctionOperationId: 'readout-correction-op-1',
+    });
+  });
+
   it('keeps the newest captured readout latest when responses arrive out of order', () => {
     const readoutA = createRecord('readout-a', 100);
     const readoutB = createRecord('readout-b', 101);

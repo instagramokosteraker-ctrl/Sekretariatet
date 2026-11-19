@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -17,9 +17,11 @@ import type {
   CompClass,
   Competitor,
   Course,
+  EmergencySettings,
   RunnerDbEntry,
   SIStation,
 } from '../types/sportident';
+import type { ReadoutReassignmentAuditEntry } from '../types/readoutReassignment';
 import type { OfflineQueueSnapshot } from '../services/offlineReadoutQueue';
 import {
   filterOutstandingReadouts,
@@ -48,13 +50,17 @@ import {
   getReadoutStatusText,
 } from '../utils/readoutStatusPresentation';
 import { getRunnerNameSuggestions } from '../utils/runnerNameSuggestions';
+import { calculateReadoutReassignmentPreview } from '../utils/readoutReassignment';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
+import { ReadoutHistoryRow } from './ReadoutHistoryRow';
 import { UsbStationBar, UsbStationErrorBanner } from './UsbStationBar';
 
 interface ReadoutDashboardProps {
   courses: Course[];
   classes: CompClass[];
+  emergency: EmergencySettings;
+  zeroTimeSec: number;
   stations: SIStation[];
   competitors: Competitor[];
   runnerDb: RunnerDbEntry[];
@@ -64,6 +70,15 @@ interface ReadoutDashboardProps {
   latestReadoutId: string | null;
   readoutHistoryError: string | null;
   onCreateMpReviewIssue: (clientReadoutId: string) => Promise<void>;
+  onCreateWrongCompetitorIssue: (clientReadoutId: string) => Promise<void>;
+  onApplyResultReassignment: (
+    record: ReadoutHistoryRecord,
+    targetCompetitorId: string,
+    reason: string
+  ) => Promise<ReadoutReassignmentAuditEntry>;
+  onLoadResultReassignmentAudits: (
+    readoutId: string
+  ) => Promise<ReadoutReassignmentAuditEntry[]>;
   onApproveManualResult: (
     competitorId: string,
     reason: string
@@ -108,6 +123,8 @@ interface ReadoutDashboardProps {
 export function ReadoutDashboard({
   courses,
   classes,
+  emergency,
+  zeroTimeSec,
   stations,
   competitors,
   runnerDb,
@@ -117,6 +134,9 @@ export function ReadoutDashboard({
   latestReadoutId,
   readoutHistoryError,
   onCreateMpReviewIssue,
+  onCreateWrongCompetitorIssue,
+  onApplyResultReassignment,
+  onLoadResultReassignmentAudits,
   onApproveManualResult,
   onResolveUnknownCard,
   offlineSnap,
@@ -149,6 +169,16 @@ export function ReadoutDashboard({
   const [historyPageSize, setHistoryPageSize] = useState<20 | 30 | 50>(30);
   const [historyPage, setHistoryPage] = useState(0);
   const [issueActionBusyId, setIssueActionBusyId] = useState<string | null>(null);
+  const [wrongCompetitorOpen, setWrongCompetitorOpen] = useState(false);
+  const [wrongCompetitorTargetId, setWrongCompetitorTargetId] = useState('');
+  const [wrongCompetitorReason, setWrongCompetitorReason] = useState('');
+  const [wrongCompetitorBusy, setWrongCompetitorBusy] = useState(false);
+  const [wrongCompetitorError, setWrongCompetitorError] = useState<string | null>(null);
+  const [correctionAudits, setCorrectionAudits] = useState<
+    ReadoutReassignmentAuditEntry[]
+  >([]);
+  const [correctionAuditLoading, setCorrectionAuditLoading] = useState(false);
+  const [correctionAuditError, setCorrectionAuditError] = useState<string | null>(null);
   const [manualApprovalBusy, setManualApprovalBusy] = useState(false);
   const [manualApprovalReason, setManualApprovalReason] = useState('');
   const [manualApprovalError, setManualApprovalError] = useState<string | null>(null);
@@ -254,6 +284,76 @@ export function ReadoutDashboard({
       readoutHistory.find((record) => record.clientReadoutId === selectedReadoutId) ?? null,
     [readoutHistory, selectedReadoutId]
   );
+  const reassignmentPreview = useMemo(() => {
+    if (!selectedReadout || !wrongCompetitorTargetId) return null;
+    const target = competitors.find(
+      (candidate) => candidate.id === wrongCompetitorTargetId
+    );
+    if (!target) {
+      return { error: 'Löparen hittades inte i den aktiva tävlingen.' } as const;
+    }
+    try {
+      return {
+        preview: calculateReadoutReassignmentPreview(
+          selectedReadout.readout,
+          selectedReadout.originalCompetitorId ?? selectedReadout.competitorId ?? '',
+          target,
+          competitors,
+          classes,
+          courses,
+          zeroTimeSec,
+          emergency
+        ),
+      } as const;
+    } catch (error) {
+      return {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Avläsningen kan inte förhandsgranskas säkert.',
+      } as const;
+    }
+  }, [
+    classes,
+    competitors,
+    courses,
+    emergency,
+    selectedReadout,
+    wrongCompetitorTargetId,
+    zeroTimeSec,
+  ]);
+  useEffect(() => {
+    if (!selectedReadout) {
+      setCorrectionAudits([]);
+      setCorrectionAuditError(null);
+      setCorrectionAuditLoading(false);
+      return;
+    }
+
+    let active = true;
+    setCorrectionAuditLoading(true);
+    setCorrectionAuditError(null);
+    void onLoadResultReassignmentAudits(selectedReadout.clientReadoutId)
+      .then((audits) => {
+        if (active) setCorrectionAudits(audits);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setCorrectionAuditError(
+            error instanceof Error
+              ? error.message
+              : 'Korrigeringshistoriken kunde inte hämtas.'
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setCorrectionAuditLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [onLoadResultReassignmentAudits, selectedReadout]);
   const outstandingReadouts = useMemo(
     () => filterOutstandingReadouts(readoutHistory),
     [readoutHistory]
@@ -434,6 +534,15 @@ export function ReadoutDashboard({
       return;
     }
     setSelectedReadoutId(isClosing ? null : record.clientReadoutId);
+    setWrongCompetitorOpen(
+      !isClosing &&
+        record.issueType === 'WRONG_COMPETITOR' &&
+        record.issueState !== 'RESOLVED' &&
+        record.issueState !== 'DISMISSED'
+    );
+    setWrongCompetitorTargetId('');
+    setWrongCompetitorReason('');
+    setWrongCompetitorError(null);
     setUnknownCardError(null);
     setUnknownCardSuccess(null);
     setUnknownCardNameSuggestionOpen(false);
@@ -518,6 +627,61 @@ export function ReadoutDashboard({
       );
     } else if (event.key === 'Escape') {
       setUnknownCardNameSuggestionOpen(false);
+    }
+  };
+
+  const handleCreateWrongCompetitorIssue = async () => {
+    if (!selectedReadout) return;
+    setWrongCompetitorBusy(true);
+    setWrongCompetitorError(null);
+    try {
+      await onCreateWrongCompetitorIssue(selectedReadout.clientReadoutId);
+      setWrongCompetitorOpen(true);
+    } catch (error) {
+      setWrongCompetitorError(
+        error instanceof Error ? error.message : 'Ärendet kunde inte skapas.'
+      );
+    } finally {
+      setWrongCompetitorBusy(false);
+    }
+  };
+
+  const handleApplyResultReassignment = async () => {
+    if (!selectedReadout || !wrongCompetitorTargetId) return;
+    if (wrongCompetitorReason.trim().length < 3) {
+      setWrongCompetitorError('Ange en tydlig anledning till korrigeringen.');
+      return;
+    }
+    if (!reassignmentPreview || !('preview' in reassignmentPreview)) {
+      setWrongCompetitorError(
+        reassignmentPreview && 'error' in reassignmentPreview
+          ? reassignmentPreview.error
+          : 'Välj en giltig löpare för att visa förhandsgranskningen.'
+      );
+      return;
+    }
+
+    setWrongCompetitorBusy(true);
+    setWrongCompetitorError(null);
+    try {
+      const audit = await onApplyResultReassignment(
+        selectedReadout,
+        wrongCompetitorTargetId,
+        wrongCompetitorReason.trim()
+      );
+      setCorrectionAudits((current) => [
+        audit,
+        ...current.filter((entry) => entry.operationId !== audit.operationId),
+      ]);
+      setWrongCompetitorOpen(false);
+      setWrongCompetitorTargetId('');
+      setWrongCompetitorReason('');
+    } catch (error) {
+      setWrongCompetitorError(
+        error instanceof Error ? error.message : 'Resultatet kunde inte korrigeras.'
+      );
+    } finally {
+      setWrongCompetitorBusy(false);
     }
   };
 
@@ -1058,6 +1222,198 @@ export function ReadoutDashboard({
             </div>
           </div>
           )}
+          {selectedReadout.resultStatus === 'OK' &&
+            !selectedReadout.correctionOperationId &&
+            (selectedReadout.issueState === 'NONE' ||
+              (selectedReadout.issueType === 'WRONG_COMPETITOR' &&
+                selectedReadout.issueState === 'OPEN')) && (
+              <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+                {!wrongCompetitorOpen ? (
+                  <button
+                    type="button"
+                    disabled={wrongCompetitorBusy}
+                    onClick={() => {
+                      if (selectedReadout.issueType === 'WRONG_COMPETITOR') {
+                        setWrongCompetitorOpen(true);
+                      } else {
+                        void handleCreateWrongCompetitorIssue();
+                      }
+                    }}
+                    className="rounded-md border border-amber-400 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-950/50"
+                  >
+                    {wrongCompetitorBusy ? 'Öppnar ärende...' : 'Fel löpare'}
+                  </button>
+                ) : (
+                  <div className="space-y-3 rounded-md border border-amber-300 bg-amber-50/70 p-3 dark:border-amber-800 dark:bg-amber-950/20">
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                        Korrigera löparmatchning
+                      </h3>
+                      <p className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400">
+                        Avläsningens originaldata och stämplingar ändras inte.
+                      </p>
+                    </div>
+                    <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                      Ny löpare
+                      <select
+                        value={wrongCompetitorTargetId}
+                        onChange={(event) =>
+                          setWrongCompetitorTargetId(event.target.value)
+                        }
+                        className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-950"
+                      >
+                        <option value="">Välj löpare</option>
+                        {competitors
+                          .filter(
+                            (competitor) =>
+                              competitor.id !==
+                              (selectedReadout.originalCompetitorId ??
+                                selectedReadout.competitorId)
+                          )
+                          .map((competitor) => (
+                            <option key={competitor.id} value={competitor.id}>
+                              {competitor.fullName} ·{' '}
+                              {classes.find(
+                                (candidate) => candidate.id === competitor.classId
+                              )?.name ?? 'Okänd klass'}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className="block text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                      Anledning
+                      <textarea
+                        value={wrongCompetitorReason}
+                        onChange={(event) =>
+                          setWrongCompetitorReason(event.target.value)
+                        }
+                        maxLength={500}
+                        rows={2}
+                        placeholder="Beskriv varför resultatet ska kopplas till en annan löpare"
+                        className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-950"
+                      />
+                    </label>
+                    {reassignmentPreview && (
+                      'error' in reassignmentPreview ? (
+                        <p role="alert" className="text-xs text-red-700 dark:text-red-300">
+                          {reassignmentPreview.error}
+                        </p>
+                      ) : (
+                        <div
+                          aria-live="polite"
+                          className="rounded border border-slate-200 bg-white p-2 text-xs dark:border-slate-700 dark:bg-slate-900"
+                        >
+                          <h4 className="font-semibold text-slate-800 dark:text-slate-100">
+                            Förhandsgranskning
+                          </h4>
+                          <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                            <span>
+                              Original match: {selectedReadout.originalCompetitorName ?? '—'}
+                            </span>
+                            <span>
+                              Ny match: {reassignmentPreview.preview.competitor.fullName}
+                            </span>
+                            <span>Status: {reassignmentPreview.preview.status}</span>
+                            <span>
+                              Placering:{' '}
+                              {reassignmentPreview.preview.placing
+                                ? `${reassignmentPreview.preview.placing.pos} / ${reassignmentPreview.preview.placing.total}`
+                                : '—'}
+                            </span>
+                            <span>
+                              Tid: {formatDurationMmSs(reassignmentPreview.preview.runningTimeSec)}
+                            </span>
+                            <span>
+                              Bom:{' '}
+                              {reassignmentPreview.preview.bomSec == null
+                                ? '—'
+                                : formatDurationMmSs(reassignmentPreview.preview.bomSec)}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    )}
+                    {wrongCompetitorError && (
+                      <p role="alert" className="text-xs text-red-700 dark:text-red-300">
+                        {wrongCompetitorError}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={
+                          wrongCompetitorBusy ||
+                          !wrongCompetitorTargetId ||
+                          wrongCompetitorReason.trim().length < 3 ||
+                          !reassignmentPreview ||
+                          !('preview' in reassignmentPreview)
+                        }
+                        onClick={() => void handleApplyResultReassignment()}
+                        className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {wrongCompetitorBusy ? 'Sparar...' : 'Bekräfta korrigering'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={wrongCompetitorBusy}
+                        onClick={() => setWrongCompetitorOpen(false)}
+                        className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-white disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-900"
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          {correctionAudits.length > 0 && (
+            <section
+              aria-label="Korrigeringshistorik"
+              className="border-t border-slate-200 px-4 py-3 text-xs dark:border-slate-800"
+            >
+              <h3 className="font-semibold text-slate-800 dark:text-slate-100">
+                Korrigeringshistorik
+              </h3>
+              <ol className="mt-2 space-y-2">
+                {correctionAudits.map((audit) => (
+                  <li
+                    key={audit.operationId}
+                    className="rounded border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
+                  >
+                    <p className="font-medium">
+                      {audit.originalCompetitor.name} → {audit.correctedCompetitor.name}
+                      {' · '}
+                      {new Date(audit.timestamp).toLocaleString('sv-SE')}
+                    </p>
+                    <p className="mt-0.5 text-slate-600 dark:text-slate-400">
+                      {audit.result.previousStatus} → {audit.result.newStatus}
+                      {' · '}tid {formatDurationMmSs(audit.result.runningTimeSec)}
+                      {' · '}Bom{' '}
+                      {audit.result.bomSec == null
+                        ? '—'
+                        : formatDurationMmSs(audit.result.bomSec)}
+                      {' · '}av {audit.actorRole} ({audit.actorUid})
+                    </p>
+                    <p className="mt-0.5 text-slate-600 dark:text-slate-400">
+                      Anledning: {audit.reason}
+                    </p>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+          {(correctionAuditLoading || correctionAuditError) && (
+            <p
+              className={`border-t border-slate-200 px-4 py-2 text-[11px] dark:border-slate-800 ${
+                correctionAuditError
+                  ? 'text-red-700 dark:text-red-300'
+                  : 'text-slate-500 dark:text-slate-400'
+              }`}
+              role={correctionAuditError ? 'alert' : undefined}
+            >
+              {correctionAuditError ?? 'Hämtar korrigeringshistorik...'}
+            </p>
+          )}
           {selectedReadout.issueType === 'UNKNOWN_CARD' &&
             selectedReadout.issueState !== 'RESOLVED' &&
             selectedReadout.issueState !== 'DISMISSED' && (
@@ -1277,6 +1633,9 @@ export function ReadoutDashboard({
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Nyaste avläsning först · {readoutHistory.length} sparade avläsningar
               </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Välj en rad för att öppna avläsningsdetaljer.
+              </p>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="inline-flex items-center gap-1" role="group" aria-label="Historikvy">
@@ -1363,51 +1722,14 @@ export function ReadoutDashboard({
           </div>
           {visibleReadouts.length > 0 ? (
             <ol className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-              {visibleReadouts.map((record) => {
-                const status = getReadoutStatusPresentation(record);
-                const statusText = getReadoutStatusText(record);
-                return (
-                  <li
-                    key={record.clientReadoutId}
-                    className={`px-3 py-2 ${status.surfaceClass}`}
-                  >
-                    <div className="flex items-start gap-2">
-                      <button
-                        type="button"
-                        aria-pressed={selectedReadoutId === record.clientReadoutId}
-                        onClick={() => handleSelectReadout(record)}
-                        className={`flex-1 min-w-0 text-left rounded px-1 py-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600 ${
-                          selectedReadoutId === record.clientReadoutId
-                            ? 'ring-2 ring-inset ring-sky-600 dark:ring-sky-400'
-                            : ''
-                        }`}
-                      >
-                        <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
-                          <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-200">
-                            Avläsning nr {record.captureSequence} ·{' '}
-                            {record.competitorName ?? 'SI-bricka'} · SI{' '}
-                            {formatSiNumber(record.readout.siNumber)}
-                          </span>
-                          <span className="shrink-0 text-slate-600 dark:text-slate-300">
-                            {statusText} · {getReadoutDeliveryLabel(record.deliveryState)}
-                          </span>
-                        </span>
-                      </button>
-                      {record.issueType === 'UNKNOWN_CARD' &&
-                        record.issueState !== 'RESOLVED' &&
-                        record.issueState !== 'DISMISSED' && (
-                        <button
-                          type="button"
-                          onClick={() => handleSelectReadout(record, true)}
-                          className="shrink-0 text-xs font-medium text-amber-700 dark:text-amber-300 hover:underline"
-                        >
-                          Anmäl
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
+              {visibleReadouts.map((record) => (
+                <ReadoutHistoryRow
+                  key={record.clientReadoutId}
+                  record={record}
+                  isSelected={selectedReadoutId === record.clientReadoutId}
+                  onSelect={handleSelectReadout}
+                />
+              ))}
             </ol>
           ) : (
             <p className="px-4 py-5 text-sm text-slate-500 dark:text-slate-400">

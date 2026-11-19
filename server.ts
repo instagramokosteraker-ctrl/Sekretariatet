@@ -35,6 +35,11 @@ import {
   ManualResultApprovalError,
 } from './src/server/manualResultApproval';
 import {
+  listReadoutReassignmentAudits,
+  reassignReadoutResult,
+  ReadoutReassignmentError,
+} from './src/server/readoutReassignment';
+import {
   deleteCompetitionWithAssignments,
   CompetitionDeletionError,
 } from './src/server/competitionDeletion';
@@ -2801,6 +2806,11 @@ async function startServer() {
         path: /^\/firestore\/competitions\/[^/]+\/competitors\/[^/]+\/manual-result-approval$/,
         roles: ['READOUT', 'FOREST'],
       },
+      {
+        method: 'POST',
+        path: /^\/firestore\/competitions\/[^/]+\/readouts\/[^/]+\/reassignment$/,
+        roles: ['READOUT', 'FOREST'],
+      },
       { method: 'POST', path: /^\/draw\/class$/, roles: ['START'] },
       { method: 'POST', path: /^\/competitors$/, roles: ['START', 'READOUT'] },
       { method: 'PUT', path: /^\/competitors\/[^/]+$/, roles: ['START', 'READOUT', 'FOREST'] },
@@ -4452,6 +4462,75 @@ async function startServer() {
         }
         console.error('Manual result approval failed:', error);
         res.status(500).json({ error: 'The result approval could not be saved.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/firestore/competitions/:competitionId/readouts/:readoutId/corrections',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (
+        !sessionUser ||
+        (sessionUser.sessionKind !== 'ADMIN' &&
+          !['READOUT', 'FOREST'].includes(sessionUser.officialRole))
+      ) {
+        res.status(403).json({ error: 'An authorized readout official is required.' });
+        return;
+      }
+
+      try {
+        const audits = await listReadoutReassignmentAudits(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid },
+          req.params.competitionId,
+          req.params.readoutId
+        );
+        res.json({ audits });
+      } catch (error) {
+        if (error instanceof ReadoutReassignmentError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Readout correction audit retrieval failed:', error);
+        res.status(500).json({ error: 'The readout correction audit could not be loaded.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/firestore/competitions/:competitionId/readouts/:readoutId/reassignment',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (
+        !sessionUser ||
+        (sessionUser.sessionKind !== 'ADMIN' &&
+          !['READOUT', 'FOREST'].includes(sessionUser.officialRole))
+      ) {
+        res.status(403).json({ error: 'An authorized readout official is required.' });
+        return;
+      }
+
+      try {
+        const result = await reassignReadoutResult(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid },
+          req.params.competitionId,
+          req.params.readoutId,
+          req.body
+        );
+        res.status(result.status === 'REPLAYED' ? 200 : 201).json(result);
+      } catch (error) {
+        if (error instanceof ReadoutReassignmentError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Readout result reassignment failed:', error);
+        res.status(500).json({ error: 'The readout result could not be reassigned.' });
       }
     }
   );
