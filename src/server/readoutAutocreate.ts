@@ -175,6 +175,25 @@ function receiptMatchesPayload(
   );
 }
 
+function receiptMatchesLogicalPayload(
+  receipt: Record<string, unknown>,
+  input: ReadoutAutoCreateInput,
+  actorUid: string
+): boolean {
+  return (
+    receipt.ownerUid === actorUid &&
+    receipt.siNumber === input.siNumber &&
+    receipt.cardSeries === input.cardSeries &&
+    receipt.stationCode === input.stationCode &&
+    receipt.checkTimeSec === input.checkTimeSec &&
+    receipt.startTimeSec === input.startTimeSec &&
+    receipt.finishTimeSec === input.finishTimeSec &&
+    JSON.stringify(receipt.punchCodes) === JSON.stringify(input.punchCodes) &&
+    JSON.stringify(receipt.punchTimes) === JSON.stringify(input.punchTimes) &&
+    receipt.rawHex === input.rawHex
+  );
+}
+
 export async function createReadoutCompetitorFromRunnerDb(
   firestore: Firestore,
   actor: ReadoutAutoCreateActor,
@@ -224,6 +243,7 @@ export async function createReadoutCompetitorFromRunnerDb(
       assignmentSnapshot,
       runnerSnapshot,
       competitorsSnapshot,
+      payloadReceiptsSnapshot,
     ] = await Promise.all([
       transaction.get(competitionRef),
       transaction.get(adminRef),
@@ -233,6 +253,12 @@ export async function createReadoutCompetitorFromRunnerDb(
       transaction.get(assignmentRef),
       transaction.get(runnerRef),
       transaction.get(competitorCollection),
+      transaction.get(
+        competitionRef
+          .collection('readoutReceipts')
+          .where('siNumber', '==', input.siNumber)
+          .where('rawHex', '==', input.rawHex)
+      ),
     ]);
 
     if (!competitionSnapshot.exists) {
@@ -249,6 +275,43 @@ export async function createReadoutCompetitorFromRunnerDb(
     }
     if (isRaceAdmin && competition.ownerUid !== actorUid) {
       throw new ReadoutAutoCreateError(403, 'The caller does not own this competition.');
+    }
+    if (!receiptSnapshot.exists) {
+      const matchingPayloadReceipt = payloadReceiptsSnapshot.docs.find(
+        (snapshot) =>
+          snapshot.id !== receiptId &&
+          receiptMatchesLogicalPayload(snapshot.data() ?? {}, input, actorUid)
+      );
+      if (matchingPayloadReceipt) {
+        const existingReceipt = matchingPayloadReceipt.data() ?? {};
+        if (existingReceipt.status === 'UNKNOWN') {
+          return {
+            status: 'UNKNOWN',
+            competitorId: null,
+            bib: null,
+            replayed: true,
+          };
+        }
+        if (
+          existingReceipt.status === 'PROCESSED' &&
+          typeof existingReceipt.competitorId === 'string'
+        ) {
+          const existingCompetitor = competitorsSnapshot.docs
+            .find((snapshot) => snapshot.id === existingReceipt.competitorId)
+            ?.data();
+          if (existingCompetitor) {
+            return {
+              status: 'PROCESSED',
+              competitorId: existingReceipt.competitorId,
+              bib: Number.isInteger(existingCompetitor.bib)
+                ? existingCompetitor.bib
+                : null,
+              replayed: true,
+            };
+          }
+        }
+        throw new ReadoutAutoCreateError(409, 'Matched readout receipt is inconsistent.');
+      }
     }
     if (receiptSnapshot.exists) {
       const existingReceipt = receiptSnapshot.data() ?? {};

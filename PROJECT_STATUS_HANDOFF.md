@@ -1,6 +1,6 @@
 # PasserSI — project status handoff
 
-**Updated:** 2026-11-17
+**Updated:** 2026-11-18
 **Repository:** `instagramokosteraker-ctrl/Sekretariatet`
 **Branch / HEAD:** `main` / `e71bb4c`
 **Purpose:** Concise, evidence-based state for continuing work in Cursor, Copilot, or Claude Code.
@@ -57,6 +57,7 @@ Local builds, TypeScript checks, and focused regression tests passed for the rec
 ### Readout workstation
 
 - V5 workstation UX is implemented: Latest Readout and history use full-card/row status colors based on result and issue state; synchronization state is displayed separately. User-facing issue labels use Swedish operator terminology, and “Redan avläst” remains informational rather than an outstanding issue.
+- Readout History is intentionally workstation-local, not a shared competition-wide event log. Different devices may legitimately show different readout rows. Competition results remain shared through Firestore.
 - Physical readouts retain `clientReadoutId`, `captureSequence`, and `capturedAt`; latest-readout selection and history ordering remain capture-sequence based. History rows remain reopenable, and Outstanding Issues includes open and in-progress issues.
 - Unknown-card resolution remains inline while the reader can capture the next SI card. The runner-name field now searches the runner database as the operator types; selecting a suggestion fills the name, club, profile, and matching class when available. The captured SI number stays read-only.
 - Offline queue, receipts, retries, validation, and Bom behavior remain in place.

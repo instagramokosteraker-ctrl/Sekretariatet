@@ -187,6 +187,27 @@ emulatorDescribe('createReadoutCompetitorFromRunnerDb', () => {
         bib: result.bib,
         replayed: true,
       });
+      const differentOperationId = `ro_${randomUUID().replace(/-/g, '')}`;
+      const logicalReplay = await createReadoutCompetitorFromRunnerDb(
+        firestore,
+        { uid: fixture.actorUid },
+        fixture.competitionId,
+        differentOperationId,
+        fixture.request
+      );
+      expect(logicalReplay).toMatchObject({
+        status: 'PROCESSED',
+        competitorId: fixture.competitorId,
+        bib: result.bib,
+        replayed: true,
+      });
+      await expect(
+        firestore.collection('competitions')
+          .doc(fixture.competitionId)
+          .collection('readoutReceipts')
+          .doc(differentOperationId)
+          .get()
+      ).resolves.toMatchObject({ exists: false });
       await expect(
         createReadoutCompetitorFromRunnerDb(
           firestore,
