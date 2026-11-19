@@ -10,10 +10,12 @@ import {
 } from '@firebase/rules-unit-testing';
 import {
   collection,
+  deleteDoc,
   doc,
   getDocs,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
   writeBatch,
@@ -1656,7 +1658,29 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .delete()
     );
 
+    await assertFails(
+      raceAdminCtx
+        .firestore()
+        .doc('competitions/evt_live/competitors/cmp_valid')
+        .delete()
+    );
     const retirementBatch = writeBatch(raceAdminCtx.firestore());
+    retirementBatch.set(
+      doc(
+        raceAdminCtx.firestore(),
+        'competitions/evt_live/competitorDeletionAudits/cmp_valid'
+      ),
+      {
+        auditId: 'cmp_valid',
+        competitionId: 'evt_live',
+        competitorId: 'cmp_valid',
+        competitorName: 'Test Löpare',
+        actorUid: 'race_admin_1',
+        reasonCode: 'DUPLICATE_REGISTRATION',
+        reason: 'Dublettregistrering',
+        createdAt: serverTimestamp(),
+      }
+    );
     retirementBatch.delete(
       doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid')
     );
@@ -1677,6 +1701,93 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         .doc('competitions/evt_live/siCardAssignments/8500112')
         .delete()
     );
+  } finally {
+    await testEnv.cleanup();
+  }
+}
+
+export async function runCompetitorDeletionRulesSuite(): Promise<void> {
+  const rules = fs.readFileSync(path.resolve(process.cwd(), 'firestore.rules'), 'utf8');
+  const testEnv = await initializeTestEnvironment({
+    projectId: 'demo-passersi-competitor-deletion-test',
+    firestore: { rules },
+  });
+
+  try {
+    await testEnv.clearFirestore();
+    const now = new Date();
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await db.doc('admins/deletion_admin').set({
+        uid: 'deletion_admin',
+        role: 'RACE_ADMIN',
+      });
+      await db.doc('competitions/evt_deletion').set({
+        competitionId: 'evt_deletion',
+        ownerUid: 'deletion_admin',
+        status: 'LIVE',
+      });
+      await db.doc('competitions/evt_deletion/competitors/cmp_deletion').set({
+        competitorId: 'cmp_deletion',
+        competitionId: 'evt_deletion',
+        ownerUid: 'deletion_admin',
+        fullName: 'Deletion Test Runner',
+      });
+    });
+
+    const adminDb = testEnv
+      .authenticatedContext('deletion_admin', { email_verified: true })
+      .firestore();
+    const competitorRef = doc(
+      adminDb,
+      'competitions/evt_deletion/competitors/cmp_deletion'
+    );
+    const auditRef = doc(
+      adminDb,
+      'competitions/evt_deletion/competitorDeletionAudits/cmp_deletion'
+    );
+
+    await assertFails(deleteDoc(competitorRef));
+    await assertFails(
+      setDoc(auditRef, {
+        auditId: 'cmp_deletion',
+        competitionId: 'evt_deletion',
+        competitorId: 'cmp_deletion',
+        competitorName: 'Deletion Test Runner',
+        actorUid: 'deletion_admin',
+        reasonCode: 'TEST_DATA',
+        reason: 'Testdata',
+        createdAt: serverTimestamp(),
+      })
+    );
+
+    const auditWithoutReasonBatch = writeBatch(adminDb);
+    auditWithoutReasonBatch.set(auditRef, {
+      auditId: 'cmp_deletion',
+      competitionId: 'evt_deletion',
+      competitorId: 'cmp_deletion',
+      competitorName: 'Deletion Test Runner',
+      actorUid: 'deletion_admin',
+      reasonCode: 'TEST_DATA',
+      createdAt: serverTimestamp(),
+    });
+    auditWithoutReasonBatch.delete(competitorRef);
+    await assertFails(auditWithoutReasonBatch.commit());
+
+    const deletionBatch = writeBatch(adminDb);
+    deletionBatch.set(auditRef, {
+      auditId: 'cmp_deletion',
+      competitionId: 'evt_deletion',
+      competitorId: 'cmp_deletion',
+      competitorName: 'Deletion Test Runner',
+      actorUid: 'deletion_admin',
+      reasonCode: 'TEST_DATA',
+      reason: 'Testdata',
+      createdAt: serverTimestamp(),
+    });
+    deletionBatch.delete(competitorRef);
+    await assertSucceeds(deletionBatch.commit());
+    await assertFails(deleteDoc(auditRef));
   } finally {
     await testEnv.cleanup();
   }

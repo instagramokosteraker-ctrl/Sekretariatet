@@ -26,6 +26,10 @@ import type {
 } from '../services/sportidentWebSerial';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { UsbStationBar, UsbStationErrorBanner } from './UsbStationBar';
+import type {
+  CompetitorDeletionImpact,
+  CompetitorDeletionReasonCode,
+} from '../utils/competitorDeletion';
 
 function formatRunnerSource(source: RunnerDbSource): string {
   switch (source) {
@@ -66,7 +70,12 @@ interface EntriesRegistrationViewProps {
     }
   ) => Promise<string | null>;
   onUpdateCompetitor: (id: string, patch: Partial<Competitor>) => Promise<void>;
-  onDeleteCompetitor: (id: string) => Promise<void>;
+  onPrepareDeleteCompetitor: (id: string) => Promise<CompetitorDeletionImpact>;
+  onDeleteCompetitor: (
+    id: string,
+    reason: { code: CompetitorDeletionReasonCode; text: string },
+    acknowledgeHistory: boolean
+  ) => Promise<void>;
 }
 
 export function EntriesRegistrationView({
@@ -86,6 +95,7 @@ export function EntriesRegistrationView({
   onSimulateCardScanForEntry,
   onCreateCompetitor,
   onUpdateCompetitor,
+  onPrepareDeleteCompetitor,
   onDeleteCompetitor,
 }: EntriesRegistrationViewProps) {
   const [siInput, setSiInput] = useState('');
@@ -102,8 +112,62 @@ export function EntriesRegistrationView({
   const [error, setError] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [checkingDeletionId, setCheckingDeletionId] = useState<string | null>(null);
+  const [deletionTarget, setDeletionTarget] = useState<Competitor | null>(null);
+  const [deletionImpact, setDeletionImpact] = useState<CompetitorDeletionImpact | null>(null);
+  const [deletionReasonCode, setDeletionReasonCode] =
+    useState<CompetitorDeletionReasonCode>('DUPLICATE_REGISTRATION');
+  const [deletionOtherReason, setDeletionOtherReason] = useState('');
+  const [deletionError, setDeletionError] = useState<string | null>(null);
+  const [deletionSaving, setDeletionSaving] = useState(false);
   const lastAutoFilledSiRef = useRef<number | null>(null);
+
+  const openDeletionDialog = async (competitor: Competitor) => {
+    setCheckingDeletionId(competitor.id);
+    setError(null);
+    try {
+      const impact = await onPrepareDeleteCompetitor(competitor.id);
+      setDeletionTarget(competitor);
+      setDeletionImpact(impact);
+      setDeletionReasonCode('DUPLICATE_REGISTRATION');
+      setDeletionOtherReason('');
+      setDeletionError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Kunde inte kontrollera deltagarhistorik.');
+    } finally {
+      setCheckingDeletionId(null);
+    }
+  };
+
+  const confirmCompetitorDeletion = async () => {
+    if (!deletionTarget || !deletionImpact) return;
+    const reasonLabels: Record<CompetitorDeletionReasonCode, string> = {
+      DUPLICATE_REGISTRATION: 'Dublettregistrering',
+      INCORRECT_IMPORT: 'Felaktig import',
+      TEST_DATA: 'Testdata',
+      OTHER: deletionOtherReason.trim(),
+    };
+    const reasonText = reasonLabels[deletionReasonCode];
+    if (!reasonText) {
+      setDeletionError('Ange en orsak till raderingen.');
+      return;
+    }
+    setDeletionSaving(true);
+    setDeletionError(null);
+    try {
+      await onDeleteCompetitor(
+        deletionTarget.id,
+        { code: deletionReasonCode, text: reasonText },
+        deletionImpact.hasHistory
+      );
+      setDeletionTarget(null);
+      setDeletionImpact(null);
+    } catch (caught) {
+      setDeletionError(caught instanceof Error ? caught.message : 'Deltagaren kunde inte raderas.');
+    } finally {
+      setDeletionSaving(false);
+    }
+  };
 
   const nameSuggestions = useMemo(() => {
     const query = fullName
@@ -700,50 +764,29 @@ export function EntriesRegistrationView({
                         <RunnerStatusIndicator status={c.status} compact />
                       </td>
                       <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
-                        {deletingId === c.id ? (
-                          <div className="inline-flex items-center gap-1">
+                        <div className="inline-flex items-center gap-1.5">
+                          {c.isRentalCard && !c.rentalReturned && (
                             <button
                               type="button"
-                              onClick={async () => {
-                                await onDeleteCompetitor(c.id);
-                                setDeletingId(null);
-                              }}
-                              className="px-2 py-0.5 text-[11px] font-medium text-white bg-red-600 rounded whitespace-nowrap shrink-0"
+                              onClick={() =>
+                                void onUpdateCompetitor(c.id, { rentalReturned: true })
+                              }
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 rounded whitespace-nowrap shrink-0"
                             >
-                              Radera
+                              <Check className="w-3 h-3" />
+                              <span>Åter</span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeletingId(null)}
-                              className="px-1.5 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 whitespace-nowrap shrink-0"
-                            >
-                              Avbryt
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="inline-flex items-center gap-1.5">
-                            {c.isRentalCard && !c.rentalReturned && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void onUpdateCompetitor(c.id, { rentalReturned: true })
-                                }
-                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 rounded whitespace-nowrap shrink-0"
-                              >
-                                <Check className="w-3 h-3" />
-                                <span>Åter</span>
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => setDeletingId(c.id)}
-                              className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded"
-                              aria-label={`Ta bort ${c.fullName}`}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
+                          )}
+                          <button
+                            type="button"
+                            disabled={checkingDeletionId === c.id}
+                            onClick={() => void openDeletionDialog(c)}
+                            className="p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded disabled:opacity-50"
+                            aria-label={`Ta bort ${c.fullName}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -751,6 +794,108 @@ export function EntriesRegistrationView({
               </tbody>
             </table>
           </div>
+        {deletionTarget && deletionImpact && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !deletionSaving) {
+                setDeletionTarget(null);
+                setDeletionImpact(null);
+              }
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="competitor-deletion-title"
+              className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-900"
+            >
+              <h2
+                id="competitor-deletion-title"
+                className="text-base font-semibold text-slate-900 dark:text-slate-100"
+              >
+                {deletionImpact.hasHistory ? 'VARNING' : 'Ta bort deltagare'}
+              </h2>
+              {deletionImpact.hasHistory && (
+                <div className="mt-3 space-y-2 text-sm text-amber-900 dark:text-amber-200">
+                  <p>Denna deltagare har tävlingshistorik.</p>
+                  <p>Radering påverkar:</p>
+                  <ul className="list-disc space-y-1 pl-5">
+                    <li>resultatlistor</li>
+                    <li>publika resultat</li>
+                    <li>radiopassager</li>
+                  </ul>
+                  <p>Historiska avläsningar och kvitton bevaras.</p>
+                  <p className="text-xs">
+                    Upptäckt historik: {deletionImpact.reasons.join(', ') || 'avläsningar'}.
+                  </p>
+                </div>
+              )}
+              <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800">
+                <p className="font-medium text-slate-900 dark:text-slate-100">
+                  {deletionTarget.fullName}
+                </p>
+                <p className="text-slate-600 dark:text-slate-300">
+                  Klass: {classes.find((candidate) => candidate.id === deletionTarget.classId)?.name ?? 'Okänd'}
+                </p>
+              </div>
+              <label className="mt-4 block text-sm font-medium text-slate-800 dark:text-slate-200">
+                Orsak
+                <select
+                  value={deletionReasonCode}
+                  onChange={(event) =>
+                    setDeletionReasonCode(event.target.value as CompetitorDeletionReasonCode)
+                  }
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  disabled={deletionSaving}
+                >
+                  <option value="DUPLICATE_REGISTRATION">Dublettregistrering</option>
+                  <option value="INCORRECT_IMPORT">Felaktig import</option>
+                  <option value="TEST_DATA">Testdata</option>
+                  <option value="OTHER">Annan</option>
+                </select>
+              </label>
+              {deletionReasonCode === 'OTHER' && (
+                <input
+                  value={deletionOtherReason}
+                  onChange={(event) => setDeletionOtherReason(event.target.value)}
+                  maxLength={200}
+                  placeholder="Beskriv orsaken"
+                  aria-label="Annan orsak"
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  disabled={deletionSaving}
+                />
+              )}
+              {deletionError && (
+                <p role="alert" className="mt-3 text-sm text-red-700 dark:text-red-300">
+                  {deletionError}
+                </p>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeletionTarget(null);
+                    setDeletionImpact(null);
+                  }}
+                  disabled={deletionSaving}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                >
+                  Avbryt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmCompetitorDeletion()}
+                  disabled={deletionSaving || (deletionReasonCode === 'OTHER' && !deletionOtherReason.trim())}
+                  className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {deletionSaving ? 'Raderar…' : deletionImpact.hasHistory ? 'Radera' : 'Ta bort'}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
       </section>
     </div>
   );

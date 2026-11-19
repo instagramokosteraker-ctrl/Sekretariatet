@@ -31,6 +31,11 @@ import {
 } from 'firebase/firestore';
 import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './utils/readoutValidation';
 import {
+  buildCompetitorDeletionImpact,
+  type CompetitorDeletionImpact,
+  type CompetitorDeletionReasonCode,
+} from './utils/competitorDeletion';
+import {
   mapFirestoreCompetitor,
   type FirestoreCompetitorContext,
   type FirestoreLiveRadioPunch,
@@ -3928,6 +3933,7 @@ export async function saveCompetitionImportToFirestore(params: {
 interface CompetitionMutationContext {
   competitionId: string;
   ownerUid: string;
+  actorUid: string;
   isSuperAdmin: boolean;
 }
 
@@ -4477,7 +4483,7 @@ async function getCompetitionMutationContext(
     throw new Error('Det går inte att ändra en avslutad tävling.');
   }
 
-  return { competitionId, ownerUid, isSuperAdmin };
+  return { competitionId, ownerUid, actorUid: current.uid, isSuperAdmin };
 }
 
 export async function saveCourseToFirestore(
@@ -5488,19 +5494,37 @@ export async function updateCompetitorRentalReturnedInFirestore(
 
 export async function deleteCompetitorFromFirestore(
   competitionId: string,
-  competitorId: string
+  competitorId: string,
+  reason: { code: CompetitorDeletionReasonCode; text: string },
+  acknowledgeHistory: boolean
 ): Promise<void> {
   const context = await getCompetitionMutationContext(competitionId);
+  const reasonText = reason.text.trim();
+  if (!reasonText || reasonText.length > 200) {
+    throw new Error('Ange en orsak på högst 200 tecken innan deltagaren tas bort.');
+  }
+  if (!['DUPLICATE_REGISTRATION', 'INCORRECT_IMPORT', 'TEST_DATA', 'OTHER'].includes(reason.code)) {
+    throw new Error('Ogiltig orsak för radering av deltagare.');
+  }
+  const preflightImpact = await getCompetitorDeletionImpactFromFirestore(
+    context.competitionId,
+    competitorId
+  );
+  if (preflightImpact.hasHistory && !acknowledgeHistory) {
+    throw new Error(
+      'Deltagaren har tävlingshistorik. Uppdatera sidan och bekräfta raderingen i varningsdialogen.'
+    );
+  }
   const competitionRef = doc(db, 'competitions', context.competitionId);
+  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
   const competitorRef = doc(
     db,
     'competitions',
     context.competitionId,
     'competitors',
-    sanitizeFirestoreId(competitorId, 'cmp')
+    safeCompetitorId
   );
 
-  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
   const mutationResult = await runAtomicSIAssignmentMutation(
     {
       intent: 'DELETE_COMPETITOR',
@@ -5519,6 +5543,21 @@ export async function deleteCompetitorFromFirestore(
       }
       if (competition.status === 'COMPLETED' && !context.isSuperAdmin) {
         throw new Error('Deltagare kan inte tas bort från en avslutad tävling.');
+      }
+      const hasHistory =
+        (competitor.manualFinishTimeSec !== null &&
+          competitor.manualFinishTimeSec !== undefined &&
+          Number.isFinite(Number(competitor.manualFinishTimeSec)) &&
+          Number(competitor.manualFinishTimeSec) >= 0) ||
+        Boolean(competitor.readoutAtIso) ||
+        (Array.isArray(competitor.punchCodes) && competitor.punchCodes.length > 0) ||
+        ['CHECKED', 'IN_FOREST', 'PRELIMINARY_FIN', 'OK', 'MP', 'DNF', 'DNS'].includes(
+          String(competitor.status)
+        );
+      if (hasHistory && !acknowledgeHistory) {
+        throw new Error(
+          'Deltagaren har tävlingshistorik. Uppdatera sidan och bekräfta raderingen i varningsdialogen.'
+        );
       }
       const finished = ['OK', 'MP', 'PRELIMINARY_FIN'].includes(String(competitor.status));
       const identity = getCompetitorSIAssignmentIdentity(
@@ -5544,6 +5583,23 @@ export async function deleteCompetitorFromFirestore(
           enforcementActive: true,
         })}`
       );
+      const auditRef = doc(
+        db,
+        'competitions',
+        context.competitionId,
+        'competitorDeletionAudits',
+        safeCompetitorId
+      );
+      transaction.set(auditRef, {
+        auditId: safeCompetitorId,
+        competitionId: context.competitionId,
+        competitorId: safeCompetitorId,
+        competitorName: String(competitor.fullName || ''),
+        actorUid: context.actorUid,
+        reasonCode: reason.code,
+        reason: reasonText,
+        createdAt: serverTimestamp(),
+      });
       transaction.delete(competitorRef);
       transaction.delete(
         getPublicResultDocumentRef(context.competitionId, safeCompetitorId)
@@ -5561,6 +5617,92 @@ export async function deleteCompetitorFromFirestore(
   if (mutationResult.status !== 'COMMITTED') {
     throw new Error('Tävlingen eller deltagaren hittades inte i Firestore.');
   }
+}
+
+export async function getCompetitorDeletionImpactFromFirestore(
+  competitionId: string,
+  competitorId: string,
+  hasLocalReadout = false
+): Promise<CompetitorDeletionImpact> {
+  const context = await getCompetitionMutationContext(competitionId);
+  const safeCompetitorId = sanitizeFirestoreId(competitorId, 'cmp');
+  const competitorRef = doc(
+    db,
+    'competitions',
+    context.competitionId,
+    'competitors',
+    safeCompetitorId
+  );
+  const competitorSnap = await getDoc(competitorRef);
+  if (!competitorSnap.exists()) {
+    throw new Error('Deltagaren hittades inte i Firestore.');
+  }
+  const competitor = competitorSnap.data();
+  const siNumber = Number(competitor.siNumber);
+  const [receiptsByCompetitor, receiptsBySi, passagesByCompetitor, passagesBySi] =
+    await Promise.all([
+      getDocs(
+        query(
+          collection(db, 'competitions', context.competitionId, 'readoutReceipts'),
+          where('competitorId', '==', safeCompetitorId)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'competitions', context.competitionId, 'readoutReceipts'),
+          where('siNumber', '==', siNumber)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'competitions', context.competitionId, 'stationPunches'),
+          where('competitorId', '==', safeCompetitorId)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'competitions', context.competitionId, 'stationPunches'),
+          where('siNumber', '==', siNumber)
+        )
+      ),
+    ]);
+  const receiptIds = new Set([
+    ...receiptsByCompetitor.docs.map((snapshot) => snapshot.id),
+    ...receiptsBySi.docs.map((snapshot) => snapshot.id),
+  ]);
+  const passageIds = new Set(
+    [...passagesByCompetitor.docs, ...passagesBySi.docs]
+      .filter((snapshot) =>
+        ['RADIO', 'PREWARNING'].includes(String(snapshot.data().stationFunction))
+      )
+      .map((snapshot) => snapshot.id)
+  );
+  const status = [
+    'REGISTERED',
+    'CHECKED',
+    'IN_FOREST',
+    'PRELIMINARY_FIN',
+    'OK',
+    'MP',
+    'DNF',
+    'DNS',
+  ].includes(String(competitor.status))
+    ? (competitor.status as Competitor['status'])
+    : 'REGISTERED';
+  return buildCompetitorDeletionImpact({
+    status,
+    readoutCount:
+      Number(Boolean(competitor.readoutAtIso)) +
+      (Array.isArray(competitor.punchCodes) ? competitor.punchCodes.length : 0),
+    receiptCount: receiptIds.size,
+    radioPassageCount: passageIds.size,
+    hasManualFinish:
+      competitor.manualFinishTimeSec !== null &&
+      competitor.manualFinishTimeSec !== undefined &&
+      Number.isFinite(Number(competitor.manualFinishTimeSec)) &&
+      Number(competitor.manualFinishTimeSec) >= 0,
+    hasLocalReadout,
+  });
 }
 
 export async function retireCompetitorInFirestore(

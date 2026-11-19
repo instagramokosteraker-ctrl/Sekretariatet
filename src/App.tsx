@@ -120,6 +120,7 @@ import {
   updateCompetitorInFirestore,
   updateCompetitorRentalReturnedInFirestore,
   deleteCompetitorFromFirestore,
+  getCompetitorDeletionImpactFromFirestore,
   deleteRunnerDbEntryFromFirestore,
   saveRunnerDbEntriesToFirestore,
   updateRunnerDbEntryInFirestore,
@@ -4512,8 +4513,31 @@ export default function App() {
                       )
                     );
                   }}
-                  onDeleteCompetitor={async (id) => {
-                    await deleteCompetitorFromFirestore(activeEventId, id);
+                  onPrepareDeleteCompetitor={async (id) => {
+                    const competitor = competitors.find((candidate) => candidate.id === id);
+                    if (!competitor) throw new Error('Deltagaren hittades inte.');
+                    const hasLocalReadout = readoutHistory.some(
+                      (record) =>
+                        record.eventId === activeEventId &&
+                        (record.competitorId === id ||
+                          record.originalCompetitorId === id ||
+                          record.competitorSnapshot?.id === id ||
+                          record.originalCompetitorSnapshot?.id === id ||
+                          record.readout.siNumber === competitor.siNumber)
+                    );
+                    return getCompetitorDeletionImpactFromFirestore(
+                      activeEventId,
+                      id,
+                      hasLocalReadout
+                    );
+                  }}
+                  onDeleteCompetitor={async (id, reason, acknowledgeHistory) => {
+                    await deleteCompetitorFromFirestore(
+                      activeEventId,
+                      id,
+                      reason,
+                      acknowledgeHistory
+                    );
                     setCompetitors((current) =>
                       current.filter((competitor) => competitor.id !== id)
                     );

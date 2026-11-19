@@ -1759,10 +1759,84 @@ service cloud.firestore {
           isValidId(competitorId) &&
           resource != null &&
           parentCompetitionExists(competitionId) &&
+          existsAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitorDeletionAudits/$(competitorId)
+          ) &&
+          getAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitorDeletionAudits/$(competitorId)
+          ).data.competitorId == competitorId &&
+          getAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitorDeletionAudits/$(competitorId)
+          ).data.actorUid == request.auth.uid &&
           (
             (existing().ownerUid == request.auth.uid || isAdmin()) ||
             isSuperAdmin()
           );
+      }
+
+      match /competitorDeletionAudits/{auditId} {
+        allow get, list: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          parentCompetitionExists(competitionId) &&
+          isAdmin();
+
+        allow create: if isVerifiedUser() &&
+          isValidId(competitionId) &&
+          isValidId(auditId) &&
+          parentCompetitionExists(competitionId) &&
+          auditId == incoming().competitorId &&
+          incoming().keys().hasAll([
+            'auditId',
+            'competitionId',
+            'competitorId',
+            'competitorName',
+            'actorUid',
+            'reasonCode',
+            'reason',
+            'createdAt'
+          ]) &&
+          incoming().keys().hasOnly([
+            'auditId',
+            'competitionId',
+            'competitorId',
+            'competitorName',
+            'actorUid',
+            'reasonCode',
+            'reason',
+            'createdAt'
+          ]) &&
+          incoming().auditId == auditId &&
+          incoming().competitionId == competitionId &&
+          incoming().competitorId is string &&
+          isValidId(incoming().competitorId) &&
+          incoming().competitorName is string &&
+          incoming().competitorName.size() <= 120 &&
+          incoming().actorUid == request.auth.uid &&
+          incoming().reasonCode in [
+            'DUPLICATE_REGISTRATION',
+            'INCORRECT_IMPORT',
+            'TEST_DATA',
+            'OTHER'
+          ] &&
+          incoming().reason is string &&
+          incoming().reason.size() >= 1 &&
+          incoming().reason.size() <= 200 &&
+          incoming().createdAt == request.time &&
+          exists(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(auditId)
+          ) &&
+          !existsAfter(
+            /databases/$(database)/documents/competitions/$(competitionId)/competitors/$(auditId)
+          ) &&
+          incoming().competitorName ==
+            get(/databases/$(database)/documents/competitions/$(competitionId)/competitors/$(auditId)).data.fullName &&
+          (
+            get(/databases/$(database)/documents/competitions/$(competitionId)/competitors/$(auditId)).data.ownerUid == request.auth.uid ||
+            isAdmin() ||
+            isSuperAdmin()
+          );
+
+        allow update, delete: if false;
       }
 
       match /publicResults/{competitorId} {
