@@ -14,8 +14,6 @@ export function mergePublicCompetitionSummaries(
     return {
       ...competition,
       ...firestoreCompetition,
-      competitorCount: competition.competitorCount,
-      finishedCount: competition.finishedCount,
       classCount: firestoreCompetition.classCount || competition.classCount,
     };
   });

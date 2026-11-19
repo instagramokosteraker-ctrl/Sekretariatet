@@ -26,9 +26,9 @@ function createSummary(
 }
 
 describe('mergePublicCompetitionSummaries', () => {
-  it('keeps current API finish counts when Firestore metadata has stale zero counts', () => {
-    const apiSummary = createSummary('event-1', 42, 17, { classCount: 5 });
-    const firestoreSummary = createSummary('event-1', 0, 0, {
+  it('uses Firestore counts for matching competitions and preserves unrelated merge behavior', () => {
+    const apiSummary = createSummary('event-1', 0, 0, { classCount: 5 });
+    const firestoreSummary = createSummary('event-1', 24, 6, {
       name: 'Updated event title',
       classCount: 0,
     });
@@ -37,20 +37,32 @@ describe('mergePublicCompetitionSummaries', () => {
       mergePublicCompetitionSummaries([apiSummary], [firestoreSummary])[0]
     ).toMatchObject({
       name: 'Updated event title',
-      competitorCount: 42,
-      finishedCount: 17,
+      competitorCount: 24,
+      finishedCount: 6,
       classCount: 5,
     });
   });
 
+  it('retains API counts for API-only competitions', () => {
+    const apiSummary = createSummary('event-1', 12, 4);
+
+    expect(mergePublicCompetitionSummaries([apiSummary], [])[0]).toMatchObject({
+      competitorCount: 12,
+      finishedCount: 4,
+    });
+  });
+
   it('retains Firestore-only competitions when the API does not include them', () => {
-    const apiSummary = createSummary('event-1', 3, 1);
     const firestoreOnly = createSummary('event-2', 8, 4);
 
     expect(
-      mergePublicCompetitionSummaries([apiSummary], [firestoreOnly]).map(
-        (competition) => competition.id
-      )
-    ).toEqual(['event-1', 'event-2']);
+      mergePublicCompetitionSummaries([], [firestoreOnly])
+    ).toMatchObject([
+      {
+        id: 'event-2',
+        competitorCount: 8,
+        finishedCount: 4,
+      },
+    ]);
   });
 });
