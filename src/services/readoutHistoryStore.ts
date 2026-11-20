@@ -4,7 +4,10 @@ import type {
   RunnerDbEntry,
   RunnerStatus,
 } from '../types/sportident';
-import type { ReadoutReassignmentAuditEntry } from '../types/readoutReassignment';
+import {
+  isReassignableReadoutResultStatus,
+  type ReadoutReassignmentAuditEntry,
+} from '../types/readoutReassignment';
 
 export type CapturedReadoutPayload = FullCardReadoutPayload & {
   clientReadoutId: string;
@@ -64,6 +67,20 @@ export interface ReadoutHistoryRecord {
   correctionAudit: ReadoutReassignmentAuditEntry[];
   suggestedRunner: RunnerDbEntry | null;
   syncError: string | null;
+}
+
+export function isEligibleWrongCompetitorReadout(
+  record: ReadoutHistoryRecord
+): boolean {
+  return (
+    record.readoutState === 'PROCESSED' &&
+    record.competitorId !== null &&
+    (record.originalCompetitorId === null ||
+      record.originalCompetitorId === record.competitorId) &&
+    isReassignableReadoutResultStatus(record.resultStatus) &&
+    !record.correctionOperationId &&
+    !record.correctionAudit.some((entry) => entry.result.status === 'APPLIED')
+  );
 }
 
 export type ReadoutHistoryUpdate = Partial<

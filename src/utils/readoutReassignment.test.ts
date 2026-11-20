@@ -44,15 +44,21 @@ function makeCompetitor(
     allocatedStartSec: null,
     checkTimeSec: null,
     startTimeSec: status === 'IN_FOREST' ? 36000 : null,
-    finishTimeSec: status === 'OK' ? 40000 : null,
+    finishTimeSec: ['OK', 'MP', 'PRELIMINARY_FIN'].includes(status)
+      ? 40000
+      : null,
     runningTimeSec,
     lastSeenControl: null,
     lastSeenTimeSec: null,
-    readoutAt: status === 'OK' ? '2026-11-19T10:00:00.000Z' : null,
+    readoutAt: ['OK', 'MP', 'PRELIMINARY_FIN'].includes(status)
+      ? '2026-11-19T10:00:00.000Z'
+      : null,
     radioSplits: [],
-    cardPunches: status === 'OK' ? [{ code: 31, timeSec: 37000 }] : [],
+    cardPunches: ['OK', 'MP', 'PRELIMINARY_FIN'].includes(status)
+      ? [{ code: 31, timeSec: 37000 }]
+      : [],
     rawReadout:
-      status === 'OK'
+      ['OK', 'MP', 'PRELIMINARY_FIN'].includes(status)
         ? {
             checkTimeSec: null,
             startTimeSec: 36000,
@@ -75,32 +81,37 @@ const readout: ReassignmentReadoutData = {
 };
 
 describe('calculateReadoutReassignmentPreview', () => {
-  it('validates against the target class and calculates the projected placing', () => {
-    const anna = makeCompetitor('anna', 'OK', 3500);
-    const erik = makeCompetitor('erik', 'REGISTERED', null);
-    const otherFinisher = makeCompetitor('other', 'OK', 3900);
+  it.each(['OK', 'MP', 'PRELIMINARY_FIN'] as const)(
+    'preserves the original %s status while validating against the target class',
+    (sourceStatus) => {
+      const anna = makeCompetitor('anna', sourceStatus, 3500);
+      const erik = makeCompetitor('erik', 'REGISTERED', null);
+      const otherFinisher = makeCompetitor('other', 'OK', 3900);
 
-    const preview = calculateReadoutReassignmentPreview(
-      readout,
-      anna.id,
-      erik,
-      [anna, erik, otherFinisher],
-      [compClass],
-      [course],
-      36000,
-      emergency
-    );
+      const preview = calculateReadoutReassignmentPreview(
+        readout,
+        anna.id,
+        erik,
+        [anna, erik, otherFinisher],
+        [compClass],
+        [course],
+        36000,
+        emergency
+      );
 
-    expect(preview).toMatchObject({
-      status: 'OK',
-      finishTimeSec: 40000,
-      runningTimeSec: 4000,
-      bomSec: null,
-      placing: { pos: 2, total: 2 },
-    });
-    expect(preview.competitor.cardPunches).toEqual(readout.punches);
-    expect(preview.competitor.rawReadout?.clientReadoutId).toBe(readout.clientReadoutId);
-  });
+      expect(preview).toMatchObject({
+        status: sourceStatus,
+        finishTimeSec: 40000,
+        runningTimeSec: 4000,
+        bomSec: null,
+        placing: sourceStatus === 'OK' ? { pos: 2, total: 2 } : null,
+      });
+      expect(preview.competitor.cardPunches).toEqual(readout.punches);
+      expect(preview.competitor.rawReadout?.clientReadoutId).toBe(
+        readout.clientReadoutId
+      );
+    }
+  );
 
   it('rejects a target who already has a result', () => {
     const anna = makeCompetitor('anna', 'OK', 3500);

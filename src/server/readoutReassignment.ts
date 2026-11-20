@@ -12,6 +12,7 @@ import type {
   ResultReassignmentActorRole,
   ResultReassignmentResponse,
 } from '../types/readoutReassignment';
+import { isReassignableReadoutResultStatus } from '../types/readoutReassignment';
 import { createPublicResultDocumentFromFirestore } from '../utils/publicResultProjection';
 import {
   calculateReadoutReassignmentPreview,
@@ -388,8 +389,11 @@ export async function reassignReadoutResult(
     }
     const sourceData = sourceSnapshot.data() ?? {};
     const targetData = targetSnapshot.data() ?? {};
-    if (sourceData.status !== 'OK') {
-      throw new ReadoutReassignmentError(409, 'The original result is no longer an OK result.');
+    if (!isReassignableReadoutResultStatus(sourceData.status)) {
+      throw new ReadoutReassignmentError(
+        409,
+        'The original result is no longer an eligible readout result.'
+      );
     }
     if (decodeSeconds(sourceData.manualFinishTimeSec) !== null) {
       throw new ReadoutReassignmentError(

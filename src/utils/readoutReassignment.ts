@@ -7,6 +7,10 @@ import type {
   ReadoutValidation,
   RunnerStatus,
 } from '../types/sportident';
+import {
+  isReassignableReadoutResultStatus,
+  type ReassignableReadoutResultStatus,
+} from '../types/readoutReassignment';
 import { getCompetitorPlacement } from '../services/readoutSummary';
 import { applyEmergencyTimeOffsets, validateCompetitorReadout } from './readoutValidation';
 
@@ -54,6 +58,9 @@ export function calculateReadoutReassignmentPreview(
   if (!original || !competitors.some((candidate) => candidate.id === target.id)) {
     throw new Error('Den ursprungliga eller valda löparen hittades inte i tävlingen.');
   }
+  if (!isReassignableReadoutResultStatus(original.status)) {
+    throw new Error('Det ursprungliga resultatet kan inte flyttas.');
+  }
   if (!REASSIGNABLE_TARGET_STATUSES.has(target.status)) {
     throw new Error('Löparen har redan ett resultat eller kan inte ta emot avläsningen.');
   }
@@ -99,7 +106,7 @@ export function calculateReadoutReassignmentPreview(
     readout.punches,
     emergency
   );
-  const status: RunnerStatus = validation.ok ? 'OK' : 'MP';
+  const status: ReassignableReadoutResultStatus = original.status;
   const correctedCompetitor: Competitor = {
     ...target,
     status,

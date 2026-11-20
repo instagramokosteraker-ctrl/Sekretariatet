@@ -25,7 +25,11 @@ emulatorDescribe('reassignReadoutResult', () => {
     await deleteApp(app);
   });
 
-  async function seedReassignment(options?: { authorized?: boolean; targetExists?: boolean }) {
+  async function seedReassignment(options?: {
+    authorized?: boolean;
+    targetExists?: boolean;
+    sourceStatus?: 'OK' | 'MP' | 'PRELIMINARY_FIN';
+  }) {
     const suffix = randomUUID().replace(/-/g, '');
     const competitionId = `evt_${suffix}`;
     const actorUid = `usr_${suffix}`;
@@ -43,6 +47,7 @@ emulatorDescribe('reassignReadoutResult', () => {
     const adminRef = firestore.collection('admins').doc(actorUid);
     const roleRef = firestore.collection('roleAssignments').doc(actorUid);
     const now = new Date('2026-11-19T10:00:00.000Z');
+    const sourceStatus = options?.sourceStatus ?? 'OK';
     const receiptData = {
       receiptId: readoutId,
       clientReadoutId: readoutId,
@@ -73,7 +78,7 @@ emulatorDescribe('reassignReadoutResult', () => {
       cardSeries: 'SI-Card 9',
       isRentalCard: false,
       rentalReturned: false,
-      status: 'OK',
+      status: sourceStatus,
       allocatedStartSec: -1,
       checkTimeSec: -1,
       startTimeSec: 36000,
@@ -150,7 +155,7 @@ emulatorDescribe('reassignReadoutResult', () => {
         fullName: 'Anna',
         club: 'Klubb',
         classId: 'cls_1',
-        status: 'OK',
+        status: sourceStatus,
         allocatedStartSec: -1,
         startTimeSec: 36000,
         finishTimeSec: 40000,
@@ -203,92 +208,102 @@ emulatorDescribe('reassignReadoutResult', () => {
     };
   }
 
-  it('reassigns Anna’s result to Erik and preserves readout and radio data', async () => {
-    const fixture = await seedReassignment();
-    try {
-      const result = await reassignReadoutResult(
-        firestore,
-        { uid: fixture.actorUid },
-        fixture.competitionId,
-        fixture.readoutId,
-        request(fixture)
-      );
-
-      expect(result).toMatchObject({
-        status: 'APPLIED',
-        originalCompetitorId: fixture.annaId,
-        correctedCompetitorId: fixture.erikId,
-        audit: {
-          actorUid: fixture.actorUid,
-          actorRole: 'READOUT',
-          reason: 'Readout used by the wrong runner',
-          originalCompetitor: { id: fixture.annaId, name: 'Anna' },
-          correctedCompetitor: { id: fixture.erikId, name: 'Erik' },
-          result: { status: 'APPLIED', previousStatus: 'OK', newStatus: 'OK' },
-        },
-      });
-      expect((await fixture.sourceRef.get()).data()).toMatchObject({
-        status: 'REGISTERED',
-        finishTimeSec: -1,
-        punchCodes: [],
-        siNumber: 510123,
-      });
-      expect((await fixture.targetRef.get()).data()).toMatchObject({
-        status: 'OK',
-        finishTimeSec: 40000,
-        runningTimeSec: 4000,
-        punchCodes: [31],
-        siNumber: 510999,
-      });
-      const savedReceipt = (await fixture.receiptRef.get()).data();
-      expect(savedReceipt).toBeDefined();
-      const { createdAt: savedCreatedAt, ...savedReceiptData } = savedReceipt ?? {};
-      const { createdAt: originalCreatedAt, ...originalReceiptData } =
-        fixture.receiptData;
-      expect(savedReceiptData).toEqual(originalReceiptData);
-      expect(savedCreatedAt).toBeInstanceOf(Timestamp);
-      expect((savedCreatedAt as Timestamp).toDate()).toEqual(originalCreatedAt);
-      expect((await fixture.sourcePublicRef.get()).data()?.radioSplits).toHaveLength(1);
-      expect((await fixture.targetPublicRef.get()).data()?.radioSplits).toHaveLength(1);
-      expect((await fixture.correctionsRef.doc(fixture.operationId).get()).exists).toBe(true);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
-
-  it('replays the same operation without duplicating audit or result changes', async () => {
-    const fixture = await seedReassignment();
-    try {
-      const first = await reassignReadoutResult(
-        firestore,
-        { uid: fixture.actorUid },
-        fixture.competitionId,
-        fixture.readoutId,
-        request(fixture)
-      );
-      const replay = await reassignReadoutResult(
-        firestore,
-        { uid: fixture.actorUid },
-        fixture.competitionId,
-        fixture.readoutId,
-        request(fixture)
-      );
-      expect(replay.status).toBe('REPLAYED');
-      expect(replay.audit).toEqual(first.audit);
-      expect((await fixture.correctionsRef.get()).size).toBe(1);
-      await expect(
-        reassignReadoutResult(
+  it.each(['OK', 'MP', 'PRELIMINARY_FIN'] as const)(
+    'reassigns Anna’s %s result to Erik and preserves readout and radio data',
+    async (sourceStatus) => {
+      const fixture = await seedReassignment({ sourceStatus });
+      try {
+        const result = await reassignReadoutResult(
           firestore,
           { uid: fixture.actorUid },
           fixture.competitionId,
           fixture.readoutId,
-          { ...request(fixture), reason: 'A different reason' }
-        )
-      ).rejects.toMatchObject({ statusCode: 409 });
-    } finally {
-      await fixture.cleanup();
+          request(fixture)
+        );
+
+        expect(result).toMatchObject({
+          status: 'APPLIED',
+          originalCompetitorId: fixture.annaId,
+          correctedCompetitorId: fixture.erikId,
+          audit: {
+            actorUid: fixture.actorUid,
+            actorRole: 'READOUT',
+            reason: 'Readout used by the wrong runner',
+            originalCompetitor: { id: fixture.annaId, name: 'Anna' },
+            correctedCompetitor: { id: fixture.erikId, name: 'Erik' },
+            result: {
+              status: 'APPLIED',
+              previousStatus: sourceStatus,
+              newStatus: sourceStatus,
+            },
+          },
+        });
+        expect((await fixture.sourceRef.get()).data()).toMatchObject({
+          status: 'REGISTERED',
+          finishTimeSec: -1,
+          punchCodes: [],
+          siNumber: 510123,
+        });
+        expect((await fixture.targetRef.get()).data()).toMatchObject({
+          status: sourceStatus,
+          finishTimeSec: 40000,
+          runningTimeSec: 4000,
+          punchCodes: [31],
+          siNumber: 510999,
+        });
+        const savedReceipt = (await fixture.receiptRef.get()).data();
+        expect(savedReceipt).toBeDefined();
+        const { createdAt: savedCreatedAt, ...savedReceiptData } = savedReceipt ?? {};
+        const { createdAt: originalCreatedAt, ...originalReceiptData } =
+          fixture.receiptData;
+        expect(savedReceiptData).toEqual(originalReceiptData);
+        expect(savedCreatedAt).toBeInstanceOf(Timestamp);
+        expect((savedCreatedAt as Timestamp).toDate()).toEqual(originalCreatedAt);
+        expect((await fixture.sourcePublicRef.get()).data()?.radioSplits).toHaveLength(1);
+        expect((await fixture.targetPublicRef.get()).data()?.radioSplits).toHaveLength(1);
+        expect((await fixture.correctionsRef.doc(fixture.operationId).get()).exists).toBe(true);
+      } finally {
+        await fixture.cleanup();
+      }
     }
-  });
+  );
+
+  it.each(['OK', 'MP', 'PRELIMINARY_FIN'] as const)(
+    'replays the same %s reassignment without duplicating audit or result changes',
+    async (sourceStatus) => {
+      const fixture = await seedReassignment({ sourceStatus });
+      try {
+        const first = await reassignReadoutResult(
+          firestore,
+          { uid: fixture.actorUid },
+          fixture.competitionId,
+          fixture.readoutId,
+          request(fixture)
+        );
+        const replay = await reassignReadoutResult(
+          firestore,
+          { uid: fixture.actorUid },
+          fixture.competitionId,
+          fixture.readoutId,
+          request(fixture)
+        );
+        expect(replay.status).toBe('REPLAYED');
+        expect(replay.audit).toEqual(first.audit);
+        expect((await fixture.correctionsRef.get()).size).toBe(1);
+        await expect(
+          reassignReadoutResult(
+            firestore,
+            { uid: fixture.actorUid },
+            fixture.competitionId,
+            fixture.readoutId,
+            { ...request(fixture), reason: 'A different reason' }
+          )
+        ).rejects.toMatchObject({ statusCode: 409 });
+      } finally {
+        await fixture.cleanup();
+      }
+    }
+  );
 
   it('rejects an unauthorized role without changing competitors', async () => {
     const fixture = await seedReassignment({ authorized: false });

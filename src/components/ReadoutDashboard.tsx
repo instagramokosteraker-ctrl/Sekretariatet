@@ -25,6 +25,7 @@ import type { ReadoutReassignmentAuditEntry } from '../types/readoutReassignment
 import type { OfflineQueueSnapshot } from '../services/offlineReadoutQueue';
 import {
   filterOutstandingReadouts,
+  isEligibleWrongCompetitorReadout,
   type ReadoutHistoryRecord,
 } from '../services/readoutHistoryStore';
 import type {
@@ -1222,11 +1223,7 @@ export function ReadoutDashboard({
             </div>
           </div>
           )}
-          {selectedReadout.resultStatus === 'OK' &&
-            !selectedReadout.correctionOperationId &&
-            (selectedReadout.issueState === 'NONE' ||
-              (selectedReadout.issueType === 'WRONG_COMPETITOR' &&
-                selectedReadout.issueState === 'OPEN')) && (
+          {isEligibleWrongCompetitorReadout(selectedReadout) && (
               <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-800">
                 {!wrongCompetitorOpen ? (
                   <button

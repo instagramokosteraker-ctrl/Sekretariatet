@@ -87,6 +87,7 @@ import {
 } from './services/offlineReadoutQueue';
 import {
   getLatestReadoutId,
+  isEligibleWrongCompetitorReadout,
   readoutHistoryStore,
   sortReadoutHistory,
   type ReadoutHistoryRecord,
@@ -1234,11 +1235,10 @@ export default function App() {
     async (clientReadoutId: string) => {
       const record = readoutHistoryStore.getRecord(clientReadoutId);
       if (!record) throw new Error('Avläsningen hittades inte i historiken.');
-      if (record.resultStatus !== 'OK' || record.correctionOperationId) {
-        throw new Error('Endast ett okorrigerat OK-resultat kan få ärendet Fel löpare.');
-      }
-      if (record.issueState !== 'NONE') {
-        throw new Error('Avläsningen har redan ett ärendetillstånd.');
+      if (!isEligibleWrongCompetitorReadout(record)) {
+        throw new Error(
+          'Endast en matchad OK-, MP- eller preliminär avläsning utan genomförd korrigering kan få ärendet Fel löpare.'
+        );
       }
       await readoutHistoryStore.update(clientReadoutId, {
         issueType: 'WRONG_COMPETITOR',
@@ -1297,14 +1297,23 @@ export default function App() {
         response,
         'Resultatet kunde inte korrigeras.'
       );
-      const recalculated = await recalculateCompetitionFromFirestore(activeEventId);
-      const correctedCompetitor = recalculated.competitors.find(
+      const cloudSnapshot = await loadFullSeasonFromFirestore({
+        competitionId: activeEventId,
+        includeRunnerDb: false,
+      });
+      const event = cloudSnapshot?.events.find(
+        (candidate) => candidate.competition.id === activeEventId
+      );
+      if (!event) {
+        throw new Error('Korrigeringen sparades, men tävlingen kunde inte läsas in.');
+      }
+      const correctedCompetitor = event.competitors.find(
         (competitor) => competitor.id === result.correctedCompetitorId
       );
       if (!correctedCompetitor) {
         throw new Error('Korrigeringen sparades, men den nya löparen kunde inte läsas in.');
       }
-      setCompetitors(recalculated.competitors);
+      setCompetitors(event.competitors);
       const currentRecord =
         readoutHistoryStore.getRecord(record.clientReadoutId) ?? record;
       const correctionAudit = [

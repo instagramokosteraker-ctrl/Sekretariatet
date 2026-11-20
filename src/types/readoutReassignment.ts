@@ -1,5 +1,16 @@
 import type { RunnerStatus } from './sportident';
 
+export type ReassignableReadoutResultStatus = Extract<
+  RunnerStatus,
+  'OK' | 'MP' | 'PRELIMINARY_FIN'
+>;
+
+export function isReassignableReadoutResultStatus(
+  status: unknown
+): status is ReassignableReadoutResultStatus {
+  return status === 'OK' || status === 'MP' || status === 'PRELIMINARY_FIN';
+}
+
 export type ResultReassignmentActorRole =
   | 'SUPER_ADMIN'
   | 'RACE_ADMIN'

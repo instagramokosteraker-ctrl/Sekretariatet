@@ -3,6 +3,7 @@ import type { FullCardReadoutPayload } from '../types/sportident';
 import {
   addReadoutHistoryRecord,
   filterOutstandingReadouts,
+  isEligibleWrongCompetitorReadout,
   getLatestReadoutId,
   sortReadoutHistory,
   updateReadoutHistoryRecord,
@@ -59,6 +60,45 @@ function createRecord(
 }
 
 describe('readout history ordering', () => {
+  it.each(['OK', 'MP', 'PRELIMINARY_FIN'] as const)(
+    'allows a matched %s readout without a completed reassignment',
+    (resultStatus) => {
+      const record = {
+        ...createRecord(`readout-${resultStatus}`, 1, 'PROCESSED'),
+        competitorId: 'anna',
+        originalCompetitorId: 'anna',
+        resultStatus,
+        issueType: 'MP_REVIEW' as const,
+        issueState: 'OPEN' as const,
+      };
+
+      expect(isEligibleWrongCompetitorReadout(record)).toBe(true);
+      expect(
+        isEligibleWrongCompetitorReadout({
+          ...record,
+          correctionOperationId: 'readout-correction-done',
+        })
+      ).toBe(false);
+    }
+  );
+
+  it('does not expose reassignment for unmatched or unprocessed readouts', () => {
+    const record = {
+      ...createRecord('readout-unmatched', 1),
+      resultStatus: 'OK' as const,
+    };
+
+    expect(isEligibleWrongCompetitorReadout(record)).toBe(false);
+    expect(
+      isEligibleWrongCompetitorReadout({
+        ...record,
+        readoutState: 'PROCESSED',
+        competitorId: 'anna',
+        resultStatus: 'DNF',
+      })
+    ).toBe(false);
+  });
+
   it('keeps the original match while recording the corrected current competitor', () => {
     const record = {
       ...createRecord('readout-corrected', 1, 'PROCESSED'),
