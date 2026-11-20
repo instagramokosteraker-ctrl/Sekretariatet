@@ -71,7 +71,6 @@ interface ReadoutDashboardProps {
   latestReadoutId: string | null;
   readoutHistoryError: string | null;
   onCreateMpReviewIssue: (clientReadoutId: string) => Promise<void>;
-  onCreateWrongCompetitorIssue: (clientReadoutId: string) => Promise<void>;
   onApplyResultReassignment: (
     record: ReadoutHistoryRecord,
     targetCompetitorId: string,
@@ -135,7 +134,6 @@ export function ReadoutDashboard({
   latestReadoutId,
   readoutHistoryError,
   onCreateMpReviewIssue,
-  onCreateWrongCompetitorIssue,
   onApplyResultReassignment,
   onLoadResultReassignmentAudits,
   onApproveManualResult,
@@ -631,20 +629,11 @@ export function ReadoutDashboard({
     }
   };
 
-  const handleCreateWrongCompetitorIssue = async () => {
-    if (!selectedReadout) return;
-    setWrongCompetitorBusy(true);
+  const handleOpenWrongCompetitorDraft = () => {
+    setWrongCompetitorTargetId('');
+    setWrongCompetitorReason('');
     setWrongCompetitorError(null);
-    try {
-      await onCreateWrongCompetitorIssue(selectedReadout.clientReadoutId);
-      setWrongCompetitorOpen(true);
-    } catch (error) {
-      setWrongCompetitorError(
-        error instanceof Error ? error.message : 'Ärendet kunde inte skapas.'
-      );
-    } finally {
-      setWrongCompetitorBusy(false);
-    }
+    setWrongCompetitorOpen(true);
   };
 
   const handleApplyResultReassignment = async () => {
@@ -1229,16 +1218,10 @@ export function ReadoutDashboard({
                   <button
                     type="button"
                     disabled={wrongCompetitorBusy}
-                    onClick={() => {
-                      if (selectedReadout.issueType === 'WRONG_COMPETITOR') {
-                        setWrongCompetitorOpen(true);
-                      } else {
-                        void handleCreateWrongCompetitorIssue();
-                      }
-                    }}
+                    onClick={handleOpenWrongCompetitorDraft}
                     className="rounded-md border border-amber-400 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-950/50"
                   >
-                    {wrongCompetitorBusy ? 'Öppnar ärende...' : 'Fel löpare'}
+                    Fel löpare
                   </button>
                 ) : (
                   <div className="space-y-3 rounded-md border border-amber-300 bg-amber-50/70 p-3 dark:border-amber-800 dark:bg-amber-950/20">
@@ -1353,7 +1336,12 @@ export function ReadoutDashboard({
                       <button
                         type="button"
                         disabled={wrongCompetitorBusy}
-                        onClick={() => setWrongCompetitorOpen(false)}
+                        onClick={() => {
+                          setWrongCompetitorOpen(false);
+                          setWrongCompetitorTargetId('');
+                          setWrongCompetitorReason('');
+                          setWrongCompetitorError(null);
+                        }}
                         className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-white disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-900"
                       >
                         Avbryt

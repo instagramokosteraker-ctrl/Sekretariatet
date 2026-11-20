@@ -6450,6 +6450,10 @@ export async function submitReadoutToFirestore(
   eventId: string | undefined,
   readout: FullCardReadoutPayload
 ): Promise<{
+  duplicateReadout?: {
+    receiptId: string;
+    competitorId: string;
+  };
   competitor?: Competitor | null;
   unknownCardReadout?: {
     siNumber: number;
@@ -6829,6 +6833,97 @@ export async function submitReadoutToFirestore(
       );
       throw error;
     }
+  }
+
+  if (runner && updatedCompetitor && validation) {
+    const competitorId = sanitizeFirestoreId(runner.id, 'cmp');
+    const response = await fetch(
+      `/api/firestore/competitions/${encodeURIComponent(competitionId)}/readouts/${encodeURIComponent(clientReadoutId)}/ingest`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${await current.getIdToken()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          competitorId,
+          siNumber,
+          cardSeries: readout.cardSeries,
+          stationCode: commonReceipt.stationCode,
+          checkTimeSec: commonReceipt.checkTimeSec,
+          startTimeSec: commonReceipt.startTimeSec,
+          finishTimeSec: commonReceipt.finishTimeSec,
+          punchCodes: commonReceipt.punchCodes,
+          punchTimes: commonReceipt.punchTimes,
+          rawHex: commonReceipt.rawHex,
+          result: {
+            status: updatedCompetitor.status,
+            checkTimeSec: encodeNullableSec(updatedCompetitor.checkTimeSec),
+            startTimeSec: encodeNullableSec(updatedCompetitor.startTimeSec),
+            finishTimeSec: encodeNullableSec(updatedCompetitor.finishTimeSec),
+            runningTimeSec: encodeNullableSec(updatedCompetitor.runningTimeSec),
+            readoutAtIso: updatedCompetitor.readoutAt || nowIso,
+          },
+        }),
+      }
+    );
+    const responseBody = (await response.json().catch(() => ({}))) as {
+      error?: unknown;
+      status?: unknown;
+      competitorId?: unknown;
+      duplicateReceiptId?: unknown;
+      replayed?: unknown;
+    };
+    if (!response.ok) {
+      throw new Error(
+        typeof responseBody.error === 'string'
+          ? responseBody.error
+          : 'Tävlingen kunde inte spara avläsningen.'
+      );
+    }
+    if (responseBody.status === 'UNKNOWN') {
+      return {
+        unknownCardReadout: {
+          siNumber,
+          checkTimeSec: readout.checkTimeSec,
+          startTimeSec: readout.startTimeSec,
+          finishTimeSec: readout.finishTimeSec,
+          punches,
+        },
+      };
+    }
+    if (
+      responseBody.status === 'DUPLICATE' &&
+      typeof responseBody.competitorId === 'string' &&
+      typeof responseBody.duplicateReceiptId === 'string'
+    ) {
+      return {
+        competitor:
+          event.competitors.find(
+            (candidate) =>
+              sanitizeFirestoreId(candidate.id, 'cmp') === responseBody.competitorId
+          ) ?? runner,
+        duplicateReadout: {
+          receiptId: responseBody.duplicateReceiptId,
+          competitorId: responseBody.competitorId,
+        },
+      };
+    }
+    if (
+      responseBody.status !== 'PROCESSED' ||
+      typeof responseBody.competitorId !== 'string'
+    ) {
+      throw new Error('Servern returnerade ett ogiltigt avläsningsresultat.');
+    }
+    return {
+      competitor:
+        responseBody.competitorId === competitorId
+          ? updatedCompetitor
+          : event.competitors.find(
+              (candidate) =>
+                sanitizeFirestoreId(candidate.id, 'cmp') === responseBody.competitorId
+            ) ?? runner,
+    };
   }
 
   const result = await runTransaction(db, async (transaction) => {

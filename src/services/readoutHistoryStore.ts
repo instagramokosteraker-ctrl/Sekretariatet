@@ -107,6 +107,54 @@ export type ReadoutHistoryUpdate = Partial<
   >
 >;
 
+export function getWrongCompetitorIssueUpdateForConfirmation(
+  record: ReadoutHistoryRecord
+): ReadoutHistoryUpdate | null {
+  if (
+    record.issueType === 'WRONG_COMPETITOR' &&
+    (record.issueState === 'OPEN' || record.issueState === 'IN_PROGRESS')
+  ) {
+    return null;
+  }
+  return {
+    issueType: 'WRONG_COMPETITOR',
+    issueState: 'OPEN',
+  };
+}
+
+export function createDuplicateReadoutHistoryUpdate(
+  record: ReadoutHistoryRecord,
+  competitor: Competitor,
+  className: string | null
+): ReadoutHistoryUpdate {
+  const wasOriginallyUnknown =
+    record.issueType === 'UNKNOWN_CARD' || record.readoutState === 'UNKNOWN';
+
+  return {
+    deliveryState: 'SYNCED',
+    readoutState: 'PROCESSED',
+    competitorId: competitor.id,
+    competitorName: competitor.fullName,
+    className,
+    resultStatus: competitor.status,
+    competitorSnapshot: competitor,
+    originalCompetitorId:
+      record.originalCompetitorId ?? (wasOriginallyUnknown ? null : competitor.id),
+    originalCompetitorName:
+      record.originalCompetitorName ?? (wasOriginallyUnknown ? null : competitor.fullName),
+    originalClassName:
+      record.originalClassName ?? (wasOriginallyUnknown ? null : className),
+    originalResultStatus:
+      record.originalResultStatus ?? (wasOriginallyUnknown ? null : competitor.status),
+    originalCompetitorSnapshot:
+      record.originalCompetitorSnapshot ?? (wasOriginallyUnknown ? null : competitor),
+    issueType: 'DUPLICATE_READOUT',
+    issueState: 'NONE',
+    suggestedRunner: null,
+    syncError: null,
+  };
+}
+
 const DATABASE_NAME = 'PasserSI_ReadoutHistoryDB';
 const DATABASE_VERSION = 1;
 const RECORD_STORE = 'readouts';

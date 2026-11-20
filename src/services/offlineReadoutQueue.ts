@@ -34,6 +34,10 @@ export interface ReadoutDeliveryResult {
   clientReadoutId?: string;
   captureSequence?: number;
   capturedAt?: string;
+  duplicateReadout?: {
+    receiptId: string;
+    competitorId: string;
+  };
   competitor?: Competitor | null;
   event?: LiveEventItem;
   suggestedRunner?: RunnerDbEntry | null;

@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { FullCardReadoutPayload } from '../types/sportident';
+import type { Competitor, FullCardReadoutPayload } from '../types/sportident';
+import {
+  getReadoutStatusPresentation,
+  getReadoutStatusText,
+} from '../utils/readoutStatusPresentation';
 import {
   addReadoutHistoryRecord,
+  createDuplicateReadoutHistoryUpdate,
   filterOutstandingReadouts,
+  getWrongCompetitorIssueUpdateForConfirmation,
   isEligibleWrongCompetitorReadout,
   getLatestReadoutId,
   sortReadoutHistory,
@@ -56,6 +62,34 @@ function createRecord(
     correctionAudit: [],
     suggestedRunner: null,
     syncError: null,
+  };
+}
+
+function createCompetitor(status: Competitor['status']): Competitor {
+  return {
+    id: 'competitor-1',
+    bib: 12,
+    fullName: 'Ada Runner',
+    club: 'Example Club',
+    classId: 'class-1',
+    siNumber: 429898,
+    cardSeries: 'SI-Card 10',
+    isRentalCard: false,
+    rentalReturned: false,
+    status,
+    allocatedStartSec: null,
+    checkTimeSec: null,
+    startTimeSec: 23194,
+    finishTimeSec: 68050,
+    manualFinishTimeSec: null,
+    runningTimeSec: 44856,
+    lastSeenControl: null,
+    lastSeenTimeSec: null,
+    readoutAt: null,
+    radioSplits: [],
+    cardPunches: [],
+    rawReadout: null,
+    validation: null,
   };
 }
 
@@ -127,6 +161,50 @@ describe('readout history ordering', () => {
       issueState: 'RESOLVED',
       correctionOperationId: 'readout-correction-op-1',
     });
+  });
+
+  it('keeps a reassignment draft out of Outstanding Issues until confirmation', () => {
+    const record = {
+      ...createRecord('readout-reassignment-draft', 1, 'PROCESSED'),
+      competitorId: 'anna',
+      originalCompetitorId: 'anna',
+      resultStatus: 'OK' as const,
+    };
+
+    expect(filterOutstandingReadouts([record])).toEqual([]);
+
+    const issueUpdate = getWrongCompetitorIssueUpdateForConfirmation(record);
+    expect(issueUpdate).toEqual({
+      issueType: 'WRONG_COMPETITOR',
+      issueState: 'OPEN',
+    });
+    const committed = updateReadoutHistoryRecord(
+      [record],
+      record.clientReadoutId,
+      issueUpdate ?? {}
+    )[0];
+    expect(filterOutstandingReadouts([committed])).toEqual([committed]);
+
+    const resolved = updateReadoutHistoryRecord(
+      [committed],
+      committed.clientReadoutId,
+      { issueState: 'RESOLVED', correctionOperationId: 'readout-correction-1' }
+    )[0];
+    expect(filterOutstandingReadouts([resolved])).toEqual([]);
+  });
+
+  it('preserves an existing open reassignment issue instead of creating another', () => {
+    const record = {
+      ...createRecord('readout-existing-reassignment', 1, 'PROCESSED'),
+      competitorId: 'anna',
+      originalCompetitorId: 'anna',
+      resultStatus: 'OK' as const,
+      issueType: 'WRONG_COMPETITOR' as const,
+      issueState: 'OPEN' as const,
+    };
+
+    expect(getWrongCompetitorIssueUpdateForConfirmation(record)).toBeNull();
+    expect(filterOutstandingReadouts([record])).toEqual([record]);
   });
 
   it('keeps the newest captured readout latest when responses arrive out of order', () => {
@@ -256,6 +334,36 @@ describe('readout history ordering', () => {
         alreadyRead,
       ]).map((record) => record.clientReadoutId)
     ).toEqual(['mp-review-readout', 'in-progress-readout']);
+  });
+
+  it('marks an exact duplicate as an informational blue history row', () => {
+    const record = createRecord('duplicate-readout', 3);
+    const competitor = createCompetitor('MP');
+    const update = createDuplicateReadoutHistoryUpdate(
+      record,
+      competitor,
+      'Open class'
+    );
+    const [duplicate] = updateReadoutHistoryRecord(
+      [record],
+      record.clientReadoutId,
+      update
+    );
+
+    expect(duplicate).toMatchObject({
+      clientReadoutId: 'duplicate-readout',
+      captureSequence: 3,
+      capturedAt: record.capturedAt,
+      deliveryState: 'SYNCED',
+      readoutState: 'PROCESSED',
+      issueType: 'DUPLICATE_READOUT',
+      issueState: 'NONE',
+      competitorId: competitor.id,
+      resultStatus: 'MP',
+    });
+    expect(getReadoutStatusText(duplicate)).toBe('Redan avläst');
+    expect(getReadoutStatusPresentation(duplicate).tone).toBe('info');
+    expect(filterOutstandingReadouts([duplicate])).toEqual([]);
   });
 
   it('does not recreate a history row when an asynchronous update has no capture ID match', () => {

@@ -31,6 +31,10 @@ import {
   ReadoutAutoCreateError,
 } from './src/server/readoutAutocreate';
 import {
+  ingestReadout,
+  ReadoutIngestionError,
+} from './src/server/readoutIngestion';
+import {
   approveManualResult,
   ManualResultApprovalError,
 } from './src/server/manualResultApproval';
@@ -2803,6 +2807,11 @@ async function startServer() {
       },
       {
         method: 'POST',
+        path: /^\/firestore\/competitions\/[^/]+\/readouts\/[^/]+\/ingest$/,
+        roles: ['READOUT', 'FOREST', 'SPEAKER'],
+      },
+      {
+        method: 'POST',
         path: /^\/firestore\/competitions\/[^/]+\/competitors\/[^/]+\/manual-result-approval$/,
         roles: ['READOUT', 'FOREST'],
       },
@@ -4384,6 +4393,41 @@ async function startServer() {
       error: 'Legacy competitor mutation routes are disabled. Use the Firestore-authoritative application.',
     });
   };
+
+  app.post(
+    '/api/firestore/competitions/:competitionId/readouts/:receiptId/ingest',
+    async (req, res) => {
+      const sessionUser = (
+        req as express.Request & { authUser?: AuthSessionUser }
+      ).authUser;
+      if (
+        !sessionUser ||
+        (sessionUser.sessionKind !== 'ADMIN' &&
+          !['READOUT', 'FOREST', 'SPEAKER'].includes(sessionUser.officialRole))
+      ) {
+        res.status(403).json({ error: 'A readout official or club administrator is required.' });
+        return;
+      }
+
+      try {
+        const result = await ingestReadout(
+          getTrustedFirestore(),
+          { uid: sessionUser.uid },
+          req.params.competitionId,
+          req.params.receiptId,
+          req.body
+        );
+        res.status(result.status === 'PROCESSED' && !result.replayed ? 201 : 200).json(result);
+      } catch (error) {
+        if (error instanceof ReadoutIngestionError) {
+          res.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        console.error('Trusted readout ingestion failed:', error);
+        res.status(500).json({ error: 'The readout could not be processed.' });
+      }
+    }
+  );
 
   app.post(
     '/api/firestore/competitions/:competitionId/readouts/:receiptId/auto-create',

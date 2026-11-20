@@ -87,6 +87,8 @@ import {
 } from './services/offlineReadoutQueue';
 import {
   getLatestReadoutId,
+  createDuplicateReadoutHistoryUpdate,
+  getWrongCompetitorIssueUpdateForConfirmation,
   isEligibleWrongCompetitorReadout,
   readoutHistoryStore,
   sortReadoutHistory,
@@ -1231,23 +1233,6 @@ export default function App() {
     }
   }, []);
 
-  const createWrongCompetitorIssue = useCallback(
-    async (clientReadoutId: string) => {
-      const record = readoutHistoryStore.getRecord(clientReadoutId);
-      if (!record) throw new Error('Avläsningen hittades inte i historiken.');
-      if (!isEligibleWrongCompetitorReadout(record)) {
-        throw new Error(
-          'Endast en matchad OK-, MP- eller preliminär avläsning utan genomförd korrigering kan få ärendet Fel löpare.'
-        );
-      }
-      await readoutHistoryStore.update(clientReadoutId, {
-        issueType: 'WRONG_COMPETITOR',
-        issueState: 'OPEN',
-      });
-    },
-    []
-  );
-
   const loadResultReassignmentAudits = useCallback(
     async (readoutId: string): Promise<ReadoutReassignmentAuditEntry[]> => {
       const response = await apiFetch(
@@ -1267,6 +1252,31 @@ export default function App() {
       targetCompetitorId: string,
       reason: string
     ): Promise<ReadoutReassignmentAuditEntry> => {
+      const currentRecord =
+        readoutHistoryStore.getRecord(record.clientReadoutId) ?? record;
+      if (!isEligibleWrongCompetitorReadout(currentRecord)) {
+        throw new Error(
+          'Endast en matchad OK-, MP- eller preliminär avläsning utan genomförd korrigering kan få ärendet Fel löpare.'
+        );
+      }
+      const issueUpdate =
+        getWrongCompetitorIssueUpdateForConfirmation(currentRecord);
+      if (issueUpdate) {
+        try {
+          await readoutHistoryStore.update(record.clientReadoutId, issueUpdate);
+        } catch (error) {
+          await readoutHistoryStore.update(
+            record.clientReadoutId,
+            {
+              issueType: currentRecord.issueType,
+              issueState: currentRecord.issueState,
+            },
+            false
+          );
+          throw error;
+        }
+      }
+
       const storageKey = [
         'readout-reassignment',
         activeEventId,
@@ -1314,11 +1324,11 @@ export default function App() {
         throw new Error('Korrigeringen sparades, men den nya löparen kunde inte läsas in.');
       }
       setCompetitors(event.competitors);
-      const currentRecord =
+      const updatedRecord =
         readoutHistoryStore.getRecord(record.clientReadoutId) ?? record;
       const correctionAudit = [
         result.audit,
-        ...currentRecord.correctionAudit.filter(
+        ...updatedRecord.correctionAudit.filter(
           (entry) => entry.operationId !== result.operationId
         ),
       ];
@@ -1366,6 +1376,26 @@ export default function App() {
         syncError: null,
       });
       if (soundEnabledRef.current) playMeosFeedbackTone('registration');
+      return;
+    }
+    if (res.duplicateReadout) {
+      if (
+        !syncedCompetitor ||
+        syncedCompetitor.id !== res.duplicateReadout.competitorId
+      ) {
+        throw new Error('Duplicate readout response did not include its existing competitor.');
+      }
+      const currentRecord = readoutHistoryStore.getRecord(clientReadoutId);
+      if (!currentRecord) {
+        throw new Error('Duplicate readout history record was not found.');
+      }
+      const className =
+        classes.find((candidate) => candidate.id === syncedCompetitor.classId)?.name ??
+        null;
+      await readoutHistoryStore.update(
+        clientReadoutId,
+        createDuplicateReadoutHistoryUpdate(currentRecord, syncedCompetitor, className)
+      );
       return;
     }
     if (res.unknownCardReadout) {
@@ -4320,7 +4350,6 @@ export default function App() {
                   latestReadoutId={latestReadoutId}
                   readoutHistoryError={readoutHistoryError}
                   onCreateMpReviewIssue={createMpReviewIssue}
-                  onCreateWrongCompetitorIssue={createWrongCompetitorIssue}
                   onApplyResultReassignment={applyReadoutResultReassignment}
                   onLoadResultReassignmentAudits={loadResultReassignmentAudits}
                   onApproveManualResult={async (competitorId, reason) => {
