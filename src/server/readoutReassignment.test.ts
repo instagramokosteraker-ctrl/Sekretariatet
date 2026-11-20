@@ -1,7 +1,7 @@
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   reassignReadoutResult,
   ReadoutReassignmentError,
@@ -338,6 +338,64 @@ emulatorDescribe('reassignReadoutResult', () => {
       ).rejects.toMatchObject({ statusCode: 404 });
       expect((await fixture.sourceRef.get()).data()?.status).toBe('OK');
       expect((await fixture.correctionsRef.get()).size).toBe(0);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it('logs the evaluated ambiguity guard branches and receipt details', async () => {
+    const fixture = await seedReassignment();
+    const targetReceiptId = `ro_target_${randomUUID().replace(/-/g, '')}`;
+    const targetReceiptRef = fixture.competitionRef
+      .collection('readoutReceipts')
+      .doc(targetReceiptId);
+    try {
+      await targetReceiptRef.set({
+        ...fixture.receiptData,
+        receiptId: targetReceiptId,
+        clientReadoutId: targetReceiptId,
+        competitorId: fixture.erikId,
+      });
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await expect(
+          reassignReadoutResult(
+            firestore,
+            { uid: fixture.actorUid },
+            fixture.competitionId,
+            fixture.readoutId,
+            request(fixture)
+          )
+        ).rejects.toMatchObject({
+          statusCode: 409,
+          message:
+            'Multiple or previously reassigned readouts make this correction ambiguous.',
+        });
+
+        expect(warning).toHaveBeenCalledWith(
+          '[readout-reassignment] Ambiguity guard diagnostics',
+          expect.objectContaining({
+            readoutId: fixture.readoutId,
+            sourceCompetitorId: fixture.annaId,
+            targetCompetitorId: fixture.erikId,
+            competingSourceReceipts: [
+              { id: fixture.readoutId, status: 'PROCESSED' },
+            ],
+            competingTargetReceipts: [
+              { id: targetReceiptId, status: 'PROCESSED' },
+            ],
+            priorReassignment: false,
+            branches: {
+              sourceReceiptCountNotOne: false,
+              sourceReceiptIdMismatch: false,
+              targetReceiptCountGreaterThanZero: true,
+              priorReassignment: false,
+            },
+          })
+        );
+      } finally {
+        warning.mockRestore();
+      }
     } finally {
       await fixture.cleanup();
     }

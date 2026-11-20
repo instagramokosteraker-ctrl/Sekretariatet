@@ -410,6 +410,29 @@ export async function reassignReadoutResult(
     const priorReassignment = existingReadoutCorrections.docs.some(
       (snapshot) => snapshot.data().result?.status === 'APPLIED'
     );
+    const ambiguityGuardBranches = {
+      sourceReceiptCountNotOne: competingSourceReceipts.length !== 1,
+      sourceReceiptIdMismatch: competingSourceReceipts[0]?.id !== readoutId,
+      targetReceiptCountGreaterThanZero: competingTargetReceipts.length > 0,
+      priorReassignment,
+    };
+    if (Object.values(ambiguityGuardBranches).some((triggered) => triggered)) {
+      console.warn('[readout-reassignment] Ambiguity guard diagnostics', {
+        readoutId,
+        sourceCompetitorId: originalCompetitorId,
+        targetCompetitorId,
+        competingSourceReceipts: competingSourceReceipts.map((snapshot) => ({
+          id: snapshot.id,
+          status: snapshot.get('status'),
+        })),
+        competingTargetReceipts: competingTargetReceipts.map((snapshot) => ({
+          id: snapshot.id,
+          status: snapshot.get('status'),
+        })),
+        priorReassignment,
+        branches: ambiguityGuardBranches,
+      });
+    }
     if (
       competingSourceReceipts.length !== 1 ||
       competingSourceReceipts[0]?.id !== readoutId ||
