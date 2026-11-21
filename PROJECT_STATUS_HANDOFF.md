@@ -1,8 +1,8 @@
 # PasserSI — project status handoff
 
-**Updated:** 2026-11-19
+**Updated:** 2026-11-20
 **Repository:** `instagramokosteraker-ctrl/Sekretariatet`
-**Branch / HEAD:** `main` / `e71bb4c`
+**Branch / HEAD:** `main` / `2804eab`
 **Purpose:** Concise, evidence-based state for continuing work in Cursor, Copilot, or Claude Code.
 
 ## Executive status
@@ -12,6 +12,8 @@ Application features for live ranking, Eventor identity preservation/class mappi
 **Production readiness is still NO-GO for Firestore identity enforcement.** The latest recorded Firebase Console inspection (2026-11-14) found the currently star-marked production Rules source differs materially from repository `firestore.rules`. No Rules deployment or immutable Ruleset ID/hash attestation is recorded. Do not equate passing source/emulator tests with production enforcement.
 
 Local builds, TypeScript checks, and focused regression tests passed for the recent feature work. Production deployment, live Eventor publishing, and end-to-end live competition verification remain outstanding.
+
+Since the previous handoff, duplicate SI-card ingestion was reviewed and implemented, and the `WRONG_COMPETITOR` cancel lifecycle was corrected. Both are committed in the current HEAD and locally verified; neither has production deployment or live-event verification evidence.
 
 ## Current architecture
 
@@ -61,12 +63,14 @@ Local builds, TypeScript checks, and focused regression tests passed for the rec
 - Physical readouts retain `clientReadoutId`, `captureSequence`, and `capturedAt`; latest-readout selection and history ordering remain capture-sequence based. History rows remain reopenable, and Outstanding Issues includes open and in-progress issues.
 - Unknown-card resolution remains inline while the reader can capture the next SI card. The runner-name field now searches the runner database as the operator types; selecting a suggestion fills the name, club, profile, and matching class when available. The captured SI number stays read-only.
 - Offline queue, receipts, retries, validation, and Bom behavior remain in place.
-- ✅ `WRONG_COMPETITOR` issue workflow implemented for reopening eligible historical `OK` readouts.
+- ✅ Exact logical duplicate ingestion implemented for known competitors. An Admin SDK transaction compares processed receipts by competitor ID, SI number, card series, start/finish times, punch codes/times, and raw payload. A different readout ID with an exact match creates no receipt or result mutation; its local history row is blue `DUPLICATE_READOUT` / `NONE` (“Redan avläst”). Same-ID replay remains idempotent and changed punch data still processes.
+- ✅ `WRONG_COMPETITOR` issue workflow implemented for eligible historical `OK`, `MP`, and `PRELIMINARY_FIN` readouts. Opening **Fel löpare** now creates only a local draft; issue creation occurs on confirmation. Cancelling a new draft leaves no issue, and cancelling a reopened open/in-progress issue preserves its existing state.
 - ✅ `RESULT_REASSIGNMENT` implemented with target preview, server-side role revalidation, Firestore transaction, and replay-safe operation IDs.
 - ✅ `MANUAL_RESULT_APPROVAL` implemented for eligible preliminary results.
 - ✅ Append-only correction audit trail implemented with actor UID/role, timestamp, reason, original/corrected competitors, operation ID, and result details. Original readout receipts and punches remain unchanged.
-- Local Phase 3 verification passed; production deployment and live-event verification are not attested. Unknown/unlinked-card, class-conflict, and other ambiguous-assignment correction workflows remain outside this reassignment implementation.
-- See [READOUT_OVERVIEW_V5_IMPLEMENTATION.md](./READOUT_OVERVIEW_V5_IMPLEMENTATION.md), [READOUT_ROW_CLICKABILITY_FIX.md](./READOUT_ROW_CLICKABILITY_FIX.md), and [READOUT_PHASE3_RESULT_REASSIGNMENT.md](./READOUT_PHASE3_RESULT_REASSIGNMENT.md).
+- Local Phase 3 and the new readout lifecycle changes are verified; production deployment and live-event verification are not attested. Unknown/unlinked-card, class-conflict, and other ambiguous-assignment correction workflows remain outside this reassignment implementation.
+- Recent analysis and implementation reports: [MULTIPLE_PROCESSED_RECEIPTS_ANALYSIS.md](./MULTIPLE_PROCESSED_RECEIPTS_ANALYSIS.md), [DUPLICATE_READOUT_INGESTION_REVIEW.md](./DUPLICATE_READOUT_INGESTION_REVIEW.md), [DUPLICATE_READOUT_INGESTION_IMPLEMENTATION.md](./DUPLICATE_READOUT_INGESTION_IMPLEMENTATION.md), [READOUT_REASSIGNMENT_AUDIT_PATH_ANALYSIS.md](./READOUT_REASSIGNMENT_AUDIT_PATH_ANALYSIS.md), and [WRONG_COMPETITOR_CANCEL_FIX.md](./WRONG_COMPETITOR_CANCEL_FIX.md).
+- See also [READOUT_OVERVIEW_V5_IMPLEMENTATION.md](./READOUT_OVERVIEW_V5_IMPLEMENTATION.md), [READOUT_ROW_CLICKABILITY_FIX.md](./READOUT_ROW_CLICKABILITY_FIX.md), and [READOUT_PHASE3_RESULT_REASSIGNMENT.md](./READOUT_PHASE3_RESULT_REASSIGNMENT.md).
 
 ### Firestore Live Sync
 
@@ -111,6 +115,7 @@ Reference: [ACTIVE_RULESET_ATTESTATION.md](./ACTIVE_RULESET_ATTESTATION.md), [DE
 5. **Research direct Eventor publishing:** verify current official write API, authentication, permissions, update/idempotency behavior, and supported payload before implementation. Do not infer write endpoints from the read/import API or use undocumented endpoints.
 6. **Resolve Rules production risk:** obtain authorized immutable active Ruleset identity/source, reconcile it with the repository, address expression-limit diagnostics, and follow the approved deployment/verification process. Keep production readiness NO-GO until attested.
 7. **Close identity/trusted-writer assurance:** resolve the six ownerUid findings, establish full competition inventory, review Admin SDK/IAM writers, and run concurrency/recovery validation.
+8. **Verify recent readout workflows operationally:** in an authorized browser/Firestore environment, verify an exact duplicate remains a blue local-history row without result writes, a changed payload processes normally, and cancelling both a new draft and a reopened issue preserves the expected Outstanding Issues count.
 
 ## Risks and operating notes
 
@@ -133,6 +138,7 @@ Recent feature-specific verification recorded in implementation reports:
 - Eventor class-mapping regression tests — PASS for Vit, Gul, Orange, Svart.
 - Firestore Live Sync Phase 2 focused projection-rule tests — PASS; broad Rules suite remains blocked by expression-limit diagnostics.
 - Class draw fallback/class selection tests — PASS; local draw fix build/lint passed. Live Firestore/browser verification is still open.
-- Readout workstation current verification — `npm run build` PASS, `npm run lint` PASS, full source suite PASS (164 passed, 16 skipped), and Firestore emulator reassignment suite PASS (4 tests: Anna → Erik, idempotent replay/payload conflict, unauthorized actor, missing target).
+- Readout workstation latest verification — `npm run build` PASS, `npm run lint` PASS, full source suite PASS (184 passed, 25 skipped), Firestore emulator ingestion suite PASS (4 tests: exact duplicate/no writes, changed punches, concurrent captures, same-ID replay), and the previous Firestore emulator reassignment suite PASS (4 tests: Anna → Erik, replay/payload conflict, unauthorized actor, missing target).
+- `WRONG_COMPETITOR` cancel-fix regression coverage — history lifecycle tests verify draft/no-issue behavior, issue creation on confirmation and resolution, and preservation of an existing open issue.
 
 Production deployment, active Rules attestation, controlled Eventor publication, and live-event end-to-end verification are **not** included in these local PASS results.
