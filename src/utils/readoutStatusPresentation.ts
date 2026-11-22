@@ -149,23 +149,7 @@ export function getReadoutStatusText(record: ReadoutStatusInput): string {
 export function getReadoutTimelinePrimaryState(
   record: ReadoutStatusInput
 ): string {
-  const isOpenIssue =
-    record.issueState === 'OPEN' || record.issueState === 'IN_PROGRESS';
-
   if (record.issueType === 'DUPLICATE_READOUT') return 'Redan avläst';
-  if (record.issueType === 'UNKNOWN_CARD' && isOpenIssue) {
-    return 'Okänd bricka';
-  }
-  if (record.issueType === 'WRONG_COMPETITOR' && isOpenIssue) {
-    return 'Fel löpare';
-  }
-  if (record.issueType === 'MP_REVIEW' && record.resultStatus === 'MP') {
-    return 'MP';
-  }
-  if (isOpenIssue && record.issueType) {
-    return getReadoutIssueLabel(record.issueType) ?? 'Åtgärd krävs';
-  }
-  if (isOpenIssue) return 'Åtgärd krävs';
   return getReadoutStatusText(record);
 }
 

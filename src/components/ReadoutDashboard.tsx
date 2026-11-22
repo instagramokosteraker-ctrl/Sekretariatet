@@ -969,7 +969,7 @@ export function ReadoutDashboard({
                   : ''}
               </span>
               <span>
-                Aktuellt resultat: {selectedReadout.resultStatus ?? 'Ej tilldelat'}
+                Resultat: {selectedReadout.resultStatus ?? 'Ej tilldelat'}
                 {selectedReadout.resultStatus === 'OK'
                   ? selectedReadout.competitorSnapshot?.resultVerification === 'MANUALLY_APPROVED_OK'
                     ? ' · Manuellt godkänt OK'

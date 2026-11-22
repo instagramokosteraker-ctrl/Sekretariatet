@@ -146,11 +146,11 @@ describe('ReadoutHistoryRow', () => {
     const record = reopenCases.find(({ label }) => label === 'unknown-card')!.record;
     const onSelect = vi.fn();
     const collapsed = ReadoutHistoryRow({
-        record,
-        isLatest: false,
-        isExpanded: false,
-        placementLabel: '—',
-        onSelect,
+      record,
+      isLatest: false,
+      isExpanded: false,
+      placementLabel: '—',
+      onSelect,
       children: <button type="button">Anmäl</button>,
     });
 
@@ -171,16 +171,31 @@ describe('ReadoutHistoryRow', () => {
 
   it('keeps reassignment inside the expanded row', () => {
     const record = reopenCases[0].record;
+    const collapsed = ReadoutHistoryRow({
+      record: makeRecord({ issueType: 'WRONG_COMPETITOR', issueState: 'OPEN' }),
+      isLatest: false,
+      isExpanded: false,
+      placementLabel: '—',
+      onSelect: vi.fn(),
+    });
     const expanded = ReadoutHistoryRow({
       record,
       isLatest: false,
       isExpanded: true,
       placementLabel: '—',
       onSelect: vi.fn(),
-      children: <button type="button">Bekräfta korrigering</button>,
+      children: (
+        <>
+          <div>Resultat: OK</div>
+          <button type="button">Fel löpare</button>
+        </>
+      ),
     });
 
-    expect(findText(expanded)).toContain('Bekräfta korrigering');
+    expect(findPrimaryStateLabels(collapsed)).toEqual(['OK']);
+    expect(findText(collapsed)).not.toContain('Fel löpare');
+    expect(findText(expanded)).toContain('Resultat: OK');
+    expect(findText(expanded)).toContain('Fel löpare');
   });
 
   it('hides reassignment when the receipt is not a processed result', () => {
@@ -230,7 +245,7 @@ describe('ReadoutHistoryRow', () => {
     expect(text).toContain('Row actions');
   });
 
-  it('renders one operational state in the collapsed row without delivery or issue-state labels', () => {
+  it('renders the result status instead of workflow labels in the collapsed row', () => {
     const record = makeRecord({
       issueType: 'WRONG_COMPETITOR',
       issueState: 'OPEN',
@@ -244,8 +259,8 @@ describe('ReadoutHistoryRow', () => {
     });
     const text = findText(element);
 
-    expect(text).toContain('Fel löpare');
-    expect(text).not.toContain('OK');
+    expect(text).toContain('OK');
+    expect(text).not.toContain('Fel löpare');
     expect(text).not.toContain('Åtgärd krävs');
     expect(text).not.toContain('Synkad');
     expect(element.props.className).toContain('bg-emerald-100');
@@ -267,9 +282,17 @@ describe('ReadoutHistoryRow', () => {
       }),
     },
     {
-      label: 'Fel löpare',
+      label: 'OK',
       record: makeRecord({
         issueType: 'WRONG_COMPETITOR',
+        issueState: 'OPEN',
+      }),
+    },
+    {
+      label: 'MP',
+      record: makeRecord({
+        resultStatus: 'MP',
+        issueType: 'MP_REVIEW',
         issueState: 'OPEN',
       }),
     },
@@ -280,18 +303,21 @@ describe('ReadoutHistoryRow', () => {
         issueState: 'NONE',
       }),
     },
-  ])('shows only $label as the collapsed operational state', ({ label, record }) => {
+  ])('shows only $label as the collapsed result/readout status', ({ label, record }) => {
     const element = ReadoutHistoryRow({
-        record,
-        isLatest: false,
-        isExpanded: false,
-        placementLabel: '—',
-        onSelect: vi.fn(),
-      });
+      record,
+      isLatest: false,
+      isExpanded: false,
+      placementLabel: '—',
+      onSelect: vi.fn(),
+    });
     const text = findText(element);
 
     expect(findPrimaryStateLabels(element)).toEqual([label]);
     expect(text).not.toContain('Synkad');
     expect(text).not.toContain('Löst');
+    expect(text).not.toContain('Fel löpare');
+    expect(text).not.toContain('MP-granskning');
+    expect(text).not.toContain('Åtgärd krävs');
   });
 });
