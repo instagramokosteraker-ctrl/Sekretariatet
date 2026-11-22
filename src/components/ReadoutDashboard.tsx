@@ -41,10 +41,6 @@ import {
   getCompetitorPlacements,
   getMissingPunchExplanation,
 } from '../services/readoutSummary';
-import {
-  getReadoutDeliveryLabel,
-  getReadoutIssueSummary,
-} from '../utils/readoutStatusPresentation';
 import { getRunnerNameSuggestions } from '../utils/runnerNameSuggestions';
 import { calculateReadoutReassignmentPreview } from '../utils/readoutReassignment';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
@@ -926,10 +922,7 @@ export function ReadoutDashboard({
                 Avläsningsdetaljer
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                SI {formatSiNumber(selectedReadout.readout.siNumber)}
-                {` · ${selectedReadout.readout.cardSeries} · Mål ${formatSecondsAsClock(
-                  selectedReadout.readout.finishTimeSec
-                )} · ${new Date(selectedReadout.capturedAt).toLocaleString('sv-SE')}`}
+                Avläst: {new Date(selectedReadout.capturedAt).toLocaleString('sv-SE')}
               </p>
             </div>
             <button
@@ -942,59 +935,6 @@ export function ReadoutDashboard({
           </div>
           {selectedReadout && (
           <div className="px-4 py-3 text-xs text-slate-600 dark:text-slate-400">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
-              <span>
-                Ursprunglig match:{' '}
-                {selectedReadout.originalCompetitorName ?? 'Ingen match vid avläsning'}
-                {selectedReadout.originalClassName
-                  ? ` · ${selectedReadout.originalClassName}`
-                  : ''}
-              </span>
-              <span>
-                Nuvarande match:{' '}
-                {selectedReadout.competitorName ?? 'Ingen aktuell match'}
-                {selectedReadout.className ? ` · ${selectedReadout.className}` : ''}
-              </span>
-              <span>
-                Ursprungligt resultat: {selectedReadout.originalResultStatus ?? 'Ej tilldelat'}
-                {selectedReadout.originalCompetitorSnapshot?.runningTimeSec != null
-                  ? ` · tid ${formatDurationMmSs(
-                      selectedReadout.originalCompetitorSnapshot.runningTimeSec
-                    )}`
-                  : ''}
-                {selectedReadout.originalCompetitorSnapshot?.validation?.totalTimeLossSec != null
-                  ? ` · Bom ${formatDurationMmSs(
-                      selectedReadout.originalCompetitorSnapshot.validation.totalTimeLossSec
-                    )}`
-                  : ''}
-              </span>
-              <span>
-                Resultat: {selectedReadout.resultStatus ?? 'Ej tilldelat'}
-                {selectedReadout.resultStatus === 'OK'
-                  ? selectedReadout.competitorSnapshot?.resultVerification === 'MANUALLY_APPROVED_OK'
-                    ? ' · Manuellt godkänt OK'
-                    : ' · SI-verifierat OK'
-                  : ''}
-                {selectedReadout.competitorSnapshot?.runningTimeSec != null
-                  ? ` · tid ${formatDurationMmSs(
-                      selectedReadout.competitorSnapshot.runningTimeSec
-                    )}`
-                  : ''}
-                {selectedReadout.competitorSnapshot?.validation?.totalTimeLossSec != null
-                  ? ` · Bom ${formatDurationMmSs(
-                      selectedReadout.competitorSnapshot.validation.totalTimeLossSec
-                    )}`
-                  : ''}
-              </span>
-              {selectedReadout.issueType !== 'WRONG_COMPETITOR' && (
-                <span>
-                  Ärende: {getReadoutIssueSummary(selectedReadout) ?? 'Inget'}
-                </span>
-              )}
-              <span>
-                Leverans: {getReadoutDeliveryLabel(selectedReadout.deliveryState)}
-              </span>
-            </div>
             {selectedReadout.suggestedRunner && (
               <div className="mt-1">
                 Föreslagen löpare: {selectedReadout.suggestedRunner.fullName}
