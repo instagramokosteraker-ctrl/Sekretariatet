@@ -7,6 +7,8 @@ import {
   formatSecondsAsClock,
 } from '../services/sportidentProtocol';
 import {
+  getResultListPlacementLabel,
+  getResultListTimeLabel,
   sortCompetitorsByResult,
   type ResultSortMode,
 } from '../utils/resultSorting';
@@ -656,8 +658,16 @@ export function SplitsAnalysisTable({
                             }`}
                           >
                             <td className="py-1.5 px-1 w-8 text-center font-mono tabular-nums font-semibold text-slate-800 dark:text-slate-200 whitespace-nowrap">
-                              {r.effectiveStatus === 'OK' && timedIdx !== -1 ? (
-                                `${timedIdx + 1}.`
+                              {getResultListPlacementLabel(
+                                r.effectiveStatus,
+                                r.effectiveStatus === 'OK' && timedIdx !== -1
+                                  ? timedIdx + 1
+                                  : null
+                              ) !== null ? (
+                                `${getResultListPlacementLabel(
+                                  r.effectiveStatus,
+                                  timedIdx !== -1 ? timedIdx + 1 : null
+                                )}.`
                               ) : (
                                 <RunnerStatusIndicator
                                   status={r.effectiveStatus}
@@ -861,9 +871,19 @@ export function SplitsAnalysisTable({
                                     : ''
                                 }`}
                               >
-                                {isRunning && displayedTimeSec === null
-                                  ? null
-                                  : formatDurationMmSs(displayedTimeSec)}
+                                {(() => {
+                                  const timeLabel = getResultListTimeLabel(
+                                    r.effectiveStatus,
+                                    r.runningTimeSec,
+                                    isRunning
+                                      ? passage.projectedPassageTimeSec
+                                      : null
+                                  );
+                                  if (timeLabel === null) return null;
+                                  return typeof timeLabel === 'number'
+                                    ? formatDurationMmSs(timeLabel)
+                                    : timeLabel;
+                                })()}
                               </div>
                             </td>
 

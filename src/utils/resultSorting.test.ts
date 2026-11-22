@@ -6,7 +6,11 @@ import type {
   SplitLegResult,
 } from '../types/sportident';
 import type { CompetitorWithOptionalEffectiveStatus } from './effectiveRunnerStatus';
-import { sortCompetitorsByResult } from './resultSorting';
+import {
+  getResultListPlacementLabel,
+  getResultListTimeLabel,
+  sortCompetitorsByResult,
+} from './resultSorting';
 
 const NOW = Date.parse('2025-01-01T12:35:23+01:00');
 const START = 12 * 60 * 60;
@@ -94,6 +98,32 @@ const sortOptions = {
 };
 
 describe('sortCompetitorsByResult', () => {
+  it('uses numeric placement only for OK and preserves status symbols for every other status', () => {
+    expect(getResultListPlacementLabel('OK', 3)).toBe(3);
+    for (const status of [
+      'PRELIMINARY_FIN',
+      'IN_FOREST',
+      'CHECKED',
+      'REGISTERED',
+      'MP',
+      'DNF',
+      'DNS',
+    ] as RunnerStatus[]) {
+      expect(getResultListPlacementLabel(status, 3)).toBeNull();
+    }
+  });
+
+  it('presents the result-list time column according to status', () => {
+    expect(getResultListTimeLabel('OK', 1800)).toBe(1800);
+    expect(getResultListTimeLabel('IN_FOREST', null, 2100)).toBe(2100);
+    expect(getResultListTimeLabel('IN_FOREST', 900, null)).toBe(900);
+    expect(getResultListTimeLabel('CHECKED', 900)).toBeNull();
+    expect(getResultListTimeLabel('REGISTERED', 900)).toBeNull();
+    expect(getResultListTimeLabel('MP', 900)).toBe('MP');
+    expect(getResultListTimeLabel('DNF', 900)).toBe('DNF');
+    expect(getResultListTimeLabel('DNS', 900)).toBe('DNS');
+  });
+
   it('applies status groups before internal ranking', () => {
     const rows = [
       makeCompetitor('dns', 'DNS'),

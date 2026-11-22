@@ -26,6 +26,7 @@ import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { RunnerStatusIndicator } from './StatusLabels';
 import { PWAInstallButton } from './PWAInstallButton';
 import { applyClubThemeToDocument } from '../utils/clubTheme';
+import { getResultListTimeLabel } from '../utils/resultSorting';
 import {
   loadPublicCompetitionSummariesFromFirestore,
   loadPublicRaceFromFirestore,
@@ -889,7 +890,16 @@ export function PublicPortalView({
                                           </span>
                                         )}
                                       <span className="font-semibold">
-                                        {formatDurationMmSs(r.runningTimeSec)}
+                                        {(() => {
+                                          const timeLabel = getResultListTimeLabel(
+                                            r.effectiveStatus,
+                                            r.runningTimeSec
+                                          );
+                                          if (timeLabel === null) return null;
+                                          return typeof timeLabel === 'number'
+                                            ? formatDurationMmSs(timeLabel)
+                                            : timeLabel;
+                                        })()}
                                       </span>
                                       <RunnerStatusIndicator
                                         status={r.effectiveStatus}

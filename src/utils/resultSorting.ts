@@ -17,6 +17,38 @@ export interface ResultSortOptions {
   nowMs: number;
 }
 
+export function getResultListPlacementLabel(
+  status: RunnerStatus,
+  placement: number | null
+): number | null {
+  return status === 'OK' ? placement : null;
+}
+
+export function getResultListTimeLabel(
+  status: RunnerStatus,
+  runningTimeSec: number | null,
+  inForestProjectedTimeSec: number | null = null
+): number | string | null {
+  if (status === 'MP') return 'MP';
+  if (status === 'DNF') return 'DNF';
+  if (status === 'DNS') return 'DNS';
+  if (status === 'CHECKED' || status === 'REGISTERED') return null;
+  if (status === 'IN_FOREST') {
+    const timeSec =
+      inForestProjectedTimeSec !== null &&
+      Number.isFinite(inForestProjectedTimeSec)
+        ? inForestProjectedTimeSec
+        : runningTimeSec;
+    return timeSec !== null && Number.isFinite(timeSec) ? timeSec : null;
+  }
+  if (status === 'OK' || status === 'PRELIMINARY_FIN') {
+    return runningTimeSec !== null && Number.isFinite(runningTimeSec)
+      ? runningTimeSec
+      : null;
+  }
+  return null;
+}
+
 interface MpProgress {
   consecutiveControls: number;
   lastConsecutiveTimeSec: number | null;
