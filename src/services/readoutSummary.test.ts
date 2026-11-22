@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Competitor, ReadoutValidation } from '../types/sportident';
 import {
   getCompetitorPlacement,
+  getCompetitorPlacements,
   getMissingPunchExplanation,
 } from './readoutSummary';
 
@@ -47,6 +48,15 @@ describe('readout summary', () => {
       getCompetitorPlacement(latest, [winner, latest, otherClass, unfinished])
     ).toEqual({ pos: 2, total: 2, diffSec: 30 });
     expect(getCompetitorPlacement(unfinished, [winner, latest, unfinished])).toBeNull();
+  });
+
+  it('calculates all class placements in one pass for timeline summaries', () => {
+    const winner = createCompetitor('winner', 'class-a', 'OK', 600);
+    const runner = createCompetitor('runner', 'class-a', 'OK', 630);
+    const placements = getCompetitorPlacements([winner, runner]);
+
+    expect(placements.get('winner')).toEqual({ pos: 1, total: 2, diffSec: 0 });
+    expect(placements.get('runner')).toEqual({ pos: 2, total: 2, diffSec: 30 });
   });
 
   it('summarizes missing and extra controls for an MP explanation', () => {

@@ -6,29 +6,41 @@ export interface CompetitorPlacement {
   diffSec: number;
 }
 
+export function getCompetitorPlacements(
+  competitors: Competitor[]
+): Map<string, CompetitorPlacement> {
+  const finishersByClass = new Map<string, Competitor[]>();
+  for (const competitor of competitors) {
+    if (competitor.status !== 'OK' || competitor.runningTimeSec === null) continue;
+    const finishers = finishersByClass.get(competitor.classId) ?? [];
+    finishers.push(competitor);
+    finishersByClass.set(competitor.classId, finishers);
+  }
+
+  const placements = new Map<string, CompetitorPlacement>();
+  for (const finishers of finishersByClass.values()) {
+    finishers.sort(
+      (left, right) =>
+        (left.runningTimeSec ?? 999999) - (right.runningTimeSec ?? 999999)
+    );
+    const winnerTime = finishers[0]?.runningTimeSec ?? 0;
+    finishers.forEach((competitor, index) => {
+      placements.set(competitor.id, {
+        pos: index + 1,
+        total: finishers.length,
+        diffSec: (competitor.runningTimeSec ?? 0) - winnerTime,
+      });
+    });
+  }
+  return placements;
+}
+
 export function getCompetitorPlacement(
   competitor: Competitor | null,
   competitors: Competitor[]
 ): CompetitorPlacement | null {
   if (!competitor || competitor.status !== 'OK') return null;
-
-  const finishers = competitors
-    .filter(
-      (candidate) =>
-        candidate.classId === competitor.classId &&
-        candidate.status === 'OK' &&
-        candidate.runningTimeSec !== null
-    )
-    .sort((a, b) => (a.runningTimeSec ?? 999999) - (b.runningTimeSec ?? 999999));
-  const index = finishers.findIndex((candidate) => candidate.id === competitor.id);
-  if (index < 0) return null;
-
-  return {
-    pos: index + 1,
-    total: finishers.length,
-    diffSec:
-      (competitor.runningTimeSec ?? 0) - (finishers[0]?.runningTimeSec ?? 0),
-  };
+  return getCompetitorPlacements(competitors).get(competitor.id) ?? null;
 }
 
 export function getMissingPunchExplanation(

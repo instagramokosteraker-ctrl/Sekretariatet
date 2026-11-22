@@ -7,6 +7,7 @@ interface TestElementProps {
   children?: ReactNode;
   onClick?: () => void;
   'aria-label'?: string;
+  'aria-expanded'?: boolean;
   'aria-pressed'?: boolean;
   className?: string;
   'data-readout-history-primary'?: string;
@@ -20,9 +21,15 @@ function findButtons(node: ReactNode): ReactElement<TestElementProps>[] {
   if (!isValidElement<TestElementProps>(node)) {
     return [];
   }
-
   const buttons = node.type === 'button' ? [node] : [];
   return [...buttons, ...findButtons(node.props.children)];
+}
+
+function findText(node: ReactNode): string[] {
+  if (typeof node === 'string') return [node];
+  if (Array.isArray(node)) return node.flatMap(findText);
+  if (!isValidElement<TestElementProps>(node)) return [];
+  return findText(node.props.children);
 }
 
 function makeRecord(
@@ -102,7 +109,9 @@ describe('ReadoutHistoryRow', () => {
     });
     const element = ReadoutHistoryRow({
       record,
-      isSelected: false,
+      isLatest: false,
+      isExpanded: false,
+      placementLabel: '—',
       onSelect,
     });
     const rowButton = findButtons(element).find((button) =>
@@ -111,7 +120,7 @@ describe('ReadoutHistoryRow', () => {
 
     expect(rowButton).toBeDefined();
     expect(rowButton?.props.type).toBe('button');
-    expect(rowButton?.props['aria-pressed']).toBe(false);
+    expect(rowButton?.props['aria-expanded']).toBe(false);
     expect(rowButton?.props.className).toContain('cursor-pointer');
     expect(rowButton?.props.className).toContain('hover:bg-');
     expect(rowButton?.props.className).toContain('px-3 py-2');
@@ -126,7 +135,13 @@ describe('ReadoutHistoryRow', () => {
     const record = reopenCases.find(({ label }) => label === 'unknown-card')!.record;
     const onSelect = vi.fn();
     const buttons = findButtons(
-      ReadoutHistoryRow({ record, isSelected: false, onSelect })
+      ReadoutHistoryRow({
+        record,
+        isLatest: false,
+        isExpanded: false,
+        placementLabel: '—',
+        onSelect,
+      })
     );
     const registerButton = buttons.find((button) => button.props.children === 'Anmäl');
 
@@ -142,7 +157,13 @@ describe('ReadoutHistoryRow', () => {
     const record = reopenCases[0].record;
     const onSelect = vi.fn();
     const buttons = findButtons(
-      ReadoutHistoryRow({ record, isSelected: false, onSelect })
+      ReadoutHistoryRow({
+        record,
+        isLatest: false,
+        isExpanded: false,
+        placementLabel: '—',
+        onSelect,
+      })
     );
     const correctionButton = buttons.find(
       (button) => button.props.children === 'Fel löpare'
@@ -158,11 +179,30 @@ describe('ReadoutHistoryRow', () => {
     const rowButton = findButtons(
       ReadoutHistoryRow({
         record,
-        isSelected: true,
+        isLatest: true,
+        isExpanded: true,
+        placementLabel: '1/2',
         onSelect: vi.fn(),
       })
     ).find((button) => button.props['aria-label']?.startsWith('Öppna avläsning'));
 
-    expect(rowButton?.props['aria-pressed']).toBe(true);
+    expect(rowButton?.props['aria-expanded']).toBe(true);
+  });
+
+  it('shows the latest badge and renders expanded actions within the row', () => {
+    const record = reopenCases[0].record;
+    const element = ReadoutHistoryRow({
+      record,
+      isLatest: true,
+      isExpanded: true,
+      placementLabel: '1/1',
+      onSelect: vi.fn(),
+      children: <div>Row actions</div>,
+    });
+
+    const text = findText(element).join('');
+    expect(text).toContain('Senaste');
+    expect(text).toContain('Placering: 1/1');
+    expect(text).toContain('Row actions');
   });
 });

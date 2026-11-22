@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -6,7 +6,6 @@ import {
   Compass,
   Radio,
   RefreshCw,
-  Search,
   Send,
   Star,
   Trash2,
@@ -24,7 +23,6 @@ import type {
 import type { ReadoutReassignmentAuditEntry } from '../types/readoutReassignment';
 import type { OfflineQueueSnapshot } from '../services/offlineReadoutQueue';
 import {
-  filterOutstandingReadouts,
   isEligibleWrongCompetitorReadout,
   type ReadoutHistoryRecord,
 } from '../services/readoutHistoryStore';
@@ -40,23 +38,18 @@ import {
 } from '../services/sportidentProtocol';
 import {
   getCompetitorPlacement,
+  getCompetitorPlacements,
   getMissingPunchExplanation,
 } from '../services/readoutSummary';
 import {
   getReadoutDeliveryLabel,
-  getReadoutIssueLabel,
-  getReadoutIssueStateLabel,
   getReadoutIssueSummary,
-  getReadoutStatusPresentation,
-  getReadoutStatusText,
 } from '../utils/readoutStatusPresentation';
 import { getRunnerNameSuggestions } from '../utils/runnerNameSuggestions';
-import { getReadoutHistoryNavigationIndex } from '../utils/readoutHistoryKeyboard';
-import { getReadoutHistoryPage } from '../utils/readoutHistoryPaging';
 import { calculateReadoutReassignmentPreview } from '../utils/readoutReassignment';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
-import { ReadoutHistoryRow } from './ReadoutHistoryRow';
+import { ReadoutTimeline } from './ReadoutTimeline';
 import { UsbStationBar, UsbStationErrorBanner } from './UsbStationBar';
 
 interface ReadoutDashboardProps {
@@ -165,10 +158,6 @@ export function ReadoutDashboard({
   const [modalRunner, setModalRunner] = useState<Competitor | null>(null);
   const [queueActionId, setQueueActionId] = useState<string | null>(null);
   const [selectedReadoutId, setSelectedReadoutId] = useState<string | null>(null);
-  const [historyView, setHistoryView] = useState<'ALL' | 'OUTSTANDING'>('ALL');
-  const [historySearch, setHistorySearch] = useState('');
-  const [historyPageSize, setHistoryPageSize] = useState<20 | 30 | 50>(30);
-  const [historyPage, setHistoryPage] = useState(0);
   const [issueActionBusyId, setIssueActionBusyId] = useState<string | null>(null);
   const [wrongCompetitorOpen, setWrongCompetitorOpen] = useState(false);
   const [wrongCompetitorTargetId, setWrongCompetitorTargetId] = useState('');
@@ -199,9 +188,6 @@ export function ReadoutDashboard({
   const [unknownCardIsRental, setUnknownCardIsRental] = useState(false);
   const [unknownCardIsBorrowed, setUnknownCardIsBorrowed] = useState(false);
   const [unknownCardStartClock, setUnknownCardStartClock] = useState('');
-  const selectedReadoutPanelRef = useRef<HTMLElement | null>(null);
-  const historySectionRef = useRef<HTMLElement | null>(null);
-  const historyRowsRef = useRef<HTMLOListElement | null>(null);
   const [issueActionError, setIssueActionError] = useState<{
     clientReadoutId: string;
     message: string;
@@ -277,15 +263,39 @@ export function ReadoutDashboard({
     [competitors]
   );
 
-  const latestReadout = useMemo(
-    () =>
-      readoutHistory.find((record) => record.clientReadoutId === latestReadoutId) ?? null,
-    [latestReadoutId, readoutHistory]
-  );
   const selectedReadout = useMemo(
     () =>
       readoutHistory.find((record) => record.clientReadoutId === selectedReadoutId) ?? null,
     [readoutHistory, selectedReadoutId]
+  );
+  const selectedOfflineReadoutQueueItem = useMemo(
+    () =>
+      selectedReadout
+        ? offlineSnap.pendingItems.find(
+            (item) =>
+              item.kind === 'READOUT' &&
+              item.eventId === selectedReadout.eventId &&
+              item.readoutPayload?.clientReadoutId === selectedReadout.clientReadoutId
+          ) ?? null
+        : null,
+    [offlineSnap.pendingItems, selectedReadout]
+  );
+  const offlineQueueDisplayItems = useMemo(
+    () =>
+      offlineSnap.pendingItems.filter(
+        (item) =>
+          item.kind === 'ONLINE_PUNCH' ||
+          !readoutHistory.some(
+            (record) =>
+              record.eventId === item.eventId &&
+              record.clientReadoutId === item.readoutPayload?.clientReadoutId
+          )
+      ),
+    [offlineSnap.pendingItems, readoutHistory]
+  );
+  const competitorPlacements = useMemo(
+    () => getCompetitorPlacements(competitors),
+    [competitors]
   );
   const reassignmentPreview = useMemo(() => {
     if (!selectedReadout || !wrongCompetitorTargetId) return null;
@@ -357,52 +367,12 @@ export function ReadoutDashboard({
       active = false;
     };
   }, [onLoadResultReassignmentAudits, selectedReadout]);
-  const outstandingReadouts = useMemo(
-    () => filterOutstandingReadouts(readoutHistory),
-    [readoutHistory]
-  );
   const unknownCardNameSuggestions = useMemo(
     () => getRunnerNameSuggestions(runnerDb, unknownCardName),
     [runnerDb, unknownCardName]
   );
-  const filteredReadouts = useMemo(() => {
-    const records =
-      historyView === 'OUTSTANDING' ? outstandingReadouts : readoutHistory;
-    const query = historySearch.trim().toLocaleLowerCase();
-    if (!query) return records;
-    return records.filter((record) =>
-      [
-        record.clientReadoutId,
-        String(record.captureSequence),
-        String(record.readout.siNumber),
-        record.competitorName ?? '',
-        record.originalCompetitorName ?? '',
-        record.className ?? '',
-        record.readout.cardSeries,
-        String(record.readout.stationCode),
-        record.resultStatus ?? '',
-        record.originalResultStatus ?? '',
-        getReadoutIssueLabel(record.issueType) ?? '',
-        getReadoutIssueStateLabel(record.issueState) ?? '',
-        getReadoutDeliveryLabel(record.deliveryState),
-      ].some((value) => value.toLocaleLowerCase().includes(query))
-    );
-  }, [historySearch, historyView, outstandingReadouts, readoutHistory]);
-  const historyPageCount = Math.max(
-    1,
-    Math.ceil(filteredReadouts.length / historyPageSize)
-  );
-  const visibleHistoryPage = Math.min(historyPage, historyPageCount - 1);
-  const visibleReadouts = useMemo(
-    () => getReadoutHistoryPage(filteredReadouts, visibleHistoryPage, historyPageSize),
-    [filteredReadouts, visibleHistoryPage, historyPageSize]
-  );
-  const visibleOutstandingReadouts = useMemo(
-    () => outstandingReadouts.slice(0, 5),
-    [outstandingReadouts]
-  );
 
-  // This detail panel is user-selected and is separate from capture-ordered Latest Readout.
+  // This runner detail is independent of the expanded readout timeline item.
   const inspectedRunner = useMemo(() => {
     return selectedRunnerId
       ? competitors.find((competitor) => competitor.id === selectedRunnerId) ?? null
@@ -418,40 +388,6 @@ export function ReadoutDashboard({
     () => getCompetitorPlacement(inspectedRunner, competitors),
     [competitors, inspectedRunner]
   );
-
-  const latestCompetitor = useMemo(() => {
-    if (!latestReadout) return null;
-    return (
-      competitors.find((competitor) => competitor.id === latestReadout.competitorId) ??
-      latestReadout.competitorSnapshot
-    );
-  }, [competitors, latestReadout]);
-  const latestReadoutPresentation = getReadoutStatusPresentation(latestReadout);
-  const latestReadoutResultLabel =
-    latestReadout?.resultStatus ??
-    latestCompetitor?.status ??
-    (latestReadout?.readoutState === 'UNKNOWN' ? 'Okänd bricka' : 'Avläsning sparad');
-  const latestReadoutSyncLabel = latestReadout
-    ? getReadoutDeliveryLabel(latestReadout.deliveryState)
-    : null;
-  const latestRunnerSuggestion = useMemo(() => {
-    if (!latestReadout) return null;
-    return (
-      latestReadout.suggestedRunner ??
-      runnerDb.find((runner) => runner.siNumber === latestReadout.readout.siNumber) ??
-      null
-    );
-  }, [latestReadout, runnerDb]);
-  const latestPlacement = useMemo(
-    () => getCompetitorPlacement(latestCompetitor, competitors),
-    [competitors, latestCompetitor]
-  );
-  const latestValidation = latestCompetitor?.validation ?? null;
-  const latestMpExplanation =
-    latestReadout?.resultStatus === 'MP' || latestCompetitor?.status === 'MP'
-      ? getMissingPunchExplanation(latestValidation) ??
-        'Felstämplingsorsak är inte tillgänglig ännu.'
-      : null;
 
   const handleCustomOnlinePunch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -469,6 +405,12 @@ export function ReadoutDashboard({
   };
 
   const isOfflineActive = offlineSnap.simulatedOffline || !offlineSnap.browserOnline;
+  const getReadoutPlacementLabel = (record: ReadoutHistoryRecord) => {
+    const placement = record.competitorId
+      ? competitorPlacements.get(record.competitorId)
+      : null;
+    return placement ? `${placement.pos}/${placement.total}` : '—';
+  };
 
   const handleCreateMpReviewIssue = async (clientReadoutId: string) => {
     setIssueActionBusyId(clientReadoutId);
@@ -531,15 +473,7 @@ export function ReadoutDashboard({
   ) => {
     const alreadySelected = selectedReadoutId === record.clientReadoutId;
     const isClosing = alreadySelected && !forceOpen;
-    if (alreadySelected && forceOpen) {
-      window.requestAnimationFrame(() => {
-        selectedReadoutPanelRef.current?.scrollIntoView({
-          block: 'nearest',
-          behavior: 'smooth',
-        });
-      });
-      return;
-    }
+    if (alreadySelected && forceOpen) return;
     setSelectedReadoutId(isClosing ? null : record.clientReadoutId);
     setWrongCompetitorOpen(
       !isClosing &&
@@ -578,13 +512,6 @@ export function ReadoutDashboard({
       setUnknownCardIsBorrowed(false);
       setUnknownCardStartClock('');
     }
-
-    window.requestAnimationFrame(() => {
-      selectedReadoutPanelRef.current?.scrollIntoView({
-        block: 'nearest',
-        behavior: 'smooth',
-      });
-    });
   };
 
   const selectUnknownCardNameSuggestion = (runner: RunnerDbEntry) => {
@@ -728,46 +655,6 @@ export function ReadoutDashboard({
     }
   };
 
-  const handleHistoryKeyDown = (
-    event: React.KeyboardEvent<HTMLOListElement>
-  ) => {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    const target = event.target;
-    if (
-      !(target instanceof HTMLElement) ||
-      target.closest('input, textarea, select, [contenteditable="true"]')
-    ) {
-      return;
-    }
-
-    const buttons = Array.from(
-      historyRowsRef.current?.querySelectorAll<HTMLButtonElement>(
-        'button[data-readout-history-primary="true"]'
-      ) ?? []
-    );
-    const activeIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    const nextIndex = getReadoutHistoryNavigationIndex(
-      event.key,
-      activeIndex,
-      buttons.length
-    );
-    if (nextIndex === null) return;
-
-    event.preventDefault();
-    buttons[nextIndex]?.focus();
-  };
-
-  const handleShowAllOutstandingReadouts = () => {
-    setHistoryView('OUTSTANDING');
-    setHistoryPage(0);
-    window.requestAnimationFrame(() => {
-      historySectionRef.current?.scrollIntoView({
-        block: 'start',
-        behavior: 'smooth',
-      });
-    });
-  };
-
   return (
     <div className="space-y-3.5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
@@ -795,165 +682,6 @@ export function ReadoutDashboard({
           />
         </div>
       </div>
-
-      <section
-        aria-live="polite"
-        className={`${latestReadoutPresentation.surfaceClass} border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden shadow-sm`}
-      >
-        <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Senaste SI-avläsning
-            </h2>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Avläsning nr: {latestReadout?.captureSequence ?? '—'}
-              {latestReadout
-                ? ` · ${new Date(latestReadout.capturedAt).toLocaleTimeString('sv-SE')}`
-                : ''}
-            </p>
-          </div>
-          {latestReadoutSyncLabel && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-200">
-              {latestReadoutSyncLabel}
-            </span>
-          )}
-        </div>
-        {readoutHistoryError && (
-          <div className="px-4 py-1.5 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/30">
-            Avläsningshistoriken kunde inte laddas eller sparas: {readoutHistoryError}
-          </div>
-        )}
-        {latestReadout ? (
-          <div className="px-4 py-2.5">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              <div className="min-w-0">
-                <div className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                  {latestCompetitor?.fullName ??
-                    latestRunnerSuggestion?.fullName ??
-                    'Okänd SI-bricka'}{' '}
-                  · SI {formatSiNumber(latestReadout.readout.siNumber)}
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500 dark:text-slate-400">
-                  <span>
-                    {classes.find((candidate) => candidate.id === latestCompetitor?.classId)
-                      ?.name ??
-                      latestReadout.className ??
-                      latestRunnerSuggestion?.defaultClassName ??
-                      'Klass saknas'}
-                  </span>
-                  {latestRunnerSuggestion && !latestCompetitor && (
-                    <span className="rounded bg-sky-50 dark:bg-sky-950/40 px-1.5 py-0.5 text-sky-800 dark:text-sky-300">
-                      Preliminär match
-                    </span>
-                  )}
-                </div>
-              </div>
-              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                Resultat: {latestReadoutResultLabel}
-              </span>
-              {getReadoutIssueSummary(latestReadout) && (
-                <span className="rounded-full bg-white/70 dark:bg-slate-900/60 px-2 py-0.5 text-xs font-medium text-slate-700 dark:text-slate-200">
-                  {getReadoutIssueSummary(latestReadout)}
-                </span>
-              )}
-            </div>
-            <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
-              <span>
-                Mål:{' '}
-                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-                  {formatSecondsAsClock(latestReadout.readout.finishTimeSec)}
-                </strong>
-              </span>
-              <span>
-                Placering:{' '}
-                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-                  {latestPlacement ? `${latestPlacement.pos}/${latestPlacement.total}` : '—'}
-                </strong>
-              </span>
-              <span>
-                Bom:{' '}
-                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-                  {latestValidation?.totalTimeLossSec != null
-                    ? formatDurationMmSs(latestValidation.totalTimeLossSec)
-                    : '—'}
-                </strong>
-              </span>
-              <span>
-                Löptid:{' '}
-                <strong className="font-mono tabular-nums text-slate-800 dark:text-slate-200">
-                  {latestCompetitor?.runningTimeSec != null
-                    ? formatDurationMmSs(latestCompetitor.runningTimeSec)
-                    : '—'}
-                </strong>
-              </span>
-            </div>
-            {latestMpExplanation && (
-              <p className="mt-1.5 text-xs text-amber-800 dark:text-amber-200">
-                MP: {latestMpExplanation}
-              </p>
-            )}
-            {latestReadout.syncError && (
-              <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-300">
-                {latestReadout.syncError}
-              </p>
-            )}
-          </div>
-        ) : (
-          <p className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
-            Ingen SI-avläsning har fångats för tävlingen.
-          </p>
-        )}
-      </section>
-
-      <section
-        aria-labelledby="readout-action-queue-title"
-        aria-live="polite"
-        className="overflow-hidden rounded-lg border border-orange-200 bg-white dark:border-orange-900 dark:bg-slate-900"
-      >
-        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-orange-100 px-4 py-2.5 dark:border-orange-900/60">
-          <div>
-            <h2
-              id="readout-action-queue-title"
-              className="text-sm font-semibold text-slate-900 dark:text-slate-100"
-            >
-              Kräver åtgärd
-            </h2>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Öppna ärenden hanteras här utan att stoppa nästa avläsning.
-            </p>
-          </div>
-          <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-orange-900 dark:bg-orange-950/60 dark:text-orange-200">
-            {outstandingReadouts.length}
-          </span>
-        </div>
-        {visibleOutstandingReadouts.length > 0 ? (
-          <>
-            <ol className="divide-y divide-slate-100 dark:divide-slate-800">
-              {visibleOutstandingReadouts.map((record) => (
-                <ReadoutHistoryRow
-                  key={record.clientReadoutId}
-                  record={record}
-                  isSelected={selectedReadoutId === record.clientReadoutId}
-                  onSelect={handleSelectReadout}
-                />
-              ))}
-            </ol>
-            {outstandingReadouts.length > visibleOutstandingReadouts.length && (
-              <button
-                type="button"
-                onClick={handleShowAllOutstandingReadouts}
-                className="w-full border-t border-orange-100 px-4 py-2 text-left text-xs font-medium text-orange-900 hover:bg-orange-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-orange-700 dark:border-orange-900/60 dark:text-orange-200 dark:hover:bg-orange-950/30"
-              >
-                Visa alla {outstandingReadouts.length} ärenden i historiken
-              </button>
-            )}
-          </>
-        ) : (
-          <p className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">
-            Inga avläsningar väntar på åtgärd.
-          </p>
-        )}
-      </section>
 
       <details className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
         <summary className="cursor-pointer list-none px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-300">
@@ -1068,13 +796,13 @@ export function ReadoutDashboard({
             </button>
           </div>
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {offlineSnap.pendingItems.map((item) => {
+            {offlineQueueDisplayItems.map((item) => {
               const isBusy = queueActionId === item.id || offlineSnap.flushing;
               const readout = item.readoutPayload;
               const punch = item.onlinePunchPayload;
               const itemName =
                 item.kind === 'READOUT'
-                  ? `Avläsning · SI ${readout?.siNumber ?? 'okänt'} · ${readout?.cardSeries ?? 'okänd bricka'}`
+                  ? `Avläsning utanför aktuell tidslinje · SI ${readout?.siNumber ?? 'okänt'} · ${readout?.cardSeries ?? 'okänd bricka'}`
                   : `Online-stämpling · SI ${punch?.siNumber ?? 'okänt'} · kontroll ${punch?.stationCode ?? 'okänd'}`;
               return (
                 <li key={item.id} className="px-3.5 py-2.5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1086,7 +814,7 @@ export function ReadoutDashboard({
                     {readout && (
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
                         Stämplingar: {readout.punches.length}
-                        {readout.finishTimeSec !== null && readout.finishTimeSec !== undefined
+                        {readout.finishTimeSec != null
                           ? ` · Måltid: ${formatSecondsAsClock(readout.finishTimeSec)}`
                           : ''}
                       </p>
@@ -1151,23 +879,36 @@ export function ReadoutDashboard({
                   </div>
                 </li>
               );
-            })}
+              })}
+            {offlineQueueDisplayItems.length === 0 &&
+              offlineSnap.pendingItems.some((item) => item.kind === 'READOUT') && (
+              <li className="px-3.5 py-2.5 text-xs text-slate-500 dark:text-slate-400">
+                Köade avläsningar hanteras på respektive tidslinjerad.
+              </li>
+              )}
           </ul>
         </section>
       )}
         </div>
       </details>
 
-      {selectedReadout && (
+      <ReadoutTimeline
+        records={readoutHistory}
+        latestReadoutId={latestReadoutId}
+        expandedReadoutId={selectedReadoutId}
+        historyError={readoutHistoryError}
+        onToggleReadout={handleSelectReadout}
+        getPlacementLabel={getReadoutPlacementLabel}
+      >
+        {selectedReadout && (
         <section
-          ref={selectedReadoutPanelRef}
-          aria-label={`Vald avläsning ${selectedReadout.captureSequence}`}
-          className={`scroll-mt-24 ${getReadoutStatusPresentation(selectedReadout).surfaceClass} border border-sky-200 dark:border-sky-900 rounded-lg overflow-visible`}
+          aria-label={`Detaljer för avläsning ${selectedReadout.captureSequence}`}
+          className="bg-white/50 dark:bg-slate-950/20"
         >
-          <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-sky-100 dark:border-sky-900">
+          <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-200 dark:border-slate-800">
             <div>
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Avläsning nr {selectedReadout.captureSequence}
+                Avläsningsdetaljer
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 SI {formatSiNumber(selectedReadout.readout.siNumber)}
@@ -1178,7 +919,7 @@ export function ReadoutDashboard({
             </div>
             <button
               type="button"
-              onClick={() => setSelectedReadoutId(null)}
+              onClick={() => handleSelectReadout(selectedReadout)}
               className="shrink-0 rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               Stäng
@@ -1709,157 +1450,67 @@ export function ReadoutDashboard({
                 )}
             </div>
           )}
+          {selectedOfflineReadoutQueueItem && (
+            <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+              <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">
+                Avläsningen väntar i offlinekön
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400">
+                Köad {new Date(selectedOfflineReadoutQueueItem.createdAt).toLocaleString('sv-SE')}
+                {selectedOfflineReadoutQueueItem.lastError
+                  ? ` · ${selectedOfflineReadoutQueueItem.lastError}`
+                  : ''}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  disabled={
+                    queueActionId === selectedOfflineReadoutQueueItem.id ||
+                    offlineSnap.flushing ||
+                    isOfflineActive
+                  }
+                  onClick={async () => {
+                    setQueueActionId(selectedOfflineReadoutQueueItem.id);
+                    try {
+                      await onRetryOfflineQueueItem(selectedOfflineReadoutQueueItem.id);
+                    } finally {
+                      setQueueActionId(null);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 rounded bg-emerald-700 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={`h-3 w-3 ${
+                      queueActionId === selectedOfflineReadoutQueueItem.id
+                        ? 'animate-spin'
+                        : ''
+                    }`}
+                  />
+                  Försök igen
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    queueActionId === selectedOfflineReadoutQueueItem.id ||
+                    offlineSnap.flushing
+                  }
+                  onClick={() =>
+                    onRemoveOfflineQueueItem(selectedOfflineReadoutQueueItem.id)
+                  }
+                  className="inline-flex items-center gap-1 rounded bg-red-50 px-2.5 py-1.5 text-[11px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:bg-red-950/40 dark:text-red-300"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Ta bort ur kön
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       )}
 
-      <section
-        ref={historySectionRef}
-        className="scroll-mt-24 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden"
-      >
-          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 space-y-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Avläsningshistorik
-              </h2>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Nyaste avläsning först · {readoutHistory.length} sparade avläsningar
-              </p>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                ↑/↓ flyttar fokus · Enter öppnar avläsningsdetaljer.
-              </p>
-            </div>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="inline-flex items-center gap-1" role="group" aria-label="Historikfilter">
-                <button
-                  type="button"
-                  aria-pressed={historyView === 'ALL'}
-                  onClick={() => {
-                    setHistoryView('ALL');
-                    setHistoryPage(0);
-                  }}
-                  className={`px-2.5 py-1 text-xs rounded-md border ${
-                    historyView === 'ALL'
-                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100'
-                      : 'bg-white text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  Alla
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={historyView === 'OUTSTANDING'}
-                  onClick={() => {
-                    setHistoryView('OUTSTANDING');
-                    setHistoryPage(0);
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border ${
-                    historyView === 'OUTSTANDING'
-                      ? 'bg-orange-100 text-orange-900 border-orange-300 dark:bg-orange-950/60 dark:text-orange-200 dark:border-orange-800'
-                      : 'bg-white text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700'
-                  }`}
-                >
-                  Kräver åtgärd
-                  <span className="rounded-full bg-white/70 dark:bg-slate-900/70 px-1.5 py-0.5 font-medium tabular-nums">
-                    {outstandingReadouts.length}
-                  </span>
-                </button>
-              </div>
-              <label className="relative block w-full sm:max-w-xs">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="search"
-                  value={historySearch}
-                  onChange={(event) => {
-                    setHistorySearch(event.target.value);
-                    setHistoryPage(0);
-                  }}
-                  placeholder="Sök bricka, löpare, status eller ID"
-                  aria-label="Sök i avläsningshistorik"
-                  className="w-full pl-7 pr-2.5 py-1.5 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-md text-slate-900 dark:text-slate-100"
-                />
-              </label>
-            </div>
-            {historyView === 'OUTSTANDING' && (
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Visar ärenden som väntar på åtgärd eller hanteras. Synkstatus visas separat.
-              </p>
-            )}
-            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-              <span>
-                {filteredReadouts.length === 0
-                  ? 'Inga träffar'
-                  : `Visar ${visibleHistoryPage * historyPageSize + 1}–${Math.min(
-                      (visibleHistoryPage + 1) * historyPageSize,
-                      filteredReadouts.length
-                    )} av ${filteredReadouts.length}`}
-              </span>
-              <label className="flex items-center gap-1.5">
-                Rader
-                <select
-                  value={historyPageSize}
-                  onChange={(event) => {
-                    setHistoryPageSize(Number(event.target.value) as 20 | 30 | 50);
-                    setHistoryPage(0);
-                  }}
-                  className="px-1.5 py-1 text-xs bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded"
-                  aria-label="Rader per sida"
-                >
-                  <option value={20}>20</option>
-                  <option value={30}>30</option>
-                  <option value={50}>50</option>
-                </select>
-              </label>
-            </div>
-          </div>
-          {visibleReadouts.length > 0 ? (
-            <ol
-              ref={historyRowsRef}
-              onKeyDown={handleHistoryKeyDown}
-              aria-label="Avläsningar på aktuell sida"
-              className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800"
-            >
-              {visibleReadouts.map((record) => (
-                <ReadoutHistoryRow
-                  key={record.clientReadoutId}
-                  record={record}
-                  isSelected={selectedReadoutId === record.clientReadoutId}
-                  onSelect={handleSelectReadout}
-                />
-              ))}
-            </ol>
-          ) : (
-            <p className="px-4 py-5 text-sm text-slate-500 dark:text-slate-400">
-              {historyView === 'OUTSTANDING'
-                ? 'Inga avläsningsärenden väntar på åtgärd.'
-                : 'Historiken visas här efter första SI-avläsningen.'}
-            </p>
-          )}
-          <div className="flex items-center justify-between gap-3 px-4 py-2 border-t border-slate-200 dark:border-slate-800">
-            <button
-              type="button"
-              disabled={visibleHistoryPage === 0}
-              onClick={() => setHistoryPage((current) => Math.max(0, current - 1))}
-              className="px-2.5 py-1 text-xs rounded border border-slate-200 dark:border-slate-700 disabled:opacity-40"
-            >
-              Föregående
-            </button>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              Sida {visibleHistoryPage + 1} av {historyPageCount}
-            </span>
-            <button
-              type="button"
-              disabled={visibleHistoryPage + 1 >= historyPageCount}
-              onClick={() =>
-                setHistoryPage((current) => Math.min(historyPageCount - 1, current + 1))
-              }
-              className="px-2.5 py-1 text-xs rounded border border-slate-200 dark:border-slate-700 disabled:opacity-40"
-            >
-              Nästa
-            </button>
-          </div>
-        </section>
+      </ReadoutTimeline>
 
-      {/* Competition Overview — below the complete Readout History section */}
+      {/* Competition overview stays secondary to the single readout timeline. */}
       <section
         aria-label="Tävlingsstatus"
         className="grid grid-cols-2 xl:grid-cols-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y sm:divide-y-0 divide-x divide-slate-200 dark:divide-slate-800"
