@@ -34,9 +34,21 @@ export interface TrustedRunnerDbCandidate {
   defaultClassName: string;
 }
 
+export interface ReadoutReceiptPromotionInput {
+  clientReadoutId: string;
+  stationCode: number;
+  checkTimeSec: number;
+  startTimeSec: number;
+  finishTimeSec: number;
+  punchCodes: number[];
+  punchTimes: number[];
+  rawHex: string;
+}
+
 export interface CompetitorCreationResult {
   runnerDbEntry: Record<string, unknown> | null;
   previousRunnerSiNumber: number | null;
+  readoutReceiptId?: string;
 }
 
 export class CompetitorCreationError extends Error {
@@ -171,6 +183,45 @@ function validateRunnerProfileId(value: unknown): string | null {
   return String(siNumber);
 }
 
+function validateReadoutReceiptPromotion(
+  value: unknown
+): ReadoutReceiptPromotionInput | null {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CompetitorCreationError(400, 'Readout receipt data is invalid.');
+  }
+  const input = value as Record<string, unknown>;
+  if (
+    typeof input.clientReadoutId !== 'string' ||
+    !VALID_ID.test(input.clientReadoutId) ||
+    !isBoundedInteger(input.stationCode, 1, 999) ||
+    !isBoundedInteger(input.checkTimeSec, -1, 86400) ||
+    !isBoundedInteger(input.startTimeSec, -1, 86400) ||
+    !isBoundedInteger(input.finishTimeSec, -1, 86400) ||
+    !Array.isArray(input.punchCodes) ||
+    !Array.isArray(input.punchTimes) ||
+    input.punchCodes.length > 192 ||
+    input.punchTimes.length > 192 ||
+    input.punchCodes.length !== input.punchTimes.length ||
+    input.punchCodes.some((code) => !isBoundedInteger(code, 1, 999)) ||
+    input.punchTimes.some((time) => !isBoundedInteger(time, 0, 86400)) ||
+    typeof input.rawHex !== 'string' ||
+    input.rawHex.length > 2000
+  ) {
+    throw new CompetitorCreationError(400, 'Readout receipt data is invalid.');
+  }
+  return {
+    clientReadoutId: input.clientReadoutId,
+    stationCode: input.stationCode,
+    checkTimeSec: input.checkTimeSec,
+    startTimeSec: input.startTimeSec,
+    finishTimeSec: input.finishTimeSec,
+    punchCodes: input.punchCodes.map((code) => Number(code)),
+    punchTimes: input.punchTimes.map((time) => Number(time)),
+    rawHex: input.rawHex,
+  };
+}
+
 export async function createCompetitorWithAssignment(
   firestore: Firestore,
   actor: CompetitorCreationActor,
@@ -179,7 +230,8 @@ export async function createCompetitorWithAssignment(
   inputInput: unknown,
   runnerCandidateInput: unknown,
   runnerProfileIdInput: unknown = null,
-  isBorrowedCardInput: unknown = false
+  isBorrowedCardInput: unknown = false,
+  readoutReceiptPromotionInput: unknown = null
 ): Promise<CompetitorCreationResult> {
   const competitionId = requireId(competitionIdInput, 'competition ID');
   const competitorId = requireId(competitorIdInput, 'competitor ID');
@@ -194,6 +246,28 @@ export async function createCompetitorWithAssignment(
   const runnerProfileId = shouldUpdateRunnerDb
     ? validateRunnerProfileId(runnerProfileIdInput)
     : null;
+  const readoutReceiptPromotion = validateReadoutReceiptPromotion(
+    readoutReceiptPromotionInput
+  );
+  if (
+    readoutReceiptPromotion &&
+    (readoutReceiptPromotion.punchCodes.length !== input.punchCodes.length ||
+      readoutReceiptPromotion.punchTimes.length !== input.punchTimes.length ||
+      readoutReceiptPromotion.punchCodes.some(
+        (code, index) => code !== input.punchCodes[index]
+      ) ||
+      readoutReceiptPromotion.punchTimes.some(
+        (time, index) => time !== input.punchTimes[index]
+      ) ||
+      readoutReceiptPromotion.checkTimeSec !== input.checkTimeSec ||
+      readoutReceiptPromotion.startTimeSec !== input.startTimeSec ||
+      readoutReceiptPromotion.finishTimeSec !== input.finishTimeSec)
+  ) {
+    throw new CompetitorCreationError(
+      400,
+      'Readout receipt data does not match the direct-entry result.'
+    );
+  }
 
   const fullName = input.fullName.trim().slice(0, 120);
   const club = input.club.trim().slice(0, 100) || 'Klubblös';
@@ -211,6 +285,11 @@ export async function createCompetitorWithAssignment(
   const duplicatesQuery = competitionRef
     .collection('competitors')
     .where('siNumber', '==', assignmentSiNumber);
+  const readoutReceiptRef = readoutReceiptPromotion
+    ? competitionRef
+        .collection('readoutReceipts')
+        .doc(readoutReceiptPromotion.clientReadoutId)
+    : null;
 
   return firestore.runTransaction(async (transaction) => {
     const [
@@ -221,6 +300,7 @@ export async function createCompetitorWithAssignment(
       duplicateCompetitorsSnapshot,
       runnerSnapshot,
       runnerProfileSnapshot,
+      readoutReceiptSnapshot,
     ] = await Promise.all([
       transaction.get(competitionRef),
       transaction.get(competitorRef),
@@ -232,6 +312,9 @@ export async function createCompetitorWithAssignment(
         : Promise.resolve(null),
       shouldUpdateRunnerDb
         ? transaction.get(runnerProfileRef)
+        : Promise.resolve(null),
+      readoutReceiptRef
+        ? transaction.get(readoutReceiptRef)
         : Promise.resolve(null),
     ]);
 
@@ -255,6 +338,35 @@ export async function createCompetitorWithAssignment(
         409,
         'Competitors cannot be added to a completed competition.'
       );
+    }
+    if (readoutReceiptPromotion) {
+      const receipt = readoutReceiptSnapshot?.data();
+      const currentCompetitorId = receipt?.currentCompetitorId;
+      if (
+        !readoutReceiptSnapshot?.exists ||
+        receipt?.receiptId !== readoutReceiptPromotion.clientReadoutId ||
+        receipt?.clientReadoutId !== readoutReceiptPromotion.clientReadoutId ||
+        receipt?.competitionId !== competitionId ||
+        receipt?.status !== 'UNKNOWN' ||
+        receipt?.competitorId !== '' ||
+        (currentCompetitorId !== undefined && currentCompetitorId !== '') ||
+        receipt?.siNumber !== assignmentSiNumber ||
+        receipt?.cardSeries !== input.cardSeries ||
+        receipt?.stationCode !== readoutReceiptPromotion.stationCode ||
+        receipt?.checkTimeSec !== readoutReceiptPromotion.checkTimeSec ||
+        receipt?.startTimeSec !== readoutReceiptPromotion.startTimeSec ||
+        receipt?.finishTimeSec !== readoutReceiptPromotion.finishTimeSec ||
+        JSON.stringify(receipt?.punchCodes) !==
+          JSON.stringify(readoutReceiptPromotion.punchCodes) ||
+        JSON.stringify(receipt?.punchTimes) !==
+          JSON.stringify(readoutReceiptPromotion.punchTimes) ||
+        receipt?.rawHex !== readoutReceiptPromotion.rawHex
+      ) {
+        throw new CompetitorCreationError(
+          409,
+          'The readout receipt is not an eligible unknown-card receipt for this direct entry.'
+        );
+      }
     }
     if (duplicateCompetitorsSnapshot.docs.length > 0) {
       throw new CompetitorCreationError(
@@ -347,6 +459,9 @@ export async function createCompetitorWithAssignment(
       readoutAtIso: input.readoutAtIso,
       punchCodes: input.punchCodes,
       punchTimes: input.punchTimes,
+      ...(readoutReceiptPromotion
+        ? { readoutReceiptId: readoutReceiptPromotion.clientReadoutId }
+        : {}),
       ownerUid: actorUid,
       createdAt: serverTimestamp,
       updatedAt: serverTimestamp,
@@ -379,6 +494,14 @@ export async function createCompetitorWithAssignment(
       ),
       updatedAt: serverTimestamp,
     });
+    if (readoutReceiptPromotion && readoutReceiptRef) {
+      transaction.update(readoutReceiptRef, {
+        status: 'PROCESSED',
+        competitorId,
+        currentCompetitorId: competitorId,
+        updatedAt: serverTimestamp,
+      });
+    }
 
     let runnerDbEntry: Record<string, unknown> | null = null;
     const runnerData = runnerProfileSnapshot?.data();
@@ -446,6 +569,9 @@ export async function createCompetitorWithAssignment(
         runnerProfileId && runnerProfileId !== String(assignmentSiNumber)
           ? Number(runnerProfileId)
           : null,
+      ...(readoutReceiptPromotion
+        ? { readoutReceiptId: readoutReceiptPromotion.clientReadoutId }
+        : {}),
     };
   });
 }

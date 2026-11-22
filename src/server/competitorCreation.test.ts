@@ -122,6 +122,158 @@ emulatorDescribe('createCompetitorWithAssignment', () => {
     }
   });
 
+  it('promotes a matched unknown-card receipt atomically with direct entry', async () => {
+    const suffix = randomUUID().replace(/-/g, '');
+    const competitionId = `evt_${suffix}`;
+    const competitorId = `cmp_${suffix}`;
+    const readoutId = `ro_${suffix}`;
+    const ownerUid = `usr_${suffix}`;
+    const competitionRef = firestore.collection('competitions').doc(competitionId);
+    const receiptRef = competitionRef.collection('readoutReceipts').doc(readoutId);
+    const adminRef = firestore.collection('admins').doc(ownerUid);
+    const directEntry = {
+      ...createInput,
+      status: 'OK',
+      checkTimeSec: -1,
+      startTimeSec: 36000,
+      finishTimeSec: 40000,
+      runningTimeSec: 4000,
+      punchCodes: [31],
+      punchTimes: [37000],
+    } satisfies TrustedCompetitorCreateInput;
+    const readoutReceiptPromotion = {
+      clientReadoutId: readoutId,
+      stationCode: 8,
+      checkTimeSec: -1,
+      startTimeSec: 36000,
+      finishTimeSec: 40000,
+      punchCodes: [31],
+      punchTimes: [37000],
+      rawHex: '010203',
+    };
+
+    await adminRef.set({ uid: ownerUid, role: 'RACE_ADMIN' });
+    await competitionRef.set({
+      competitionId,
+      ownerUid,
+      status: 'LIVE',
+      competitorCount: 0,
+      finishedCount: 0,
+    });
+    await receiptRef.set({
+      receiptId: readoutId,
+      clientReadoutId: readoutId,
+      competitionId,
+      ownerUid,
+      siNumber: directEntry.siNumber,
+      cardSeries: directEntry.cardSeries,
+      stationCode: readoutReceiptPromotion.stationCode,
+      checkTimeSec: readoutReceiptPromotion.checkTimeSec,
+      startTimeSec: readoutReceiptPromotion.startTimeSec,
+      finishTimeSec: readoutReceiptPromotion.finishTimeSec,
+      punchCodes: readoutReceiptPromotion.punchCodes,
+      punchTimes: readoutReceiptPromotion.punchTimes,
+      rawHex: readoutReceiptPromotion.rawHex,
+      status: 'UNKNOWN',
+      competitorId: '',
+    });
+
+    try {
+      const result = await createCompetitorWithAssignment(
+        firestore,
+        { uid: ownerUid },
+        competitionId,
+        competitorId,
+        directEntry,
+        null,
+        null,
+        false,
+        readoutReceiptPromotion
+      );
+      const promotedReceipt = (await receiptRef.get()).data();
+
+      expect(result.readoutReceiptId).toBe(readoutId);
+      expect(promotedReceipt).toMatchObject({
+        status: 'PROCESSED',
+        competitorId,
+        currentCompetitorId: competitorId,
+      });
+    } finally {
+      await firestore.recursiveDelete(competitionRef);
+      await adminRef.delete();
+    }
+  });
+
+  it('does not create a direct entry when its unknown-card receipt cannot be matched', async () => {
+    const suffix = randomUUID().replace(/-/g, '');
+    const competitionId = `evt_${suffix}`;
+    const competitorId = `cmp_${suffix}`;
+    const readoutId = `ro_${suffix}`;
+    const ownerUid = `usr_${suffix}`;
+    const competitionRef = firestore.collection('competitions').doc(competitionId);
+    const receiptRef = competitionRef.collection('readoutReceipts').doc(readoutId);
+    const adminRef = firestore.collection('admins').doc(ownerUid);
+    const readoutReceiptPromotion = {
+      clientReadoutId: readoutId,
+      stationCode: 8,
+      checkTimeSec: -1,
+      startTimeSec: -1,
+      finishTimeSec: -1,
+      punchCodes: [],
+      punchTimes: [],
+      rawHex: 'mismatched-readout',
+    };
+
+    await adminRef.set({ uid: ownerUid, role: 'RACE_ADMIN' });
+    await competitionRef.set({
+      competitionId,
+      ownerUid,
+      status: 'LIVE',
+      competitorCount: 0,
+      finishedCount: 0,
+    });
+    await receiptRef.set({
+      receiptId: readoutId,
+      clientReadoutId: readoutId,
+      competitionId,
+      siNumber: createInput.siNumber,
+      cardSeries: createInput.cardSeries,
+      stationCode: 8,
+      checkTimeSec: -1,
+      startTimeSec: -1,
+      finishTimeSec: -1,
+      punchCodes: [],
+      punchTimes: [],
+      rawHex: '',
+      status: 'UNKNOWN',
+      competitorId: '',
+    });
+
+    try {
+      await expect(
+        createCompetitorWithAssignment(
+          firestore,
+          { uid: ownerUid },
+          competitionId,
+          competitorId,
+          createInput,
+          null,
+          null,
+          false,
+          readoutReceiptPromotion
+        )
+      ).rejects.toMatchObject({ statusCode: 409 });
+
+      expect((await receiptRef.get()).data()?.status).toBe('UNKNOWN');
+      expect(
+        (await competitionRef.collection('competitors').doc(competitorId).get()).exists
+      ).toBe(false);
+    } finally {
+      await firestore.recursiveDelete(competitionRef);
+      await adminRef.delete();
+    }
+  });
+
   it('moves a selected runner profile to the new SI number when it is not borrowed', async () => {
     const suffix = randomUUID().replace(/-/g, '');
     const competitionId = `evt_${suffix}`;

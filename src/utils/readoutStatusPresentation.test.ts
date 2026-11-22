@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ReadoutStatusInput } from './readoutStatusPresentation';
 import {
+  getReadoutDeliveryBadgeClass,
   getReadoutIssueLabel,
+  getReadoutIssueBadgeClass,
   getReadoutIssueSummary,
   getReadoutStatusPresentation,
   getReadoutStatusText,
@@ -27,12 +29,12 @@ describe('readout status presentation', () => {
     ).toBe('mp');
   });
 
-  it('uses orange for human issues and red for technical issues requiring action', () => {
+  it('keeps result color independent from open issue presentation', () => {
     expect(
       getReadoutStatusPresentation(
         createStatus({ issueType: 'UNKNOWN_CARD', issueState: 'OPEN' })
-      ).tone
-    ).toBe('action');
+      )
+    ).toMatchObject({ tone: 'success', surfaceClass: 'bg-emerald-100 dark:bg-emerald-900/60' });
     expect(
       getReadoutStatusPresentation(
         createStatus({
@@ -40,31 +42,23 @@ describe('readout status presentation', () => {
           issueState: 'OPEN',
         })
       ).tone
-    ).toBe('error');
-  });
-
-  it('shows duplicate readouts as informational blue unless an issue is open', () => {
+    ).toBe('success');
     expect(
-      getReadoutStatusPresentation(
-        createStatus({ issueType: 'DUPLICATE_READOUT' })
-      ).tone
-    ).toBe('info');
+      getReadoutIssueBadgeClass(
+        createStatus({ issueType: 'UNKNOWN_CARD', issueState: 'OPEN' })
+      )
+    ).toContain('bg-orange');
     expect(
-      getReadoutStatusPresentation(
+      getReadoutIssueBadgeClass(
         createStatus({
-          issueType: 'DUPLICATE_READOUT',
+          issueType: 'LOCAL_PERSISTENCE_FAILURE',
           issueState: 'OPEN',
         })
-      ).tone
-    ).toBe('action');
-    expect(
-      getReadoutStatusText(
-        createStatus({ issueType: 'DUPLICATE_READOUT' })
       )
-    ).toBe('Redan avläst');
+    ).toContain('bg-red');
   });
 
-  it('keeps synchronization state independent from the row tone', () => {
+  it('renders delivery independently of result tone', () => {
     const queued = {
       ...createStatus(),
       deliveryState: 'QUEUED' as const,
@@ -78,6 +72,8 @@ describe('readout status presentation', () => {
       getReadoutStatusPresentation(synced)
     );
     expect(getReadoutStatusPresentation(queued).tone).toBe('success');
+    expect(getReadoutDeliveryBadgeClass('SYNCED')).toContain('bg-emerald');
+    expect(getReadoutDeliveryBadgeClass('QUEUED')).toContain('bg-amber');
   });
 
   it('returns to the result tone after an issue is resolved and keeps finish-only statuses neutral', () => {
@@ -109,7 +105,7 @@ describe('readout status presentation', () => {
     }
   );
 
-  it('localizes issue states and unknown-card status text', () => {
+  it('keeps result status text separate from issue labels and localizes issue state', () => {
     expect(
       getReadoutIssueSummary({
         issueType: 'MP_REVIEW',
@@ -119,12 +115,11 @@ describe('readout status presentation', () => {
     expect(
       getReadoutStatusText(
         createStatus({
-          resultStatus: null,
-          readoutState: 'UNKNOWN',
+          resultStatus: 'OK',
           issueType: 'UNKNOWN_CARD',
           issueState: 'OPEN',
         })
       )
-    ).toBe('Okänd bricka');
+    ).toBe('OK');
   });
 });

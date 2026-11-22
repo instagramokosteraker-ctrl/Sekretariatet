@@ -45,6 +45,7 @@ export interface ReadoutHistoryRecord {
   eventId: string | null;
   readout: CapturedReadoutPayload;
   readoutState: 'CAPTURED' | 'UNKNOWN' | 'PROCESSED';
+  receiptStatus?: 'UNKNOWN' | 'PROCESSED' | null;
   deliveryState:
     | 'PERSISTING'
     | 'LOCAL_SAVED'
@@ -69,12 +70,21 @@ export interface ReadoutHistoryRecord {
   syncError: string | null;
 }
 
+const VALID_READOUT_REASSIGNMENT_ID = /^[a-zA-Z0-9_-]{1,128}$/;
+
 export function isEligibleWrongCompetitorReadout(
   record: ReadoutHistoryRecord
 ): boolean {
   return (
     record.readoutState === 'PROCESSED' &&
+    record.receiptStatus === 'PROCESSED' &&
+    record.eventId !== null &&
+    VALID_READOUT_REASSIGNMENT_ID.test(record.eventId) &&
+    VALID_READOUT_REASSIGNMENT_ID.test(record.clientReadoutId) &&
     record.competitorId !== null &&
+    VALID_READOUT_REASSIGNMENT_ID.test(record.competitorId) &&
+    record.originalCompetitorId !== null &&
+    VALID_READOUT_REASSIGNMENT_ID.test(record.originalCompetitorId) &&
     isReassignableReadoutResultStatus(record.resultStatus)
   );
 }
@@ -83,6 +93,7 @@ export type ReadoutHistoryUpdate = Partial<
   Pick<
     ReadoutHistoryRecord,
     | 'readoutState'
+    | 'receiptStatus'
     | 'deliveryState'
     | 'competitorId'
     | 'competitorName'
@@ -103,19 +114,16 @@ export type ReadoutHistoryUpdate = Partial<
   >
 >;
 
-export function getWrongCompetitorIssueUpdateForConfirmation(
+export function getWrongCompetitorIssueUpdateForFailure(
   record: ReadoutHistoryRecord
 ): ReadoutHistoryUpdate | null {
   if (
-    record.issueType === 'WRONG_COMPETITOR' &&
-    (record.issueState === 'OPEN' || record.issueState === 'IN_PROGRESS')
+    record.issueType !== 'WRONG_COMPETITOR' ||
+    (record.issueState !== 'OPEN' && record.issueState !== 'IN_PROGRESS')
   ) {
     return null;
   }
-  return {
-    issueType: 'WRONG_COMPETITOR',
-    issueState: 'OPEN',
-  };
+  return { issueType: null, issueState: 'NONE' };
 }
 
 export function createDuplicateReadoutHistoryUpdate(
@@ -129,6 +137,7 @@ export function createDuplicateReadoutHistoryUpdate(
   return {
     deliveryState: 'SYNCED',
     readoutState: 'PROCESSED',
+    receiptStatus: null,
     competitorId: competitor.id,
     competitorName: competitor.fullName,
     className,
@@ -304,6 +313,7 @@ class ReadoutHistoryStore {
       eventId,
       readout,
       readoutState: 'CAPTURED',
+      receiptStatus: null,
       deliveryState: 'PERSISTING',
       competitorId: null,
       competitorName: null,

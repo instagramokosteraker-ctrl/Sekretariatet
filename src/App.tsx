@@ -88,7 +88,7 @@ import {
 import {
   getLatestReadoutId,
   createDuplicateReadoutHistoryUpdate,
-  getWrongCompetitorIssueUpdateForConfirmation,
+  getWrongCompetitorIssueUpdateForFailure,
   isEligibleWrongCompetitorReadout,
   readoutHistoryStore,
   sortReadoutHistory,
@@ -1260,24 +1260,6 @@ export default function App() {
           'Endast en matchad OK-, MP- eller preliminär avläsning kan korrigeras.'
         );
       }
-      const issueUpdate =
-        getWrongCompetitorIssueUpdateForConfirmation(currentRecord);
-      if (issueUpdate) {
-        try {
-          await readoutHistoryStore.update(record.clientReadoutId, issueUpdate);
-        } catch (error) {
-          await readoutHistoryStore.update(
-            record.clientReadoutId,
-            {
-              issueType: currentRecord.issueType,
-              issueState: currentRecord.issueState,
-            },
-            false
-          );
-          throw error;
-        }
-      }
-
       const storageKey = [
         'readout-reassignment',
         activeEventId,
@@ -1292,22 +1274,31 @@ export default function App() {
           : `readout-correction-${crypto.randomUUID()}`;
       if (!storedOperationId) localStorage.setItem(storageKey, operationId);
 
-      const response = await apiFetch(
-        `/api/firestore/competitions/${encodeURIComponent(activeEventId)}/readouts/${encodeURIComponent(record.clientReadoutId)}/reassignment`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            operationId,
-            targetCompetitorId,
-            reason: reason.trim(),
-          }),
-        }
-      );
-      const result = await readApiResponseJson<ResultReassignmentResponse>(
-        response,
-        'Resultatet kunde inte korrigeras.'
-      );
+      let result: ResultReassignmentResponse;
+      try {
+        const response = await apiFetch(
+          `/api/firestore/competitions/${encodeURIComponent(activeEventId)}/readouts/${encodeURIComponent(record.clientReadoutId)}/reassignment`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              operationId,
+              targetCompetitorId,
+              reason: reason.trim(),
+            }),
+          }
+        );
+        result = await readApiResponseJson<ResultReassignmentResponse>(
+          response,
+          'Resultatet kunde inte korrigeras.'
+        );
+      } catch (error) {
+        const failedRecord =
+          readoutHistoryStore.getRecord(record.clientReadoutId) ?? currentRecord;
+        const rollback = getWrongCompetitorIssueUpdateForFailure(failedRecord);
+        if (rollback) await readoutHistoryStore.update(record.clientReadoutId, rollback);
+        throw error;
+      }
       const cloudSnapshot = await loadFullSeasonFromFirestore({
         competitionId: activeEventId,
         includeRunnerDb: false,
@@ -1419,6 +1410,7 @@ export default function App() {
         deliveryState: 'SYNCED',
         readoutState:
           currentRecord?.readoutState === 'PROCESSED' ? 'PROCESSED' : 'UNKNOWN',
+        receiptStatus: 'UNKNOWN',
         issueType: 'UNKNOWN_CARD',
         issueState:
           currentUnknownIssue && currentUnknownIssue.issueState !== 'NONE'
@@ -1441,6 +1433,7 @@ export default function App() {
       await readoutHistoryStore.update(clientReadoutId, {
         deliveryState: 'SYNCED',
         readoutState: 'PROCESSED',
+        receiptStatus: 'PROCESSED',
         competitorId: syncedCompetitor.id,
         competitorName: syncedCompetitor.fullName,
         className,
@@ -2341,6 +2334,9 @@ export default function App() {
           const currentReadout = readoutHistoryStore.getRecord(readoutId);
           await readoutHistoryStore.update(readoutId, {
             readoutState: 'PROCESSED',
+            receiptStatus: currentReadout?.issueType === 'UNKNOWN_CARD'
+              ? 'PROCESSED'
+              : currentReadout?.receiptStatus ?? null,
             deliveryState: 'SYNCED',
             competitorId: saved.competitor.id,
             competitorName: saved.competitor.fullName,
@@ -2349,6 +2345,18 @@ export default function App() {
               null,
             resultStatus: saved.competitor.status,
             competitorSnapshot: saved.competitor,
+            originalCompetitorId:
+              currentReadout?.originalCompetitorId ?? saved.competitor.id,
+            originalCompetitorName:
+              currentReadout?.originalCompetitorName ?? saved.competitor.fullName,
+            originalClassName:
+              currentReadout?.originalClassName ??
+              (classes.find((candidate) => candidate.id === saved.competitor.classId)
+                ?.name ?? null),
+            originalResultStatus:
+              currentReadout?.originalResultStatus ?? saved.competitor.status,
+            originalCompetitorSnapshot:
+              currentReadout?.originalCompetitorSnapshot ?? saved.competitor,
             ...(currentReadout?.issueType === 'UNKNOWN_CARD'
               ? { issueState: 'RESOLVED' as const }
               : {}),
@@ -4419,10 +4427,12 @@ export default function App() {
                             clientReadoutId: record.clientReadoutId,
                             captureSequence: record.captureSequence,
                             capturedAt: record.capturedAt,
+                            stationCode: record.readout.stationCode,
                             checkTimeSec: record.readout.checkTimeSec,
                             startTimeSec: record.readout.startTimeSec,
                             finishTimeSec: record.readout.finishTimeSec,
                             punches: record.readout.punches,
+                            rawHex: record.readout.rawHex,
                           }
                         : undefined,
                     })

@@ -8,7 +8,7 @@ import {
   addReadoutHistoryRecord,
   createDuplicateReadoutHistoryUpdate,
   filterOutstandingReadouts,
-  getWrongCompetitorIssueUpdateForConfirmation,
+  getWrongCompetitorIssueUpdateForFailure,
   isEligibleWrongCompetitorReadout,
   getLatestReadoutId,
   sortReadoutHistory,
@@ -45,6 +45,12 @@ function createRecord(
     eventId: 'event-1',
     readout,
     readoutState,
+    receiptStatus:
+      readoutState === 'PROCESSED'
+        ? 'PROCESSED'
+        : readoutState === 'UNKNOWN'
+          ? 'UNKNOWN'
+          : null,
     deliveryState: 'QUEUED',
     competitorId: null,
     competitorName: null,
@@ -156,10 +162,56 @@ describe('readout history ordering', () => {
       isEligibleWrongCompetitorReadout({
         ...record,
         readoutState: 'PROCESSED',
+        receiptStatus: 'PROCESSED',
         competitorId: 'anna',
         resultStatus: 'DNF',
       })
     ).toBe(false);
+    expect(
+      isEligibleWrongCompetitorReadout({
+        ...record,
+        readoutState: 'PROCESSED',
+        receiptStatus: 'UNKNOWN',
+        competitorId: 'anna',
+        originalCompetitorId: 'anna',
+        resultStatus: 'OK',
+      })
+    ).toBe(false);
+    expect(
+      isEligibleWrongCompetitorReadout({
+        ...record,
+        readoutState: 'PROCESSED',
+        receiptStatus: 'PROCESSED',
+        competitorId: 'anna',
+        originalCompetitorId: null,
+        resultStatus: 'OK',
+      })
+    ).toBe(false);
+  });
+
+  it('enables reassignment only after an unknown-card receipt is promoted', () => {
+    const unknown = {
+      ...createRecord('readout-promoted', 1, 'UNKNOWN'),
+      competitorId: null,
+      originalCompetitorId: null,
+      resultStatus: null,
+    };
+    const promoted = updateReadoutHistoryRecord(
+      [unknown],
+      unknown.clientReadoutId,
+      {
+        readoutState: 'PROCESSED',
+        receiptStatus: 'PROCESSED',
+        competitorId: 'runner-new',
+        originalCompetitorId: 'runner-new',
+        resultStatus: 'OK',
+        issueType: 'UNKNOWN_CARD',
+        issueState: 'RESOLVED',
+      }
+    )[0];
+
+    expect(isEligibleWrongCompetitorReadout(unknown)).toBe(false);
+    expect(isEligibleWrongCompetitorReadout(promoted)).toBe(true);
   });
 
   it('keeps the original match while updating the current competitor repeatedly', () => {
@@ -200,7 +252,36 @@ describe('readout history ordering', () => {
     });
   });
 
-  it('keeps a reassignment draft out of Outstanding Issues until confirmation', () => {
+  it('clears only a pending wrong-competitor issue after a failed request', () => {
+    const record = {
+      ...createRecord('readout-failed-correction', 1, 'PROCESSED'),
+      issueType: 'WRONG_COMPETITOR' as const,
+      issueState: 'OPEN' as const,
+    };
+
+    const rollback = getWrongCompetitorIssueUpdateForFailure(record);
+    expect(rollback).toEqual({
+      issueType: null,
+      issueState: 'NONE',
+    });
+    expect(
+      updateReadoutHistoryRecord([record], record.clientReadoutId, rollback ?? {})[0]
+    ).toMatchObject({ issueType: null, issueState: 'NONE' });
+    expect(
+      getWrongCompetitorIssueUpdateForFailure({
+        ...record,
+        issueType: 'MP_REVIEW',
+      })
+    ).toBeNull();
+    expect(
+      getWrongCompetitorIssueUpdateForFailure({
+        ...record,
+        issueState: 'RESOLVED',
+      })
+    ).toBeNull();
+  });
+
+  it('keeps a reassignment draft out of Outstanding Issues until correction succeeds', () => {
     const record = {
       ...createRecord('readout-reassignment-draft', 1, 'PROCESSED'),
       competitorId: 'anna',
@@ -210,27 +291,23 @@ describe('readout history ordering', () => {
 
     expect(filterOutstandingReadouts([record])).toEqual([]);
 
-    const issueUpdate = getWrongCompetitorIssueUpdateForConfirmation(record);
-    expect(issueUpdate).toEqual({
-      issueType: 'WRONG_COMPETITOR',
-      issueState: 'OPEN',
-    });
     const committed = updateReadoutHistoryRecord(
       [record],
       record.clientReadoutId,
-      issueUpdate ?? {}
+      {
+        issueType: 'WRONG_COMPETITOR',
+        issueState: 'RESOLVED',
+        correctionOperationId: 'readout-correction-1',
+      }
     )[0];
-    expect(filterOutstandingReadouts([committed])).toEqual([committed]);
-
-    const resolved = updateReadoutHistoryRecord(
-      [committed],
-      committed.clientReadoutId,
-      { issueState: 'RESOLVED', correctionOperationId: 'readout-correction-1' }
-    )[0];
-    expect(filterOutstandingReadouts([resolved])).toEqual([]);
+    expect(filterOutstandingReadouts([committed])).toEqual([]);
+    expect(committed).toMatchObject({
+      issueType: 'WRONG_COMPETITOR',
+      issueState: 'RESOLVED',
+    });
   });
 
-  it('preserves an existing open reassignment issue instead of creating another', () => {
+  it('keeps an existing open reassignment issue visible until its request fails', () => {
     const record = {
       ...createRecord('readout-existing-reassignment', 1, 'PROCESSED'),
       competitorId: 'anna',
@@ -240,8 +317,11 @@ describe('readout history ordering', () => {
       issueState: 'OPEN' as const,
     };
 
-    expect(getWrongCompetitorIssueUpdateForConfirmation(record)).toBeNull();
     expect(filterOutstandingReadouts([record])).toEqual([record]);
+    expect(getWrongCompetitorIssueUpdateForFailure(record)).toEqual({
+      issueType: null,
+      issueState: 'NONE',
+    });
   });
 
   it('keeps the newest captured readout latest when responses arrive out of order', () => {
@@ -398,8 +478,8 @@ describe('readout history ordering', () => {
       competitorId: competitor.id,
       resultStatus: 'MP',
     });
-    expect(getReadoutStatusText(duplicate)).toBe('Redan avläst');
-    expect(getReadoutStatusPresentation(duplicate).tone).toBe('info');
+    expect(getReadoutStatusText(duplicate)).toBe('MP');
+    expect(getReadoutStatusPresentation(duplicate).tone).toBe('mp');
     expect(filterOutstandingReadouts([duplicate])).toEqual([]);
   });
 

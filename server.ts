@@ -4604,7 +4604,8 @@ async function startServer() {
           req.body?.competitor,
           req.body?.runnerCandidate,
           req.body?.runnerProfileId,
-          req.body?.isBorrowedCard
+          req.body?.isBorrowedCard,
+          req.body?.readoutReceiptPromotion
         );
         res.status(201).json(result);
       } catch (error) {

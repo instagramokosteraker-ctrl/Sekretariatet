@@ -54,6 +54,7 @@ function makeRecord(
       source: 'USB_WEBSERIAL',
     },
     readoutState: 'PROCESSED',
+    receiptStatus: 'PROCESSED',
     deliveryState: 'SYNCED',
     competitorId: 'competitor-1',
     competitorName: 'Test Runner',
@@ -174,6 +175,21 @@ describe('ReadoutHistoryRow', () => {
     expect(onSelect).toHaveBeenCalledWith(record, true);
   });
 
+  it('hides reassignment when the receipt is not a processed result', () => {
+    const record = makeRecord({ receiptStatus: 'UNKNOWN' });
+    const buttons = findButtons(
+      ReadoutHistoryRow({
+        record,
+        isLatest: false,
+        isExpanded: false,
+        placementLabel: '—',
+        onSelect: vi.fn(),
+      })
+    );
+
+    expect(buttons.some((button) => button.props.children === 'Fel löpare')).toBe(false);
+  });
+
   it('exposes selected state on the open-details button', () => {
     const record = reopenCases[0].record;
     const rowButton = findButtons(
@@ -204,5 +220,27 @@ describe('ReadoutHistoryRow', () => {
     expect(text).toContain('Senaste');
     expect(text).toContain('Placering: 1/1');
     expect(text).toContain('Row actions');
+  });
+
+  it('renders result, issue, and delivery as separate badges without changing result color', () => {
+    const record = makeRecord({
+      issueType: 'WRONG_COMPETITOR',
+      issueState: 'OPEN',
+    });
+    const element = ReadoutHistoryRow({
+      record,
+      isLatest: false,
+      isExpanded: false,
+      placementLabel: '1/1',
+      onSelect: vi.fn(),
+    });
+    const text = findText(element);
+
+    expect(text).toContain('OK');
+    expect(text).toContain('Fel löpare');
+    expect(text).toContain('Åtgärd krävs');
+    expect(text).toContain('Synkad');
+    expect(element.props.className).toContain('bg-emerald-100');
+    expect(element.props.className).not.toContain('bg-orange');
   });
 });

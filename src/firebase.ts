@@ -7076,10 +7076,12 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       clientReadoutId?: string;
       captureSequence?: number;
       capturedAt?: string;
+      stationCode?: number;
       checkTimeSec?: number | null;
       startTimeSec?: number | null;
       finishTimeSec?: number | null;
       punches?: CardPunch[];
+      rawHex?: string;
     };
   };
   competitors: Competitor[];
@@ -7153,9 +7155,32 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   ) + 1;
   const nowIso = new Date().toISOString();
   const pendingReadout = params.payload.pendingReadout;
+  const pendingReadoutId = pendingReadout?.clientReadoutId;
+  if (pendingReadout && !pendingReadoutId) {
+    throw new Error('Direktanmälan saknar avläsningens kvitto-ID.');
+  }
   const rawPunches = Array.isArray(pendingReadout?.punches)
     ? pendingReadout.punches.slice(0, 192).map((punch) => ({ ...punch }))
     : [];
+  const pendingStationCode = pendingReadout?.stationCode;
+  const readoutReceiptPromotion = pendingReadout && pendingReadoutId
+    ? {
+        clientReadoutId: pendingReadoutId,
+        stationCode:
+          pendingStationCode !== undefined &&
+          Number.isInteger(pendingStationCode) &&
+          pendingStationCode >= 1 &&
+          pendingStationCode <= 999
+            ? pendingStationCode
+            : 1,
+        checkTimeSec: encodeNullableSec(pendingReadout.checkTimeSec ?? null),
+        startTimeSec: encodeNullableSec(pendingReadout.startTimeSec ?? null),
+        finishTimeSec: encodeNullableSec(pendingReadout.finishTimeSec ?? null),
+        punchCodes: rawPunches.map((punch) => punch.code),
+        punchTimes: rawPunches.map((punch) => punch.timeSec),
+        rawHex: (pendingReadout.rawHex || '').slice(0, 2000),
+      }
+    : undefined;
   const allocatedStartSec = params.payload.allocatedStartSec ?? null;
   const effectiveStart =
     pendingReadout?.startTimeSec ?? allocatedStartSec ?? Number(competitionData.zeroTimeSec ?? 36000);
@@ -7497,6 +7522,11 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
   };
 
   const fallbackToClientFirestore = async (apiFailure: string): Promise<void> => {
+    if (pendingReadout) {
+      throw new Error(
+        `${apiFailure} Den readout-kopplade direktanmälan kunde inte sparas eftersom servern inte bekräftade kvittot.`
+      );
+    }
     try {
       const result = await writeDirectlyToFirestore();
       runnerDbEntry = result.runnerDbEntry;
@@ -7515,6 +7545,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
     runnerCandidate,
     runnerProfileId,
     isBorrowedCard: competitor.isBorrowedCard,
+    readoutReceiptPromotion,
   });
   let response: Response | null = null;
   try {
@@ -7542,6 +7573,7 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
       message?: unknown;
       runnerDbEntry?: RunnerDbEntry | null;
       previousRunnerSiNumber?: number | null;
+      readoutReceiptId?: unknown;
     };
     const apiMessage =
       typeof result.error === 'string'
@@ -7563,6 +7595,14 @@ export async function saveDirectCompetitionEntryToFirestore(params: {
         throw new Error(apiMessage);
       }
     } else {
+      if (
+        readoutReceiptPromotion &&
+        result.readoutReceiptId !== readoutReceiptPromotion.clientReadoutId
+      ) {
+        throw new Error(
+          'Deltagaren sparades inte med ett bekräftat avläsningskvitto.'
+        );
+      }
       runnerDbEntry = result.runnerDbEntry ?? null;
       previousRunnerSiNumber = result.previousRunnerSiNumber ?? null;
     }

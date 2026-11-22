@@ -17,14 +17,6 @@ export type ReadoutStatusInput = Pick<
   'resultStatus' | 'readoutState' | 'issueType' | 'issueState'
 >;
 
-const TECHNICAL_ISSUE_TYPES = new Set<ReadoutIssueType>([
-  'LOCAL_PERSISTENCE_FAILURE',
-  'CORRECTION_FAILURE',
-  'SYNC_INTERVENTION_REQUIRED',
-  'CORRUPTED_PAYLOAD',
-  'UNRECOVERABLE_VALIDATION_FAILURE',
-]);
-
 const ISSUE_LABELS: Record<ReadoutIssueType, string> = {
   UNKNOWN_CARD: 'Okänd bricka',
   UNLINKED_COMPETITOR: 'Ej kopplad löpare',
@@ -59,6 +51,40 @@ const SURFACE_CLASSES: Record<ReadoutStatusTone, string> = {
   neutral: 'bg-white dark:bg-slate-900',
 };
 
+export function getReadoutIssueBadgeClass(record: ReadoutStatusInput): string {
+  if (record.issueState === 'OPEN' || record.issueState === 'IN_PROGRESS') {
+    return record.issueType &&
+      [
+        'LOCAL_PERSISTENCE_FAILURE',
+        'CORRECTION_FAILURE',
+        'SYNC_INTERVENTION_REQUIRED',
+        'CORRUPTED_PAYLOAD',
+        'UNRECOVERABLE_VALIDATION_FAILURE',
+      ].includes(record.issueType)
+      ? 'bg-red-200 text-red-900 dark:bg-red-950/70 dark:text-red-200'
+      : 'bg-orange-200 text-orange-900 dark:bg-orange-950/70 dark:text-orange-200';
+  }
+  if (record.issueType === 'DUPLICATE_READOUT') {
+    return 'bg-sky-200 text-sky-900 dark:bg-sky-950/70 dark:text-sky-200';
+  }
+  return 'bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-200';
+}
+
+export function getReadoutDeliveryBadgeClass(
+  deliveryState: ReadoutHistoryRecord['deliveryState']
+): string {
+  if (deliveryState === 'SYNCED') {
+    return 'bg-emerald-200 text-emerald-900 dark:bg-emerald-950/70 dark:text-emerald-200';
+  }
+  if (deliveryState === 'SAVE_FAILED') {
+    return 'bg-red-200 text-red-900 dark:bg-red-950/70 dark:text-red-200';
+  }
+  if (deliveryState === 'QUEUED' || deliveryState === 'PERSISTING') {
+    return 'bg-amber-200 text-amber-900 dark:bg-amber-950/70 dark:text-amber-200';
+  }
+  return 'bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-200';
+}
+
 export function getReadoutStatusPresentation(record: ReadoutStatusInput | null): {
   tone: ReadoutStatusTone;
   surfaceClass: string;
@@ -66,20 +92,7 @@ export function getReadoutStatusPresentation(record: ReadoutStatusInput | null):
   let tone: ReadoutStatusTone = 'neutral';
 
   if (record) {
-    const hasOpenIssue =
-      record.issueState === 'OPEN' || record.issueState === 'IN_PROGRESS';
-
-    if (hasOpenIssue) {
-      tone =
-        record.issueType && TECHNICAL_ISSUE_TYPES.has(record.issueType)
-          ? 'error'
-          : 'action';
-    } else if (
-      record.issueType === 'DUPLICATE_READOUT' &&
-      record.issueState === 'NONE'
-    ) {
-      tone = 'info';
-    } else if (record.resultStatus === 'MP') {
+    if (record.resultStatus === 'MP') {
       tone = 'mp';
     } else if (record.resultStatus === 'OK') {
       tone = 'success';
@@ -98,6 +111,7 @@ export function getReadoutIssueLabel(
 export function getReadoutIssueStateLabel(
   issueState: ReadoutIssueState
 ): string | null {
+  if (issueState === 'OPEN') return 'Åtgärd krävs';
   return ISSUE_STATE_LABELS[issueState];
 }
 
@@ -126,22 +140,10 @@ export function getReadoutIssueSummary(
 }
 
 export function getReadoutStatusText(record: ReadoutStatusInput): string {
-  if (
-    record.issueType === 'DUPLICATE_READOUT' &&
-    record.issueState === 'NONE'
-  ) {
-    return 'Redan avläst';
-  }
-
-  const resultLabel =
+  return (
     record.resultStatus ??
-    (record.readoutState === 'UNKNOWN' ? 'Okänd bricka' : 'Avläsning sparad');
-  const issueSummary = getReadoutIssueSummary(record);
-
-  if (!issueSummary) return resultLabel;
-  return record.resultStatus
-    ? `${record.resultStatus} · ${issueSummary}`
-    : issueSummary;
+    (record.readoutState === 'UNKNOWN' ? 'Okänd bricka' : 'Avläsning sparad')
+  );
 }
 
 export function getReadoutDeliveryLabel(

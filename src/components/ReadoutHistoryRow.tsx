@@ -10,7 +10,11 @@ import {
   formatSiNumber,
 } from '../services/sportidentProtocol';
 import {
+  getReadoutDeliveryBadgeClass,
   getReadoutDeliveryLabel,
+  getReadoutIssueBadgeClass,
+  getReadoutIssueLabel,
+  getReadoutIssueStateLabel,
   getReadoutStatusPresentation,
   getReadoutStatusText,
 } from '../utils/readoutStatusPresentation';
@@ -34,6 +38,8 @@ export function ReadoutHistoryRow({
 }: ReadoutHistoryRowProps) {
   const status = getReadoutStatusPresentation(record);
   const statusText = getReadoutStatusText(record);
+  const issueLabel = getReadoutIssueLabel(record.issueType);
+  const issueStateLabel = getReadoutIssueStateLabel(record.issueState);
   const runnerName =
     record.competitorName ?? record.suggestedRunner?.fullName ?? 'Okänd bricka';
   const finishTime = formatSecondsAsClock(record.readout.finishTimeSec);
@@ -92,12 +98,28 @@ export function ReadoutHistoryRow({
               </span>
             </span>
           </span>
-          <span className="flex shrink-0 items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-            <span className="text-right">
-              <span className="block font-medium">{statusText}</span>
-              <span className="block text-[10px]">
-                {getReadoutDeliveryLabel(record.deliveryState)}
+          <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 text-[10px]">
+            <span className="rounded-full bg-white/70 px-2 py-1 font-semibold text-slate-900 dark:bg-slate-950/50 dark:text-slate-100">
+              {statusText}
+            </span>
+            {(issueLabel || issueStateLabel) && (
+              <span
+                className={`rounded-full px-2 py-1 font-semibold ${getReadoutIssueBadgeClass(record)}`}
+              >
+                {issueLabel ?? issueStateLabel}
               </span>
+            )}
+            {issueLabel && issueStateLabel && (
+              <span
+                className={`rounded-full px-2 py-1 font-semibold ${getReadoutIssueBadgeClass(record)}`}
+              >
+                {issueStateLabel}
+              </span>
+            )}
+            <span
+              className={`rounded-full px-2 py-1 font-semibold ${getReadoutDeliveryBadgeClass(record.deliveryState)}`}
+            >
+              {getReadoutDeliveryLabel(record.deliveryState)}
             </span>
             {isExpanded ? (
               <ChevronDown aria-hidden="true" className="h-4 w-4" />
