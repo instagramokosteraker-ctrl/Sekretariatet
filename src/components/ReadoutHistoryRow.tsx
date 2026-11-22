@@ -1,22 +1,14 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
-import {
-  isEligibleWrongCompetitorReadout,
-  type ReadoutHistoryRecord,
-} from '../services/readoutHistoryStore';
+import type { ReadoutHistoryRecord } from '../services/readoutHistoryStore';
 import {
   formatDurationMmSs,
   formatSecondsAsClock,
   formatSiNumber,
 } from '../services/sportidentProtocol';
 import {
-  getReadoutDeliveryBadgeClass,
-  getReadoutDeliveryLabel,
-  getReadoutIssueBadgeClass,
-  getReadoutIssueLabel,
-  getReadoutIssueStateLabel,
   getReadoutStatusPresentation,
-  getReadoutStatusText,
+  getReadoutTimelinePrimaryState,
 } from '../utils/readoutStatusPresentation';
 
 interface ReadoutHistoryRowProps {
@@ -37,19 +29,12 @@ export function ReadoutHistoryRow({
   children,
 }: ReadoutHistoryRowProps) {
   const status = getReadoutStatusPresentation(record);
-  const statusText = getReadoutStatusText(record);
-  const issueLabel = getReadoutIssueLabel(record.issueType);
-  const issueStateLabel = getReadoutIssueStateLabel(record.issueState);
+  const primaryState = getReadoutTimelinePrimaryState(record);
   const runnerName =
     record.competitorName ?? record.suggestedRunner?.fullName ?? 'Okänd bricka';
   const finishTime = formatSecondsAsClock(record.readout.finishTimeSec);
   const runningTime = record.competitorSnapshot?.runningTimeSec;
   const bomSec = record.competitorSnapshot?.validation?.totalTimeLossSec;
-  const canRegisterUnknownCard =
-    record.issueType === 'UNKNOWN_CARD' &&
-    record.issueState !== 'RESOLVED' &&
-    record.issueState !== 'DISMISSED';
-  const canCorrectCompetitor = isEligibleWrongCompetitorReadout(record);
 
   return (
     <li
@@ -98,28 +83,12 @@ export function ReadoutHistoryRow({
               </span>
             </span>
           </span>
-          <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 text-[10px]">
-            <span className="rounded-full bg-white/70 px-2 py-1 font-semibold text-slate-900 dark:bg-slate-950/50 dark:text-slate-100">
-              {statusText}
-            </span>
-            {(issueLabel || issueStateLabel) && (
-              <span
-                className={`rounded-full px-2 py-1 font-semibold ${getReadoutIssueBadgeClass(record)}`}
-              >
-                {issueLabel ?? issueStateLabel}
-              </span>
-            )}
-            {issueLabel && issueStateLabel && (
-              <span
-                className={`rounded-full px-2 py-1 font-semibold ${getReadoutIssueBadgeClass(record)}`}
-              >
-                {issueStateLabel}
-              </span>
-            )}
+          <span className="flex shrink-0 items-center justify-end gap-1.5 text-[10px]">
             <span
-              className={`rounded-full px-2 py-1 font-semibold ${getReadoutDeliveryBadgeClass(record.deliveryState)}`}
+              data-readout-primary-state="true"
+              className="rounded-full bg-white/70 px-2 py-1 font-semibold text-slate-900 dark:bg-slate-950/50 dark:text-slate-100"
             >
-              {getReadoutDeliveryLabel(record.deliveryState)}
+              {primaryState}
             </span>
             {isExpanded ? (
               <ChevronDown aria-hidden="true" className="h-4 w-4" />
@@ -131,25 +100,6 @@ export function ReadoutHistoryRow({
             )}
           </span>
         </button>
-        {canRegisterUnknownCard && (
-          <button
-            type="button"
-            onClick={() => onSelect(record, true)}
-            className="shrink-0 cursor-pointer px-3 py-2 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/40 dark:focus-visible:outline-amber-300"
-          >
-            Anmäl
-          </button>
-        )}
-        {canCorrectCompetitor && (
-          <button
-            type="button"
-            aria-label={`Korrigera löpare för avläsning nr ${record.captureSequence}`}
-            onClick={() => onSelect(record, true)}
-            className="shrink-0 cursor-pointer px-3 py-2 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:focus-visible:outline-amber-300"
-          >
-            Fel löpare
-          </button>
-        )}
       </div>
       {isExpanded && (
         <div

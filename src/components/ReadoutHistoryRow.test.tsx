@@ -10,6 +10,7 @@ interface TestElementProps {
   'aria-expanded'?: boolean;
   'aria-pressed'?: boolean;
   className?: string;
+  'data-readout-primary-state'?: string;
   'data-readout-history-primary'?: string;
   type?: string;
 }
@@ -30,6 +31,15 @@ function findText(node: ReactNode): string[] {
   if (Array.isArray(node)) return node.flatMap(findText);
   if (!isValidElement<TestElementProps>(node)) return [];
   return findText(node.props.children);
+}
+
+function findPrimaryStateLabels(node: ReactNode): string[] {
+  if (Array.isArray(node)) return node.flatMap(findPrimaryStateLabels);
+  if (!isValidElement<TestElementProps>(node)) return [];
+  if (node.props['data-readout-primary-state'] === 'true') {
+    return findText(node.props.children);
+  }
+  return findPrimaryStateLabels(node.props.children);
 }
 
 function makeRecord(
@@ -132,47 +142,45 @@ describe('ReadoutHistoryRow', () => {
     expect(selectedRecord).toBe(record);
   });
 
-  it('keeps the unknown-card registration action separate from opening the row', () => {
+  it('keeps unknown-card registration inside the expanded row', () => {
     const record = reopenCases.find(({ label }) => label === 'unknown-card')!.record;
     const onSelect = vi.fn();
-    const buttons = findButtons(
-      ReadoutHistoryRow({
+    const collapsed = ReadoutHistoryRow({
         record,
         isLatest: false,
         isExpanded: false,
         placementLabel: '—',
         onSelect,
-      })
-    );
-    const registerButton = buttons.find((button) => button.props.children === 'Anmäl');
+      children: <button type="button">Anmäl</button>,
+    });
 
-    expect(buttons).toHaveLength(2);
-    expect(registerButton).toBeDefined();
+    expect(findButtons(collapsed)).toHaveLength(1);
+    expect(findText(collapsed)).not.toContain('Anmäl');
 
-    registerButton?.props.onClick?.();
+    const expanded = ReadoutHistoryRow({
+      record,
+      isLatest: false,
+      isExpanded: true,
+      placementLabel: '—',
+      onSelect,
+      children: <button type="button">Anmäl</button>,
+    });
 
-    expect(onSelect).toHaveBeenCalledWith(record, true);
+    expect(findText(expanded)).toContain('Anmäl');
   });
 
-  it('offers a direct correction action for eligible readouts', () => {
+  it('keeps reassignment inside the expanded row', () => {
     const record = reopenCases[0].record;
-    const onSelect = vi.fn();
-    const buttons = findButtons(
-      ReadoutHistoryRow({
-        record,
-        isLatest: false,
-        isExpanded: false,
-        placementLabel: '—',
-        onSelect,
-      })
-    );
-    const correctionButton = buttons.find(
-      (button) => button.props.children === 'Fel löpare'
-    );
+    const expanded = ReadoutHistoryRow({
+      record,
+      isLatest: false,
+      isExpanded: true,
+      placementLabel: '—',
+      onSelect: vi.fn(),
+      children: <button type="button">Bekräfta korrigering</button>,
+    });
 
-    expect(correctionButton).toBeDefined();
-    correctionButton?.props.onClick?.();
-    expect(onSelect).toHaveBeenCalledWith(record, true);
+    expect(findText(expanded)).toContain('Bekräfta korrigering');
   });
 
   it('hides reassignment when the receipt is not a processed result', () => {
@@ -222,7 +230,7 @@ describe('ReadoutHistoryRow', () => {
     expect(text).toContain('Row actions');
   });
 
-  it('renders result, issue, and delivery as separate badges without changing result color', () => {
+  it('renders one operational state in the collapsed row without delivery or issue-state labels', () => {
     const record = makeRecord({
       issueType: 'WRONG_COMPETITOR',
       issueState: 'OPEN',
@@ -236,11 +244,54 @@ describe('ReadoutHistoryRow', () => {
     });
     const text = findText(element);
 
-    expect(text).toContain('OK');
     expect(text).toContain('Fel löpare');
-    expect(text).toContain('Åtgärd krävs');
-    expect(text).toContain('Synkad');
+    expect(text).not.toContain('OK');
+    expect(text).not.toContain('Åtgärd krävs');
+    expect(text).not.toContain('Synkad');
     expect(element.props.className).toContain('bg-emerald-100');
     expect(element.props.className).not.toContain('bg-orange');
+  });
+
+  it.each([
+    { label: 'OK', record: makeRecord() },
+    { label: 'MP', record: makeRecord({ resultStatus: 'MP' }) },
+    {
+      label: 'Okänd bricka',
+      record: makeRecord({
+        readoutState: 'UNKNOWN',
+        competitorId: null,
+        competitorName: null,
+        resultStatus: null,
+        issueType: 'UNKNOWN_CARD',
+        issueState: 'OPEN',
+      }),
+    },
+    {
+      label: 'Fel löpare',
+      record: makeRecord({
+        issueType: 'WRONG_COMPETITOR',
+        issueState: 'OPEN',
+      }),
+    },
+    {
+      label: 'Redan avläst',
+      record: makeRecord({
+        issueType: 'DUPLICATE_READOUT',
+        issueState: 'NONE',
+      }),
+    },
+  ])('shows only $label as the collapsed operational state', ({ label, record }) => {
+    const element = ReadoutHistoryRow({
+        record,
+        isLatest: false,
+        isExpanded: false,
+        placementLabel: '—',
+        onSelect: vi.fn(),
+      });
+    const text = findText(element);
+
+    expect(findPrimaryStateLabels(element)).toEqual([label]);
+    expect(text).not.toContain('Synkad');
+    expect(text).not.toContain('Löst');
   });
 });
