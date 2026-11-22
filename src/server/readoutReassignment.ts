@@ -1,4 +1,8 @@
-import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import {
+  FieldValue,
+  type DocumentSnapshot,
+  type Firestore,
+} from 'firebase-admin/firestore';
 import type {
   ClassCompetitionFormat,
   CompClass,
@@ -126,6 +130,7 @@ function toClass(id: string, value: unknown): CompClass {
 function readAuditEntry(value: unknown): ReadoutReassignmentAuditEntry {
   const data = asRecord(value);
   const original = asRecord(data.originalCompetitor);
+  const previous = asRecord(data.previousCompetitor);
   const corrected = asRecord(data.correctedCompetitor);
   const result = asRecord(data.result);
   const timestamp = timestampToIso(data.timestamp);
@@ -135,8 +140,12 @@ function readAuditEntry(value: unknown): ReadoutReassignmentAuditEntry {
     typeof data.actorUid !== 'string' ||
     typeof data.actorRole !== 'string' ||
     typeof data.reason !== 'string' ||
+    (data.sequence !== undefined &&
+      (!Number.isInteger(data.sequence) || Number(data.sequence) < 1)) ||
     typeof original.id !== 'string' ||
     typeof original.name !== 'string' ||
+    (previous.id !== undefined && typeof previous.id !== 'string') ||
+    (previous.name !== undefined && typeof previous.name !== 'string') ||
     typeof corrected.id !== 'string' ||
     typeof corrected.name !== 'string' ||
     !timestamp ||
@@ -155,8 +164,13 @@ function readAuditEntry(value: unknown): ReadoutReassignmentAuditEntry {
     actorUid: data.actorUid,
     actorRole: data.actorRole as ResultReassignmentActorRole,
     timestamp,
+    ...(Number.isInteger(data.sequence) ? { sequence: Number(data.sequence) } : {}),
     reason: data.reason,
     originalCompetitor: { id: original.id, name: original.name },
+    previousCompetitor: {
+      id: typeof previous.id === 'string' ? previous.id : original.id,
+      name: typeof previous.name === 'string' ? previous.name : original.name,
+    },
     correctedCompetitor: { id: corrected.id, name: corrected.name },
     result: {
       status: 'APPLIED',
@@ -236,7 +250,11 @@ export async function listReadoutReassignmentAudits(
     .get();
   return snapshots.docs
     .map((snapshot) => readAuditEntry(snapshot.data()))
-    .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    .sort(
+      (left, right) =>
+        (left.sequence ?? 0) - (right.sequence ?? 0) ||
+        left.timestamp.localeCompare(right.timestamp)
+    );
 }
 
 export async function reassignReadoutResult(
@@ -347,29 +365,92 @@ export async function reassignReadoutResult(
     const receipt = receiptSnapshot.data() ?? {};
     const originalCompetitorId =
       typeof receipt.competitorId === 'string' ? receipt.competitorId : '';
+    const existingReadoutCorrections = await transaction.get(
+      operationCollection.where('readoutId', '==', readoutId)
+    );
+    const correctionSequence = (snapshot: DocumentSnapshot) => {
+      const sequence = snapshot.get('sequence');
+      return Number.isInteger(sequence) && Number(sequence) > 0
+        ? Number(sequence)
+        : 0;
+    };
+    const appliedCorrections = existingReadoutCorrections.docs
+      .filter((snapshot) => snapshot.get('result.status') === 'APPLIED')
+      .sort((left, right) => {
+        return (
+          correctionSequence(left) - correctionSequence(right) ||
+          String(timestampToIso(left.get('timestamp')) ?? '').localeCompare(
+            String(timestampToIso(right.get('timestamp')) ?? '')
+          )
+        );
+      });
+    const latestCorrection = appliedCorrections[appliedCorrections.length - 1];
+    const latestCorrectedCompetitorId =
+      typeof latestCorrection?.get('correctedCompetitorId') === 'string'
+        ? latestCorrection.get('correctedCompetitorId')
+        : latestCorrection?.get('correctedCompetitor.id');
+    const hasCurrentCompetitorId = Object.prototype.hasOwnProperty.call(
+      receipt,
+      'currentCompetitorId'
+    );
+    const storedCurrentCompetitorId =
+      hasCurrentCompetitorId && typeof receipt.currentCompetitorId === 'string'
+        ? receipt.currentCompetitorId
+        : hasCurrentCompetitorId
+          ? ''
+          : null;
+    if (
+      typeof latestCorrectedCompetitorId === 'string' &&
+      storedCurrentCompetitorId !== null &&
+      storedCurrentCompetitorId !== latestCorrectedCompetitorId
+    ) {
+      throw new ReadoutReassignmentError(
+        409,
+        'Readout owner conflicts with its correction history.'
+      );
+    }
+    const currentCompetitorId =
+      storedCurrentCompetitorId ??
+      (typeof latestCorrectedCompetitorId === 'string'
+        ? latestCorrectedCompetitorId
+        : originalCompetitorId);
+    const reassignmentSequence = Math.max(
+      Number.isInteger(receipt.reassignmentSequence) &&
+        Number(receipt.reassignmentSequence) >= 0
+        ? Number(receipt.reassignmentSequence)
+        : 0,
+      appliedCorrections.reduce(
+        (latest, snapshot) =>
+          Math.max(latest, correctionSequence(snapshot)),
+        0
+      ),
+      appliedCorrections.length
+    );
     if (
       receipt.receiptId !== readoutId ||
       receipt.clientReadoutId !== readoutId ||
       receipt.competitionId !== competitionId ||
       receipt.status !== 'PROCESSED' ||
-      !VALID_ID.test(originalCompetitorId)
+      !VALID_ID.test(originalCompetitorId) ||
+      !VALID_ID.test(currentCompetitorId)
     ) {
       throw new ReadoutReassignmentError(409, 'Readout receipt is not a processed result.');
     }
-    if (targetCompetitorId === originalCompetitorId) {
+    if (targetCompetitorId === currentCompetitorId) {
       throw new ReadoutReassignmentError(400, 'Choose a different competitor.');
     }
 
-    const sourceRef = competitorCollection.doc(originalCompetitorId);
+    const sourceRef = competitorCollection.doc(currentCompetitorId);
     const sourcePublicRef = competitionRef
       .collection('publicResults')
-      .doc(originalCompetitorId);
+      .doc(currentCompetitorId);
     const targetPublicRef = competitionRef
       .collection('publicResults')
       .doc(targetCompetitorId);
     const [sourceSnapshot, targetSnapshot, competitorsSnapshot, classesSnapshot, coursesSnapshot,
-      sourcePublicSnapshot, targetPublicSnapshot, sourceReceiptsSnapshot,
-      targetReceiptsSnapshot, existingReadoutCorrections] = await Promise.all([
+      sourcePublicSnapshot, targetPublicSnapshot, originalSourceReceiptsSnapshot,
+      currentSourceReceiptsSnapshot, originalTargetReceiptsSnapshot,
+      currentTargetReceiptsSnapshot] = await Promise.all([
       transaction.get(sourceRef),
       transaction.get(targetRef),
       transaction.get(competitorCollection),
@@ -377,12 +458,17 @@ export async function reassignReadoutResult(
       transaction.get(competitionRef.collection('courses')),
       transaction.get(sourcePublicRef),
       transaction.get(targetPublicRef),
-      transaction.get(receiptCollection.where('competitorId', '==', originalCompetitorId)),
+      transaction.get(receiptCollection.where('competitorId', '==', currentCompetitorId)),
+      transaction.get(
+        receiptCollection.where('currentCompetitorId', '==', currentCompetitorId)
+      ),
       transaction.get(receiptCollection.where('competitorId', '==', targetCompetitorId)),
-      transaction.get(operationCollection.where('readoutId', '==', readoutId)),
+      transaction.get(
+        receiptCollection.where('currentCompetitorId', '==', targetCompetitorId)
+      ),
     ]);
     if (!sourceSnapshot.exists) {
-      throw new ReadoutReassignmentError(409, 'Original competitor no longer exists.');
+      throw new ReadoutReassignmentError(409, 'Current competitor no longer exists.');
     }
     if (!targetSnapshot.exists) {
       throw new ReadoutReassignmentError(404, 'Target competitor was not found.');
@@ -392,7 +478,7 @@ export async function reassignReadoutResult(
     if (!isReassignableReadoutResultStatus(sourceData.status)) {
       throw new ReadoutReassignmentError(
         409,
-        'The original result is no longer an eligible readout result.'
+        'The current result is no longer an eligible readout result.'
       );
     }
     if (decodeSeconds(sourceData.manualFinishTimeSec) !== null) {
@@ -401,25 +487,55 @@ export async function reassignReadoutResult(
         'A manually timed result cannot be reassigned as a readout result.'
       );
     }
-    const competingSourceReceipts = sourceReceiptsSnapshot.docs.filter(
-      (snapshot) => snapshot.data().status === 'PROCESSED'
+    const relatedReceipts = new Map<string, DocumentSnapshot>(
+      [
+        ...originalSourceReceiptsSnapshot.docs,
+        ...currentSourceReceiptsSnapshot.docs,
+        ...originalTargetReceiptsSnapshot.docs,
+        ...currentTargetReceiptsSnapshot.docs,
+      ].map((snapshot) => [snapshot.id, snapshot] as const)
     );
-    const competingTargetReceipts = targetReceiptsSnapshot.docs.filter(
-      (snapshot) => snapshot.data().status === 'PROCESSED'
+    relatedReceipts.set(readoutId, receiptSnapshot);
+    const processedReceipts = [...relatedReceipts.values()].filter(
+      (snapshot) => snapshot.get('status') === 'PROCESSED'
     );
-    const priorReassignment = existingReadoutCorrections.docs.some(
-      (snapshot) => snapshot.data().result?.status === 'APPLIED'
+    const matchesCurrentOwner = (
+      snapshot: (typeof processedReceipts)[number],
+      competitorId: string
+    ) => {
+      const data = snapshot.data() ?? {};
+      const hasCurrentOwner = Object.prototype.hasOwnProperty.call(
+        data,
+        'currentCompetitorId'
+      );
+      if (!hasCurrentOwner) return data.competitorId === competitorId;
+      if (
+        typeof data.currentCompetitorId !== 'string' ||
+        !VALID_ID.test(data.currentCompetitorId)
+      ) {
+        return data.competitorId === competitorId;
+      }
+      return data.currentCompetitorId === competitorId;
+    };
+    const competingSourceReceipts = processedReceipts.filter(
+      (snapshot) =>
+        snapshot.id === readoutId ||
+        matchesCurrentOwner(snapshot, currentCompetitorId)
+    );
+    const competingTargetReceipts = processedReceipts.filter(
+      (snapshot) =>
+        snapshot.id !== readoutId &&
+        matchesCurrentOwner(snapshot, targetCompetitorId)
     );
     const ambiguityGuardBranches = {
       sourceReceiptCountNotOne: competingSourceReceipts.length !== 1,
       sourceReceiptIdMismatch: competingSourceReceipts[0]?.id !== readoutId,
       targetReceiptCountGreaterThanZero: competingTargetReceipts.length > 0,
-      priorReassignment,
     };
     if (Object.values(ambiguityGuardBranches).some((triggered) => triggered)) {
       console.warn('[readout-reassignment] Ambiguity guard diagnostics', {
         readoutId,
-        sourceCompetitorId: originalCompetitorId,
+        sourceCompetitorId: currentCompetitorId,
         targetCompetitorId,
         competingSourceReceipts: competingSourceReceipts.map((snapshot) => ({
           id: snapshot.id,
@@ -429,19 +545,17 @@ export async function reassignReadoutResult(
           id: snapshot.id,
           status: snapshot.get('status'),
         })),
-        priorReassignment,
         branches: ambiguityGuardBranches,
       });
     }
     if (
       competingSourceReceipts.length !== 1 ||
       competingSourceReceipts[0]?.id !== readoutId ||
-      competingTargetReceipts.length > 0 ||
-      priorReassignment
+      competingTargetReceipts.length > 0
     ) {
       throw new ReadoutReassignmentError(
         409,
-        'Multiple or previously reassigned readouts make this correction ambiguous.'
+        'Multiple or conflicting readouts make this correction ambiguous.'
       );
     }
     const targetStatus = targetData.status;
@@ -512,7 +626,7 @@ export async function reassignReadoutResult(
         emergency,
       })
     );
-    const source = competitors.find((competitor) => competitor.id === originalCompetitorId);
+    const source = competitors.find((competitor) => competitor.id === currentCompetitorId);
     const target = competitors.find((competitor) => competitor.id === targetCompetitorId);
     if (!source || !target) {
       throw new ReadoutReassignmentError(409, 'Competitor data could not be validated.');
@@ -532,7 +646,7 @@ export async function reassignReadoutResult(
             timeSec: Number(punchTimes[index]),
           })),
         } satisfies ReassignmentReadoutData,
-        originalCompetitorId,
+        currentCompetitorId,
         target,
         competitors,
         classes,
@@ -570,15 +684,33 @@ export async function reassignReadoutResult(
       resultVerification: preview.status === 'OK' ? 'SI_VERIFIED_OK' : FieldValue.delete(),
     };
     const createdAt = new Date().toISOString();
+    const initialCompetitorData =
+      competitorsSnapshot.docs
+        .find((snapshot) => snapshot.id === originalCompetitorId)
+        ?.data() ?? {};
+    const storedOriginalCompetitor = asRecord(
+      appliedCorrections[0]?.get('originalCompetitor')
+    );
+    let originalCompetitorName = '';
+    if (typeof storedOriginalCompetitor.name === 'string') {
+      originalCompetitorName = storedOriginalCompetitor.name;
+    } else if (typeof initialCompetitorData.fullName === 'string') {
+      originalCompetitorName = initialCompetitorData.fullName;
+    }
     const audit: ReadoutReassignmentAuditEntry = {
       operationId,
       readoutId,
       actorUid,
       actorRole,
       timestamp: createdAt,
+      sequence: reassignmentSequence + 1,
       reason,
       originalCompetitor: {
         id: originalCompetitorId,
+        name: originalCompetitorName,
+      },
+      previousCompetitor: {
+        id: currentCompetitorId,
         name: typeof sourceData.fullName === 'string' ? sourceData.fullName : '',
       },
       correctedCompetitor: {
@@ -633,12 +765,17 @@ export async function reassignReadoutResult(
       resultVerification: targetResultData.resultVerification,
       updatedAt: FieldValue.serverTimestamp(),
     });
+    transaction.update(receiptRef, {
+      currentCompetitorId: targetCompetitorId,
+      reassignmentSequence: reassignmentSequence + 1,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     transaction.set(
       sourcePublicRef,
       {
         ...createPublicResultDocumentFromFirestore(
           competitionId,
-          originalCompetitorId,
+          currentCompetitorId,
           sourceResultData,
           sourcePublicSnapshot.data()?.radioSplits
         ),

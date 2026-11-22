@@ -170,6 +170,7 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthGateView } from './components/AuthGateView';
 import { AccessControlView } from './components/AccessControlView';
 import { applyClubThemeToDocument } from './utils/clubTheme';
+import { getReadoutFeedbackTone } from './utils/readoutAudioFeedback';
 import {
   buildPublicCompetitionUrl,
   buildSecretariatUrl,
@@ -1256,7 +1257,7 @@ export default function App() {
         readoutHistoryStore.getRecord(record.clientReadoutId) ?? record;
       if (!isEligibleWrongCompetitorReadout(currentRecord)) {
         throw new Error(
-          'Endast en matchad OK-, MP- eller preliminär avläsning utan genomförd korrigering kan få ärendet Fel löpare.'
+          'Endast en matchad OK-, MP- eller preliminär avläsning kan korrigeras.'
         );
       }
       const issueUpdate =
@@ -1327,11 +1328,15 @@ export default function App() {
       const updatedRecord =
         readoutHistoryStore.getRecord(record.clientReadoutId) ?? record;
       const correctionAudit = [
-        result.audit,
         ...updatedRecord.correctionAudit.filter(
           (entry) => entry.operationId !== result.operationId
         ),
-      ];
+        result.audit,
+      ].sort(
+        (left, right) =>
+          (left.sequence ?? 0) - (right.sequence ?? 0) ||
+          left.timestamp.localeCompare(right.timestamp)
+      );
       await readoutHistoryStore.update(record.clientReadoutId, {
         competitorId: correctedCompetitor.id,
         competitorName: correctedCompetitor.fullName,
@@ -1370,12 +1375,20 @@ export default function App() {
     }
 
     const syncedCompetitor = res.competitor;
+    const feedbackTone = getReadoutFeedbackTone({
+      queuedOffline: res.queuedOffline,
+      duplicateReadout: Boolean(res.duplicateReadout),
+      unknownCardReadout: Boolean(res.unknownCardReadout),
+      resultStatus: syncedCompetitor?.status ?? null,
+    });
     if (res.queuedOffline) {
       await readoutHistoryStore.update(clientReadoutId, {
         deliveryState: 'QUEUED',
         syncError: null,
       });
-      if (soundEnabledRef.current) playMeosFeedbackTone('registration');
+      if (soundEnabledRef.current && feedbackTone) {
+        playMeosFeedbackTone(feedbackTone);
+      }
       return;
     }
     if (res.duplicateReadout) {
@@ -1414,7 +1427,9 @@ export default function App() {
         suggestedRunner: res.suggestedRunner ?? null,
         syncError: null,
       });
-      if (soundEnabledRef.current) playMeosFeedbackTone('mp');
+      if (soundEnabledRef.current && feedbackTone) {
+        playMeosFeedbackTone(feedbackTone);
+      }
     } else if (syncedCompetitor) {
       const currentRecord = readoutHistoryStore.getRecord(clientReadoutId);
       const className =
@@ -1452,8 +1467,8 @@ export default function App() {
           competitor.id === syncedCompetitor.id ? syncedCompetitor : competitor
         )
       );
-      if (soundEnabledRef.current) {
-        playMeosFeedbackTone(syncedCompetitor.status === 'OK' ? 'ok' : 'mp');
+      if (soundEnabledRef.current && feedbackTone) {
+        playMeosFeedbackTone(feedbackTone);
       }
     } else {
       await readoutHistoryStore.update(clientReadoutId, {

@@ -6808,10 +6808,20 @@ export async function submitReadoutToFirestore(
         };
       }
       if (
-        responseBody.competitorId !== competitorId ||
+        typeof responseBody.competitorId !== 'string' ||
         !Number.isInteger(responseBody.bib)
       ) {
         throw new Error('Serverns bekräftade deltagaridentitet är ogiltig.');
+      }
+      if (responseBody.competitorId !== competitorId) {
+        const currentCompetitor = event.competitors.find(
+          (candidate) =>
+            sanitizeFirestoreId(candidate.id, 'cmp') === responseBody.competitorId
+        );
+        if (!currentCompetitor) {
+          throw new Error('Servern bekräftade en nuvarande löpare som inte hittades.');
+        }
+        return { competitor: currentCompetitor };
       }
       createdCompetitor = {
         ...updatedCompetitor,
@@ -6942,8 +6952,11 @@ export async function submitReadoutToFirestore(
       }
       return {
         status: receipt.status === 'UNKNOWN' ? ('UNKNOWN' as const) : ('PROCESSED' as const),
-        competitorId:
-          typeof receipt.competitorId === 'string' ? receipt.competitorId : null,
+        competitorId: typeof receipt.currentCompetitorId === 'string'
+          ? receipt.currentCompetitorId
+          : typeof receipt.competitorId === 'string'
+            ? receipt.competitorId
+            : null,
       };
     }
     if (competitionData.status === 'COMPLETED') {
@@ -7027,6 +7040,7 @@ export async function submitReadoutToFirestore(
       ...commonReceipt,
       status: 'PROCESSED',
       competitorId,
+      currentCompetitorId: competitorId,
     });
     return { status: 'PROCESSED' as const, competitorId };
   });

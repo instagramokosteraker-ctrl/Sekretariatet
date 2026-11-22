@@ -75,11 +75,7 @@ export function isEligibleWrongCompetitorReadout(
   return (
     record.readoutState === 'PROCESSED' &&
     record.competitorId !== null &&
-    (record.originalCompetitorId === null ||
-      record.originalCompetitorId === record.competitorId) &&
-    isReassignableReadoutResultStatus(record.resultStatus) &&
-    !record.correctionOperationId &&
-    !record.correctionAudit.some((entry) => entry.result.status === 'APPLIED')
+    isReassignableReadoutResultStatus(record.resultStatus)
   );
 }
 

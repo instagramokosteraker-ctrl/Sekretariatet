@@ -296,13 +296,17 @@ export async function createReadoutCompetitorFromRunnerDb(
           existingReceipt.status === 'PROCESSED' &&
           typeof existingReceipt.competitorId === 'string'
         ) {
+          const currentCompetitorId =
+            typeof existingReceipt.currentCompetitorId === 'string'
+              ? existingReceipt.currentCompetitorId
+              : existingReceipt.competitorId;
           const existingCompetitor = competitorsSnapshot.docs
-            .find((snapshot) => snapshot.id === existingReceipt.competitorId)
+            .find((snapshot) => snapshot.id === currentCompetitorId)
             ?.data();
           if (existingCompetitor) {
             return {
               status: 'PROCESSED',
-              competitorId: existingReceipt.competitorId,
+              competitorId: currentCompetitorId,
               bib: Number.isInteger(existingCompetitor.bib)
                 ? existingCompetitor.bib
                 : null,
@@ -353,10 +357,20 @@ export async function createReadoutCompetitorFromRunnerDb(
       ) {
         throw new ReadoutAutoCreateError(409, 'Processed readout identity is inconsistent.');
       }
+      const currentCompetitorId =
+        typeof existingReceipt.currentCompetitorId === 'string'
+          ? existingReceipt.currentCompetitorId
+          : input.competitorId;
+      const currentCompetitor = competitorsSnapshot.docs
+        .find((snapshot) => snapshot.id === currentCompetitorId)
+        ?.data();
+      if (!currentCompetitor) {
+        throw new ReadoutAutoCreateError(409, 'Current readout owner no longer exists.');
+      }
       return {
         status: 'PROCESSED',
-        competitorId: input.competitorId,
-        bib: Number.isInteger(existingCompetitor.bib) ? existingCompetitor.bib : null,
+        competitorId: currentCompetitorId,
+        bib: Number.isInteger(currentCompetitor.bib) ? currentCompetitor.bib : null,
         replayed: true,
       };
     }
@@ -493,6 +507,7 @@ export async function createReadoutCompetitorFromRunnerDb(
       ...receiptPayload,
       status: 'PROCESSED',
       competitorId: input.competitorId,
+      currentCompetitorId: input.competitorId,
       createdAt: serverTimestamp,
     });
     return {

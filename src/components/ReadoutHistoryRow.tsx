@@ -1,5 +1,8 @@
 import { ChevronRight } from 'lucide-react';
-import type { ReadoutHistoryRecord } from '../services/readoutHistoryStore';
+import {
+  isEligibleWrongCompetitorReadout,
+  type ReadoutHistoryRecord,
+} from '../services/readoutHistoryStore';
 import { formatSiNumber } from '../services/sportidentProtocol';
 import {
   getReadoutDeliveryLabel,
@@ -24,12 +27,15 @@ export function ReadoutHistoryRow({
     record.issueType === 'UNKNOWN_CARD' &&
     record.issueState !== 'RESOLVED' &&
     record.issueState !== 'DISMISSED';
+  const canCorrectCompetitor = isEligibleWrongCompetitorReadout(record);
 
   return (
     <li className={status.surfaceClass}>
       <div className="flex items-stretch">
         <button
           type="button"
+          data-readout-history-primary="true"
+          aria-keyshortcuts="ArrowDown ArrowUp Enter"
           aria-label={`Öppna avläsning nr ${record.captureSequence}: ${
             record.competitorName ?? 'SI-bricka'
           }, SI ${formatSiNumber(record.readout.siNumber)}`}
@@ -61,6 +67,16 @@ export function ReadoutHistoryRow({
             className="shrink-0 cursor-pointer px-3 py-2 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/40 dark:focus-visible:outline-amber-300"
           >
             Anmäl
+          </button>
+        )}
+        {canCorrectCompetitor && (
+          <button
+            type="button"
+            aria-label={`Korrigera löpare för avläsning nr ${record.captureSequence}`}
+            onClick={() => onSelect(record, true)}
+            className="shrink-0 cursor-pointer px-3 py-2 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:focus-visible:outline-amber-300"
+          >
+            Fel löpare
           </button>
         )}
       </div>

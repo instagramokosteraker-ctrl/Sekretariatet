@@ -41,7 +41,7 @@ const REASSIGNABLE_TARGET_STATUSES = new Set<RunnerStatus>([
 
 export function calculateReadoutReassignmentPreview(
   readout: ReassignmentReadoutData,
-  originalCompetitorId: string,
+  sourceCompetitorId: string,
   target: Competitor,
   competitors: Competitor[],
   classes: CompClass[],
@@ -49,17 +49,17 @@ export function calculateReadoutReassignmentPreview(
   zeroTimeSec: number,
   emergency: EmergencySettings
 ): ReadoutReassignmentPreview {
-  if (!originalCompetitorId || target.id === originalCompetitorId) {
-    throw new Error('Välj en annan löpare än den ursprungliga matchningen.');
+  if (!sourceCompetitorId || target.id === sourceCompetitorId) {
+    throw new Error('Välj en annan löpare än den nuvarande matchningen.');
   }
-  const original = competitors.find(
-    (candidate) => candidate.id === originalCompetitorId
+  const source = competitors.find(
+    (candidate) => candidate.id === sourceCompetitorId
   );
-  if (!original || !competitors.some((candidate) => candidate.id === target.id)) {
-    throw new Error('Den ursprungliga eller valda löparen hittades inte i tävlingen.');
+  if (!source || !competitors.some((candidate) => candidate.id === target.id)) {
+    throw new Error('Den nuvarande eller valda löparen hittades inte i tävlingen.');
   }
-  if (!isReassignableReadoutResultStatus(original.status)) {
-    throw new Error('Det ursprungliga resultatet kan inte flyttas.');
+  if (!isReassignableReadoutResultStatus(source.status)) {
+    throw new Error('Det nuvarande resultatet kan inte flyttas.');
   }
   if (!REASSIGNABLE_TARGET_STATUSES.has(target.status)) {
     throw new Error('Löparen har redan ett resultat eller kan inte ta emot avläsningen.');
@@ -106,7 +106,7 @@ export function calculateReadoutReassignmentPreview(
     readout.punches,
     emergency
   );
-  const status: ReassignableReadoutResultStatus = original.status;
+  const status: ReassignableReadoutResultStatus = source.status;
   const correctedCompetitor: Competitor = {
     ...target,
     status,
@@ -131,8 +131,8 @@ export function calculateReadoutReassignmentPreview(
     },
     validation,
   };
-  const resetOriginal: Competitor = {
-    ...original,
+  const resetSource: Competitor = {
+    ...source,
     status: 'REGISTERED',
     checkTimeSec: null,
     startTimeSec: null,
@@ -146,8 +146,8 @@ export function calculateReadoutReassignmentPreview(
     validation: null,
   };
   const projectedCompetitors = competitors.map((candidate) =>
-    candidate.id === originalCompetitorId
-      ? resetOriginal
+    candidate.id === sourceCompetitorId
+      ? resetSource
       : candidate.id === target.id
         ? correctedCompetitor
         : candidate

@@ -212,7 +212,10 @@ export async function ingestReadout(
       }
       return {
         status: 'PROCESSED',
-        competitorId: existingReceipt.competitorId,
+        competitorId:
+          typeof existingReceipt.currentCompetitorId === 'string'
+            ? existingReceipt.currentCompetitorId
+            : existingReceipt.competitorId,
         duplicateReceiptId: null,
         replayed: true,
       };
@@ -238,6 +241,7 @@ export async function ingestReadout(
           id: snapshot.id,
           status: receipt.status,
           competitorId: receipt.competitorId,
+          currentCompetitorId: receipt.currentCompetitorId,
           siNumber: receipt.siNumber,
           cardSeries: receipt.cardSeries,
           startTimeSec: receipt.startTimeSec,
@@ -262,9 +266,15 @@ export async function ingestReadout(
       }
     );
     if (duplicateReceiptId) {
+      const duplicateReceipt = receiptCandidates.find(
+        (candidate) => candidate.id === duplicateReceiptId
+      );
       return {
         status: 'DUPLICATE',
-        competitorId: input.competitorId,
+        competitorId:
+          typeof duplicateReceipt?.currentCompetitorId === 'string'
+            ? duplicateReceipt.currentCompetitorId
+            : input.competitorId,
         duplicateReceiptId,
         replayed: false,
       };
@@ -347,6 +357,7 @@ export async function ingestReadout(
       rawHex: input.rawHex,
       status: 'PROCESSED',
       competitorId: input.competitorId,
+      currentCompetitorId: input.competitorId,
       createdAt: serverTimestamp,
     });
     return {

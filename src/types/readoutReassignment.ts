@@ -23,8 +23,13 @@ export interface ReadoutReassignmentAuditEntry {
   actorUid: string;
   actorRole: ResultReassignmentActorRole;
   timestamp: string;
+  sequence?: number;
   reason: string;
   originalCompetitor: {
+    id: string;
+    name: string;
+  };
+  previousCompetitor?: {
     id: string;
     name: string;
   };

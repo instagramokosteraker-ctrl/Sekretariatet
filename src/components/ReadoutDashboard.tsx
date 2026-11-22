@@ -51,6 +51,8 @@ import {
   getReadoutStatusText,
 } from '../utils/readoutStatusPresentation';
 import { getRunnerNameSuggestions } from '../utils/runnerNameSuggestions';
+import { getReadoutHistoryNavigationIndex } from '../utils/readoutHistoryKeyboard';
+import { getReadoutHistoryPage } from '../utils/readoutHistoryPaging';
 import { calculateReadoutReassignmentPreview } from '../utils/readoutReassignment';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
@@ -198,6 +200,8 @@ export function ReadoutDashboard({
   const [unknownCardIsBorrowed, setUnknownCardIsBorrowed] = useState(false);
   const [unknownCardStartClock, setUnknownCardStartClock] = useState('');
   const selectedReadoutPanelRef = useRef<HTMLElement | null>(null);
+  const historySectionRef = useRef<HTMLElement | null>(null);
+  const historyRowsRef = useRef<HTMLOListElement | null>(null);
   const [issueActionError, setIssueActionError] = useState<{
     clientReadoutId: string;
     message: string;
@@ -295,7 +299,7 @@ export function ReadoutDashboard({
       return {
         preview: calculateReadoutReassignmentPreview(
           selectedReadout.readout,
-          selectedReadout.originalCompetitorId ?? selectedReadout.competitorId ?? '',
+          selectedReadout.competitorId ?? '',
           target,
           competitors,
           classes,
@@ -373,10 +377,14 @@ export function ReadoutDashboard({
         String(record.readout.siNumber),
         record.competitorName ?? '',
         record.originalCompetitorName ?? '',
+        record.className ?? '',
+        record.readout.cardSeries,
+        String(record.readout.stationCode),
         record.resultStatus ?? '',
         record.originalResultStatus ?? '',
         getReadoutIssueLabel(record.issueType) ?? '',
         getReadoutIssueStateLabel(record.issueState) ?? '',
+        getReadoutDeliveryLabel(record.deliveryState),
       ].some((value) => value.toLocaleLowerCase().includes(query))
     );
   }, [historySearch, historyView, outstandingReadouts, readoutHistory]);
@@ -386,12 +394,12 @@ export function ReadoutDashboard({
   );
   const visibleHistoryPage = Math.min(historyPage, historyPageCount - 1);
   const visibleReadouts = useMemo(
-    () =>
-      filteredReadouts.slice(
-        visibleHistoryPage * historyPageSize,
-        (visibleHistoryPage + 1) * historyPageSize
-      ),
+    () => getReadoutHistoryPage(filteredReadouts, visibleHistoryPage, historyPageSize),
     [filteredReadouts, visibleHistoryPage, historyPageSize]
+  );
+  const visibleOutstandingReadouts = useMemo(
+    () => outstandingReadouts.slice(0, 5),
+    [outstandingReadouts]
   );
 
   // This detail panel is user-selected and is separate from capture-ordered Latest Readout.
@@ -659,10 +667,16 @@ export function ReadoutDashboard({
         wrongCompetitorTargetId,
         wrongCompetitorReason.trim()
       );
-      setCorrectionAudits((current) => [
-        audit,
-        ...current.filter((entry) => entry.operationId !== audit.operationId),
-      ]);
+      setCorrectionAudits((current) =>
+        [
+          ...current.filter((entry) => entry.operationId !== audit.operationId),
+          audit,
+        ].sort(
+          (left, right) =>
+            (left.sequence ?? 0) - (right.sequence ?? 0) ||
+            left.timestamp.localeCompare(right.timestamp)
+        )
+      );
       setWrongCompetitorOpen(false);
       setWrongCompetitorTargetId('');
       setWrongCompetitorReason('');
@@ -714,12 +728,52 @@ export function ReadoutDashboard({
     }
   };
 
+  const handleHistoryKeyDown = (
+    event: React.KeyboardEvent<HTMLOListElement>
+  ) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target;
+    if (
+      !(target instanceof HTMLElement) ||
+      target.closest('input, textarea, select, [contenteditable="true"]')
+    ) {
+      return;
+    }
+
+    const buttons = Array.from(
+      historyRowsRef.current?.querySelectorAll<HTMLButtonElement>(
+        'button[data-readout-history-primary="true"]'
+      ) ?? []
+    );
+    const activeIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const nextIndex = getReadoutHistoryNavigationIndex(
+      event.key,
+      activeIndex,
+      buttons.length
+    );
+    if (nextIndex === null) return;
+
+    event.preventDefault();
+    buttons[nextIndex]?.focus();
+  };
+
+  const handleShowAllOutstandingReadouts = () => {
+    setHistoryView('OUTSTANDING');
+    setHistoryPage(0);
+    window.requestAnimationFrame(() => {
+      historySectionRef.current?.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth',
+      });
+    });
+  };
+
   return (
     <div className="space-y-3.5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
         <div>
           <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-            Målavläsning & Tävlingsöversikt
+            Avläsning och översikt
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Läser ut SI-brickor (SI5–SIAC) via ansluten SI-station och validerar banor direkt.
@@ -847,6 +901,56 @@ export function ReadoutDashboard({
         ) : (
           <p className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
             Ingen SI-avläsning har fångats för tävlingen.
+          </p>
+        )}
+      </section>
+
+      <section
+        aria-labelledby="readout-action-queue-title"
+        aria-live="polite"
+        className="overflow-hidden rounded-lg border border-orange-200 bg-white dark:border-orange-900 dark:bg-slate-900"
+      >
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-orange-100 px-4 py-2.5 dark:border-orange-900/60">
+          <div>
+            <h2
+              id="readout-action-queue-title"
+              className="text-sm font-semibold text-slate-900 dark:text-slate-100"
+            >
+              Kräver åtgärd
+            </h2>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Öppna ärenden hanteras här utan att stoppa nästa avläsning.
+            </p>
+          </div>
+          <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-orange-900 dark:bg-orange-950/60 dark:text-orange-200">
+            {outstandingReadouts.length}
+          </span>
+        </div>
+        {visibleOutstandingReadouts.length > 0 ? (
+          <>
+            <ol className="divide-y divide-slate-100 dark:divide-slate-800">
+              {visibleOutstandingReadouts.map((record) => (
+                <ReadoutHistoryRow
+                  key={record.clientReadoutId}
+                  record={record}
+                  isSelected={selectedReadoutId === record.clientReadoutId}
+                  onSelect={handleSelectReadout}
+                />
+              ))}
+            </ol>
+            {outstandingReadouts.length > visibleOutstandingReadouts.length && (
+              <button
+                type="button"
+                onClick={handleShowAllOutstandingReadouts}
+                className="w-full border-t border-orange-100 px-4 py-2 text-left text-xs font-medium text-orange-900 hover:bg-orange-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-orange-700 dark:border-orange-900/60 dark:text-orange-200 dark:hover:bg-orange-950/30"
+              >
+                Visa alla {outstandingReadouts.length} ärenden i historiken
+              </button>
+            )}
+          </>
+        ) : (
+          <p className="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">
+            Inga avläsningar väntar på åtgärd.
           </p>
         )}
       </section>
@@ -1246,9 +1350,7 @@ export function ReadoutDashboard({
                         {competitors
                           .filter(
                             (competitor) =>
-                              competitor.id !==
-                              (selectedReadout.originalCompetitorId ??
-                                selectedReadout.competitorId)
+                              competitor.id !== selectedReadout.competitorId
                           )
                           .map((competitor) => (
                             <option key={competitor.id} value={competitor.id}>
@@ -1366,7 +1468,8 @@ export function ReadoutDashboard({
                     className="rounded border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900"
                   >
                     <p className="font-medium">
-                      {audit.originalCompetitor.name} → {audit.correctedCompetitor.name}
+                      {(audit.previousCompetitor ?? audit.originalCompetitor).name} →{' '}
+                      {audit.correctedCompetitor.name}
                       {' · '}
                       {new Date(audit.timestamp).toLocaleString('sv-SE')}
                     </p>
@@ -1609,7 +1712,10 @@ export function ReadoutDashboard({
         </section>
       )}
 
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+      <section
+        ref={historySectionRef}
+        className="scroll-mt-24 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden"
+      >
           <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 space-y-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -1619,11 +1725,11 @@ export function ReadoutDashboard({
                 Nyaste avläsning först · {readoutHistory.length} sparade avläsningar
               </p>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Välj en rad för att öppna avläsningsdetaljer.
+                ↑/↓ flyttar fokus · Enter öppnar avläsningsdetaljer.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="inline-flex items-center gap-1" role="group" aria-label="Historikvy">
+              <div className="inline-flex items-center gap-1" role="group" aria-label="Historikfilter">
                 <button
                   type="button"
                   aria-pressed={historyView === 'ALL'}
@@ -1652,7 +1758,7 @@ export function ReadoutDashboard({
                       : 'bg-white text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700'
                   }`}
                 >
-                  Outstanding Issues
+                  Kräver åtgärd
                   <span className="rounded-full bg-white/70 dark:bg-slate-900/70 px-1.5 py-0.5 font-medium tabular-nums">
                     {outstandingReadouts.length}
                   </span>
@@ -1706,7 +1812,12 @@ export function ReadoutDashboard({
             </div>
           </div>
           {visibleReadouts.length > 0 ? (
-            <ol className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+            <ol
+              ref={historyRowsRef}
+              onKeyDown={handleHistoryKeyDown}
+              aria-label="Avläsningar på aktuell sida"
+              className="max-h-96 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800"
+            >
               {visibleReadouts.map((record) => (
                 <ReadoutHistoryRow
                   key={record.clientReadoutId}

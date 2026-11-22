@@ -9,6 +9,7 @@ interface TestElementProps {
   'aria-label'?: string;
   'aria-pressed'?: boolean;
   className?: string;
+  'data-readout-history-primary'?: string;
   type?: string;
 }
 
@@ -134,6 +135,21 @@ describe('ReadoutHistoryRow', () => {
 
     registerButton?.props.onClick?.();
 
+    expect(onSelect).toHaveBeenCalledWith(record, true);
+  });
+
+  it('offers a direct correction action for eligible readouts', () => {
+    const record = reopenCases[0].record;
+    const onSelect = vi.fn();
+    const buttons = findButtons(
+      ReadoutHistoryRow({ record, isSelected: false, onSelect })
+    );
+    const correctionButton = buttons.find(
+      (button) => button.props.children === 'Fel löpare'
+    );
+
+    expect(correctionButton).toBeDefined();
+    correctionButton?.props.onClick?.();
     expect(onSelect).toHaveBeenCalledWith(record, true);
   });
 

@@ -1,8 +1,9 @@
 import { deleteApp, initializeApp } from 'firebase-admin/app';
-import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  listReadoutReassignmentAudits,
   reassignReadoutResult,
   ReadoutReassignmentError,
 } from './readoutReassignment';
@@ -35,11 +36,13 @@ emulatorDescribe('reassignReadoutResult', () => {
     const actorUid = `usr_${suffix}`;
     const annaId = `cmp_anna_${suffix}`;
     const erikId = `cmp_erik_${suffix}`;
+    const karlId = `cmp_karl_${suffix}`;
     const readoutId = `ro_${suffix}`;
     const operationId = `rr_${suffix}`;
     const competitionRef = firestore.collection('competitions').doc(competitionId);
     const sourceRef = competitionRef.collection('competitors').doc(annaId);
     const targetRef = competitionRef.collection('competitors').doc(erikId);
+    const karlRef = competitionRef.collection('competitors').doc(karlId);
     const receiptRef = competitionRef.collection('readoutReceipts').doc(readoutId);
     const correctionsRef = competitionRef.collection('readoutCorrections');
     const sourcePublicRef = competitionRef.collection('publicResults').doc(annaId);
@@ -112,6 +115,13 @@ emulatorDescribe('reassignReadoutResult', () => {
       punchCodes: [],
       punchTimes: [],
     };
+    const karlData = {
+      ...targetData,
+      competitorId: karlId,
+      bib: 3,
+      fullName: 'Karl',
+      siNumber: 510998,
+    };
     await Promise.all([
       competitionRef.set({
         competitionId,
@@ -120,7 +130,7 @@ emulatorDescribe('reassignReadoutResult', () => {
         zeroTimeSec: 36000,
         brokenControls: [],
         controlTimeOffsets: {},
-        competitorCount: 2,
+        competitorCount: 3,
         finishedCount: 1,
       }),
       options?.authorized === false
@@ -128,6 +138,7 @@ emulatorDescribe('reassignReadoutResult', () => {
         : roleRef.set({ uid: actorUid, role: 'READOUT' }),
       sourceRef.set(sourceData),
       options?.targetExists === false ? Promise.resolve() : targetRef.set(targetData),
+      karlRef.set(karlData),
       receiptRef.set(receiptData),
       competitionRef.collection('courses').doc('crs_1').set({
         courseId: 'crs_1',
@@ -193,6 +204,8 @@ emulatorDescribe('reassignReadoutResult', () => {
       sourcePublicRef,
       targetPublicRef,
       receiptData,
+      karlId,
+      karlRef,
       async cleanup() {
         await firestore.recursiveDelete(competitionRef);
         await Promise.all([adminRef.delete(), roleRef.delete()]);
@@ -206,6 +219,14 @@ emulatorDescribe('reassignReadoutResult', () => {
       targetCompetitorId: fixture.erikId,
       reason: 'Readout used by the wrong runner',
     };
+  }
+
+  function requestTo(
+    targetCompetitorId: string,
+    operationId: string,
+    reason: string
+  ) {
+    return { operationId, targetCompetitorId, reason };
   }
 
   it.each(['OK', 'MP', 'PRELIMINARY_FIN'] as const)(
@@ -230,6 +251,7 @@ emulatorDescribe('reassignReadoutResult', () => {
             actorRole: 'READOUT',
             reason: 'Readout used by the wrong runner',
             originalCompetitor: { id: fixture.annaId, name: 'Anna' },
+            previousCompetitor: { id: fixture.annaId, name: 'Anna' },
             correctedCompetitor: { id: fixture.erikId, name: 'Erik' },
             result: {
               status: 'APPLIED',
@@ -253,20 +275,110 @@ emulatorDescribe('reassignReadoutResult', () => {
         });
         const savedReceipt = (await fixture.receiptRef.get()).data();
         expect(savedReceipt).toBeDefined();
-        const { createdAt: savedCreatedAt, ...savedReceiptData } = savedReceipt ?? {};
+        const {
+          createdAt: savedCreatedAt,
+          currentCompetitorId: savedCurrentCompetitorId,
+          reassignmentSequence: savedReassignmentSequence,
+          updatedAt: savedUpdatedAt,
+          ...savedReceiptData
+        } = savedReceipt ?? {};
         const { createdAt: originalCreatedAt, ...originalReceiptData } =
           fixture.receiptData;
         expect(savedReceiptData).toEqual(originalReceiptData);
         expect(savedCreatedAt).toBeInstanceOf(Timestamp);
         expect((savedCreatedAt as Timestamp).toDate()).toEqual(originalCreatedAt);
+        expect(savedCurrentCompetitorId).toBe(fixture.erikId);
+        expect(savedReassignmentSequence).toBe(1);
+        expect(savedUpdatedAt).toBeInstanceOf(Timestamp);
         expect((await fixture.sourcePublicRef.get()).data()?.radioSplits).toHaveLength(1);
         expect((await fixture.targetPublicRef.get()).data()?.radioSplits).toHaveLength(1);
         expect((await fixture.correctionsRef.doc(fixture.operationId).get()).exists).toBe(true);
+        expect((await fixture.receiptRef.get()).data()).toMatchObject({
+          competitorId: fixture.annaId,
+          currentCompetitorId: fixture.erikId,
+        });
       } finally {
         await fixture.cleanup();
       }
     }
   );
+
+  it('supports a full reassignment chain, return to original, and chronological audit history', async () => {
+    const fixture = await seedReassignment();
+    const secondOperationId = `rr_${randomUUID().replace(/-/g, '')}`;
+    const thirdOperationId = `rr_${randomUUID().replace(/-/g, '')}`;
+    try {
+      const first = await reassignReadoutResult(
+        firestore,
+        { uid: fixture.actorUid },
+        fixture.competitionId,
+        fixture.readoutId,
+        request(fixture)
+      );
+      await fixture.correctionsRef.doc(first.operationId).update({
+        previousCompetitor: FieldValue.delete(),
+        sequence: FieldValue.delete(),
+      });
+      await fixture.receiptRef.update({
+        currentCompetitorId: FieldValue.delete(),
+        reassignmentSequence: FieldValue.delete(),
+      });
+      const second = await reassignReadoutResult(
+        firestore,
+        { uid: fixture.actorUid },
+        fixture.competitionId,
+        fixture.readoutId,
+        requestTo(fixture.karlId, secondOperationId, 'Verified by card check')
+      );
+      const third = await reassignReadoutResult(
+        firestore,
+        { uid: fixture.actorUid },
+        fixture.competitionId,
+        fixture.readoutId,
+        requestTo(fixture.annaId, thirdOperationId, 'Return to original runner')
+      );
+
+      expect(second.audit).toMatchObject({
+        originalCompetitor: { id: fixture.annaId, name: 'Anna' },
+        previousCompetitor: { id: fixture.erikId, name: 'Erik' },
+        correctedCompetitor: { id: fixture.karlId, name: 'Karl' },
+      });
+      expect(third.audit).toMatchObject({
+        originalCompetitor: { id: fixture.annaId, name: 'Anna' },
+        previousCompetitor: { id: fixture.karlId, name: 'Karl' },
+        correctedCompetitor: { id: fixture.annaId, name: 'Anna' },
+      });
+      expect((await fixture.receiptRef.get()).data()).toMatchObject({
+        competitorId: fixture.annaId,
+        currentCompetitorId: fixture.annaId,
+      });
+      expect((await fixture.sourceRef.get()).data()?.status).toBe('OK');
+      expect((await fixture.targetRef.get()).data()?.status).toBe('REGISTERED');
+      expect((await fixture.karlRef.get()).data()?.status).toBe('REGISTERED');
+
+      const audits = await listReadoutReassignmentAudits(
+        firestore,
+        { uid: fixture.actorUid },
+        fixture.competitionId,
+        fixture.readoutId
+      );
+      expect(audits.map((audit) => [
+        audit.previousCompetitor?.id,
+        audit.correctedCompetitor.id,
+      ])).toEqual([
+        [fixture.annaId, fixture.erikId],
+        [fixture.erikId, fixture.karlId],
+        [fixture.karlId, fixture.annaId],
+      ]);
+      expect(audits.map((audit) => audit.operationId)).toEqual([
+        first.operationId,
+        secondOperationId,
+        thirdOperationId,
+      ]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 
   it.each(['OK', 'MP', 'PRELIMINARY_FIN'] as const)(
     'replays the same %s reassignment without duplicating audit or result changes',
@@ -369,7 +481,7 @@ emulatorDescribe('reassignReadoutResult', () => {
         ).rejects.toMatchObject({
           statusCode: 409,
           message:
-            'Multiple or previously reassigned readouts make this correction ambiguous.',
+            'Multiple or conflicting readouts make this correction ambiguous.',
         });
 
         expect(warning).toHaveBeenCalledWith(
@@ -384,12 +496,10 @@ emulatorDescribe('reassignReadoutResult', () => {
             competingTargetReceipts: [
               { id: targetReceiptId, status: 'PROCESSED' },
             ],
-            priorReassignment: false,
             branches: {
               sourceReceiptCountNotOne: false,
               sourceReceiptIdMismatch: false,
               targetReceiptCountGreaterThanZero: true,
-              priorReassignment: false,
             },
           })
         );

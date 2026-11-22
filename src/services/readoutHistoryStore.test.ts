@@ -112,7 +112,36 @@ describe('readout history ordering', () => {
           ...record,
           correctionOperationId: 'readout-correction-done',
         })
-      ).toBe(false);
+      ).toBe(true);
+      expect(
+        isEligibleWrongCompetitorReadout({
+          ...record,
+          competitorId: 'mikael',
+          correctionOperationId: 'readout-correction-done',
+          correctionAudit: [
+            {
+              operationId: 'readout-correction-done',
+              readoutId: record.clientReadoutId,
+              actorUid: 'official',
+              actorRole: 'READOUT',
+              timestamp: '2026-01-01T00:00:00.000Z',
+              reason: 'Correct initial match',
+              originalCompetitor: { id: 'anna', name: 'Anna' },
+              previousCompetitor: { id: 'anna', name: 'Anna' },
+              correctedCompetitor: { id: 'mikael', name: 'Mikael' },
+              result: {
+                status: 'APPLIED',
+                previousStatus: 'OK',
+                newStatus: 'OK',
+                finishTimeSec: 1000,
+                runningTimeSec: 900,
+                bomSec: null,
+                placing: null,
+              },
+            },
+          ],
+        })
+      ).toBe(true);
     }
   );
 
@@ -133,7 +162,7 @@ describe('readout history ordering', () => {
     ).toBe(false);
   });
 
-  it('keeps the original match while recording the corrected current competitor', () => {
+  it('keeps the original match while updating the current competitor repeatedly', () => {
     const record = {
       ...createRecord('readout-corrected', 1, 'PROCESSED'),
       competitorId: 'anna',
@@ -151,15 +180,23 @@ describe('readout history ordering', () => {
       issueState: 'RESOLVED',
       correctionOperationId: 'readout-correction-op-1',
     })[0];
+    const correctedAgain = updateReadoutHistoryRecord(
+      [corrected],
+      record.clientReadoutId,
+      {
+        competitorId: 'anna',
+        competitorName: 'Anna',
+        correctionOperationId: 'readout-correction-op-2',
+      }
+    )[0];
 
-    expect(corrected).toMatchObject({
-      competitorId: 'erik',
-      competitorName: 'Erik',
+    expect(correctedAgain).toMatchObject({
+      competitorId: 'anna',
+      competitorName: 'Anna',
       originalCompetitorId: 'anna',
       originalCompetitorName: 'Anna',
       issueType: 'WRONG_COMPETITOR',
-      issueState: 'RESOLVED',
-      correctionOperationId: 'readout-correction-op-1',
+      correctionOperationId: 'readout-correction-op-2',
     });
   });
 

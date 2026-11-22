@@ -105,7 +105,7 @@ emulatorDescribe('ingestReadout', () => {
       receiptCollection,
       receiptRef,
       publicResultRef,
-      async addProcessedReceipt(id: string) {
+      async addProcessedReceipt(id: string, currentCompetitorId?: string) {
         await receiptCollection.doc(id).set({
           receiptId: id,
           competitionId,
@@ -122,6 +122,7 @@ emulatorDescribe('ingestReadout', () => {
           rawHex: baseInput.rawHex,
           status: 'PROCESSED',
           competitorId,
+          ...(currentCompetitorId ? { currentCompetitorId } : {}),
           createdAt: new Date(),
         });
       },
@@ -153,11 +154,38 @@ emulatorDescribe('ingestReadout', () => {
         duplicateReceiptId: originalReceiptId,
         replayed: false,
       });
+
       expect((await fixture.receiptRef.get()).exists).toBe(false);
       expect((await fixture.competitorRef.get()).data()).toEqual(competitorBefore);
       expect((await fixture.competitionRef.get()).data()).toEqual(competitionBefore);
       expect((await fixture.publicResultRef.get()).exists).toBe(false);
       expect((await fixture.receiptCollection.get()).size).toBe(1);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it('keeps exact duplicate detection and resolves the duplicate to the receipt current owner', async () => {
+    const fixture = await seedReadout();
+    const originalReceiptId = `ro_original_${randomUUID().replace(/-/g, '')}`;
+    const currentCompetitorId = `cmp_corrected_${randomUUID().replace(/-/g, '')}`;
+    try {
+      await fixture.addProcessedReceipt(originalReceiptId, currentCompetitorId);
+      const result = await ingestReadout(
+        firestore,
+        { uid: fixture.actorUid },
+        fixture.competitionId,
+        fixture.receiptId,
+        fixture.input
+      );
+
+      expect(result).toMatchObject({
+        status: 'DUPLICATE',
+        competitorId: currentCompetitorId,
+        duplicateReceiptId: originalReceiptId,
+        replayed: false,
+      });
+      expect((await fixture.receiptRef.get()).exists).toBe(false);
     } finally {
       await fixture.cleanup();
     }
@@ -187,6 +215,7 @@ emulatorDescribe('ingestReadout', () => {
       });
       expect((await fixture.receiptRef.get()).data()).toMatchObject({
         status: 'PROCESSED',
+        currentCompetitorId: fixture.competitorId,
         punchCodes: [31, 33],
         punchTimes: [37000, 39000],
       });

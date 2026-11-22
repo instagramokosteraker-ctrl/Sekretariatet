@@ -13,6 +13,7 @@ export interface ReadoutReceiptDuplicateCandidate {
   id: string;
   status: unknown;
   competitorId: unknown;
+  currentCompetitorId?: unknown;
   siNumber: unknown;
   cardSeries: unknown;
   startTimeSec: unknown;
