@@ -101,15 +101,15 @@ function createCompetitor(status: Competitor['status']): Competitor {
 
 describe('readout history ordering', () => {
   it.each(['OK', 'MP', 'PRELIMINARY_FIN'] as const)(
-    'allows a matched %s readout without a completed reassignment',
+    'allows a matched %s readout without an open issue or completed reassignment',
     (resultStatus) => {
       const record = {
         ...createRecord(`readout-${resultStatus}`, 1, 'PROCESSED'),
         competitorId: 'anna',
         originalCompetitorId: 'anna',
         resultStatus,
-        issueType: 'MP_REVIEW' as const,
-        issueState: 'OPEN' as const,
+        issueType: null,
+        issueState: 'NONE' as const,
       };
 
       expect(isEligibleWrongCompetitorReadout(record)).toBe(true);

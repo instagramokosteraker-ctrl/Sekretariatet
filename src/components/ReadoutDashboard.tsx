@@ -986,9 +986,11 @@ export function ReadoutDashboard({
                     )}`
                   : ''}
               </span>
-              <span>
-                Ärende: {getReadoutIssueSummary(selectedReadout) ?? 'Inget'}
-              </span>
+              {selectedReadout.issueType !== 'WRONG_COMPETITOR' && (
+                <span>
+                  Ärende: {getReadoutIssueSummary(selectedReadout) ?? 'Inget'}
+                </span>
+              )}
               <span>
                 Leverans: {getReadoutDeliveryLabel(selectedReadout.deliveryState)}
               </span>
