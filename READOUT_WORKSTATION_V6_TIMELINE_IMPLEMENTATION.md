@@ -24,6 +24,9 @@ presentation and interaction refactor.
   navigation also operate on the timeline.
 - Paging remains bounded to 20, 30, or 50 rows per page. Placement data is
   calculated once per competitor update and reused for visible rows.
+- Offline/network state is a compact header control; opening it reveals the
+  offline queue and technical tools in a bounded popover instead of a
+  full-width disclosure row.
 - Existing repeat reassignment, duplicate detection, audit history, approval,
   MP review, and capture/delivery workflows are preserved.
 
@@ -35,6 +38,7 @@ Removed as independent readout lists/panels:
 - Requires Action queue
 - Separate selected-readout detail/action panel
 - Separate history/archive list
+- Full-width offline-tools disclosure row
 
 Their useful information and workflows are presented in the timeline row.
 Competition KPIs and reader/offline controls remain secondary dashboard

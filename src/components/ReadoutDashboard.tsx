@@ -668,30 +668,31 @@ export function ReadoutDashboard({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <UsbStationBar
-            serialStatus={serialStatus}
-            roleLabel="Målutläsning"
-            expectedMode="READOUT"
-            onConnectUsb={onConnectUsb}
-            onConnectWebUsb={onConnectWebUsb}
-            onDisconnectUsb={onDisconnectUsb}
-            onSetUsbMode={onSetUsbMode}
-            onTriggerBeep={onTriggerStationBeep}
-            onClearError={onClearUsbError}
-            onOpenHardwareSettings={onOpenHardwareSettings}
-          />
-        </div>
-      </div>
-
-      <details className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-        <summary className="cursor-pointer list-none px-3.5 py-2 text-xs font-medium text-slate-700 dark:text-slate-300">
-          Offlinekö och tekniska verktyg
-          <span className="ml-2 font-mono tabular-nums text-slate-500 dark:text-slate-400">
-            {isOfflineActive ? 'Offline aktivt' : 'Nätverk anslutet'} ·{' '}
-            {offlineSnap.pendingItems.length} väntande
-          </span>
-        </summary>
-        <div className="space-y-2.5 border-t border-slate-200 dark:border-slate-800 p-2.5">
+          <details className="relative">
+            <summary
+              aria-label={`Offlinekö. ${
+                isOfflineActive ? 'Offline aktivt' : 'Nätverk OK'
+              }. ${offlineSnap.pendingItems.length} i kö`}
+              className={`flex cursor-pointer list-none items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium ${
+                isOfflineActive || offlineSnap.pendingItems.length > 0
+                  ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200'
+                  : 'border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+              }`}
+            >
+              {isOfflineActive ? (
+                <CloudOff className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <Wifi className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              )}
+              <span>Offlinekö</span>
+              <span aria-hidden="true">·</span>
+              <span>{isOfflineActive ? 'Offline' : 'Nätverk OK'}</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono tabular-nums">
+                {offlineSnap.pendingItems.length} i kö
+              </span>
+            </summary>
+            <div className="absolute right-0 top-full z-40 mt-2 max-h-[75vh] w-[min(90vw,48rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
           <UsbStationErrorBanner
             serialStatus={serialStatus}
             onConnectWebUsb={onConnectWebUsb}
@@ -891,6 +892,20 @@ export function ReadoutDashboard({
       )}
         </div>
       </details>
+          <UsbStationBar
+            serialStatus={serialStatus}
+            roleLabel="Målutläsning"
+            expectedMode="READOUT"
+            onConnectUsb={onConnectUsb}
+            onConnectWebUsb={onConnectWebUsb}
+            onDisconnectUsb={onDisconnectUsb}
+            onSetUsbMode={onSetUsbMode}
+            onTriggerBeep={onTriggerStationBeep}
+            onClearError={onClearUsbError}
+            onOpenHardwareSettings={onOpenHardwareSettings}
+          />
+        </div>
+      </div>
 
       <ReadoutTimeline
         records={readoutHistory}
