@@ -267,6 +267,35 @@ describe('ReadoutHistoryRow', () => {
     expect(element.props.className).not.toContain('bg-orange');
   });
 
+  it('shows unresolved unknown cards in orange and restores result presentation after linking', () => {
+    const unknownCard = reopenCases.find(({ label }) => label === 'unknown-card')!.record;
+    const unknownRow = ReadoutHistoryRow({
+      record: unknownCard,
+      isLatest: false,
+      isExpanded: false,
+      placementLabel: '—',
+      onSelect: vi.fn(),
+    });
+    expect(unknownRow.props.className).toContain('bg-orange-200');
+    expect(findPrimaryStateLabels(unknownRow)).toEqual(['Okänd bricka']);
+
+    const linkedRecord = makeRecord({
+      readoutState: 'PROCESSED',
+      receiptStatus: 'PROCESSED',
+      issueType: 'UNKNOWN_CARD',
+      issueState: 'RESOLVED',
+    });
+    const linkedRow = ReadoutHistoryRow({
+      record: linkedRecord,
+      isLatest: false,
+      isExpanded: false,
+      placementLabel: '—',
+      onSelect: vi.fn(),
+    });
+    expect(linkedRow.props.className).toContain('bg-emerald-100');
+    expect(findPrimaryStateLabels(linkedRow)).toEqual(['OK']);
+  });
+
   it.each([
     { label: 'OK', record: makeRecord() },
     { label: 'MP', record: makeRecord({ resultStatus: 'MP' }) },

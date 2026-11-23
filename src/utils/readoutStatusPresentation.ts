@@ -96,6 +96,13 @@ export function getReadoutStatusPresentation(record: ReadoutStatusInput | null):
       tone = 'mp';
     } else if (record.resultStatus === 'OK') {
       tone = 'success';
+    } else if (
+      (record.issueType === 'UNKNOWN_CARD' ||
+        record.readoutState === 'UNKNOWN') &&
+      record.issueState !== 'RESOLVED' &&
+      record.issueState !== 'DISMISSED'
+    ) {
+      tone = 'action';
     }
   }
 

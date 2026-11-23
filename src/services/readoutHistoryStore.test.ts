@@ -211,7 +211,9 @@ describe('readout history ordering', () => {
     )[0];
 
     expect(isEligibleWrongCompetitorReadout(unknown)).toBe(false);
+    expect(filterOutstandingReadouts([unknown])).toEqual([unknown]);
     expect(isEligibleWrongCompetitorReadout(promoted)).toBe(true);
+    expect(filterOutstandingReadouts([promoted])).toEqual([]);
   });
 
   it('keeps the original match while updating the current competitor repeatedly', () => {

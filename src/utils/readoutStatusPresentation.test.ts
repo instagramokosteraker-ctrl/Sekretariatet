@@ -7,6 +7,7 @@ import {
   getReadoutIssueSummary,
   getReadoutStatusPresentation,
   getReadoutStatusText,
+  getReadoutTimelinePrimaryState,
 } from './readoutStatusPresentation';
 
 function createStatus(
@@ -56,6 +57,30 @@ describe('readout status presentation', () => {
         })
       )
     ).toContain('bg-red');
+  });
+
+  it('uses the action color for unresolved unknown cards and restores result color after linking', () => {
+    const unknownCard = createStatus({
+      resultStatus: null,
+      readoutState: 'UNKNOWN',
+      issueType: 'UNKNOWN_CARD',
+      issueState: 'OPEN',
+    });
+
+    expect(getReadoutStatusPresentation(unknownCard)).toMatchObject({
+      tone: 'action',
+      surfaceClass: 'bg-orange-200 dark:bg-orange-900/70',
+    });
+    expect(getReadoutTimelinePrimaryState(unknownCard)).toBe('Okänd bricka');
+
+    const linkedCard = createStatus({
+      resultStatus: 'OK',
+      readoutState: 'PROCESSED',
+      issueType: 'UNKNOWN_CARD',
+      issueState: 'RESOLVED',
+    });
+    expect(getReadoutStatusPresentation(linkedCard).tone).toBe('success');
+    expect(getReadoutTimelinePrimaryState(linkedCard)).toBe('OK');
   });
 
   it('renders delivery independently of result tone', () => {
