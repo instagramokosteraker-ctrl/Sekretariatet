@@ -20,6 +20,13 @@ function findControlElements(node: ReactNode): ReactElement<ControlElementProps>
   return [...controls, ...findControlElements(node.props.children)];
 }
 
+function findText(node: ReactNode): string[] {
+  if (typeof node === 'string' || typeof node === 'number') return [String(node)];
+  if (Array.isArray(node)) return node.flatMap(findText);
+  if (!isValidElement<ControlElementProps>(node)) return [];
+  return findText(node.props.children);
+}
+
 function createValidation(
   controls: Array<{ code: number; status: 'OK' | 'MISSING'; timeSec: number | null }>
 ): ReadoutValidation {
@@ -124,6 +131,9 @@ describe('ReadoutControlSequence', () => {
     const rendered = ReadoutControlSequence({
       validation,
       punches: punches([31, 77]),
+      startTimeSec: 100,
+      finishTimeSec: 500,
+      showStartStamp: true,
     });
     const controls = findControlElements(rendered);
 
@@ -150,5 +160,68 @@ describe('ReadoutControlSequence', () => {
         text: 77,
       },
     ]);
+  });
+
+  it('shows unassigned unknown-card punches in black and excludes infrastructure punches', () => {
+    const rendered = ReadoutControlSequence({
+      validation: null,
+      punches: punches([15, 142, 134, 31, 32, 157]),
+      excludedControlCodes: new Set([15, 31, 32]),
+      startTimeSec: 100,
+      finishTimeSec: 500,
+      showStartStamp: true,
+    });
+    const controls = findControlElements(rendered);
+
+    expect(controls.map((control) => control.props.children)).toEqual([
+      142,
+      134,
+      157,
+    ]);
+    expect(controls.every((control) => control.props['data-control-state'] === 'unassigned'))
+      .toBe(true);
+    expect(
+      controls.every((control) =>
+        control.props.className?.includes('text-slate-900')
+      )
+    ).toBe(true);
+    expect(controls.some((control) => control.props.className?.includes('text-emerald')))
+      .toBe(false);
+    expect(controls.some((control) => control.props.className?.includes('text-red')))
+      .toBe(false);
+    expect(controls.some((control) => String(control.props.children).includes('(')))
+      .toBe(false);
+  });
+
+  it('shows stamp validation separately and hides start status when not expected', () => {
+    const noStart = ReadoutControlSequence({
+      validation: null,
+      punches: [],
+      startTimeSec: null,
+      finishTimeSec: null,
+      showStartStamp: false,
+    });
+    expect(findText(noStart).map((text) => text.trim())).not.toContain(
+      'Startstämpling:'
+    );
+    expect(findText(noStart).map((text) => text.trim())).toContain(
+      'Målstämpling:'
+    );
+    expect(findText(noStart)).toContain('Saknas');
+
+    const expectedStart = ReadoutControlSequence({
+      validation: null,
+      punches: [],
+      startTimeSec: 100,
+      finishTimeSec: 200,
+      showStartStamp: true,
+    });
+    expect(findText(expectedStart).map((text) => text.trim())).toContain(
+      'Startstämpling:'
+    );
+    expect(findText(expectedStart).map((text) => text.trim())).toContain(
+      'Målstämpling:'
+    );
+    expect(findText(expectedStart).filter((text) => text === 'OK')).toHaveLength(2);
   });
 });

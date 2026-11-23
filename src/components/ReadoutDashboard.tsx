@@ -266,37 +266,76 @@ export function ReadoutDashboard({
       readoutHistory.find((record) => record.clientReadoutId === selectedReadoutId) ?? null,
     [readoutHistory, selectedReadoutId]
   );
+  const selectedReadoutCompetitor = useMemo(
+    () =>
+      selectedReadout?.competitorSnapshot ??
+      competitors.find(
+        (candidate) => candidate.id === selectedReadout?.competitorId
+      ) ??
+      null,
+    [competitors, selectedReadout]
+  );
+  const selectedReadoutClass = useMemo(
+    () =>
+      (selectedReadoutCompetitor
+        ? classes.find(
+            (candidate) => candidate.id === selectedReadoutCompetitor.classId
+          )
+        : null) ??
+      classes.find((candidate) => candidate.name === selectedReadout?.className) ??
+      null,
+    [classes, selectedReadout, selectedReadoutCompetitor]
+  );
+  const isUnassignedUnknownCard = Boolean(
+    selectedReadout &&
+      selectedReadout.resultStatus === null &&
+      (selectedReadout.readoutState === 'UNKNOWN' ||
+        selectedReadout.issueType === 'UNKNOWN_CARD')
+  );
+  const isLinkedUnknownCard = Boolean(
+    selectedReadout?.issueType === 'UNKNOWN_CARD' &&
+      selectedReadout.readoutState === 'PROCESSED' &&
+      selectedReadout.issueState === 'RESOLVED' &&
+      selectedReadout.competitorId
+  );
+  const hasAssignedCourseReadout = Boolean(
+    selectedReadout &&
+      (selectedReadout.resultStatus === 'OK' ||
+        selectedReadout.resultStatus === 'MP' ||
+        isLinkedUnknownCard)
+  );
+  const nonCourseControlCodes = useMemo(
+    () =>
+      new Set(
+        stations
+          .filter(
+            (station) =>
+              station.stationFunction !== 'RADIO' &&
+              station.stationFunction !== 'PREWARNING'
+          )
+          .map((station) => station.stationCode)
+      ),
+    [stations]
+  );
   const controlSequenceValidation = useMemo(() => {
-    if (
-      !selectedReadout ||
-      (selectedReadout.resultStatus !== 'OK' &&
-        selectedReadout.resultStatus !== 'MP')
-    ) {
-      return null;
-    }
+    if (!selectedReadout || !hasAssignedCourseReadout) return null;
 
-    const snapshotCompetitor = selectedReadout.competitorSnapshot;
+    const snapshotCompetitor = selectedReadoutCompetitor;
     if (snapshotCompetitor?.validation) return snapshotCompetitor.validation;
 
-    const competitor =
-      snapshotCompetitor ??
-      competitors.find((candidate) => candidate.id === selectedReadout.competitorId) ??
-      null;
-    const competitorClass = competitor
-      ? classes.find((candidate) => candidate.id === competitor.classId) ??
-        classes.find((candidate) => candidate.name === selectedReadout.className)
-      : null;
-    if (!competitor || !competitorClass) return null;
+    const competitorClass = selectedReadoutClass;
+    if (!competitorClass) return null;
 
     const effectiveStartSec =
-      competitor.startTimeSec ??
+      snapshotCompetitor?.startTimeSec ??
       selectedReadout.readout.startTimeSec ??
-      competitor.allocatedStartSec ??
+      snapshotCompetitor?.allocatedStartSec ??
       zeroTimeSec;
     const effectiveFinishSec =
-      competitor.manualFinishTimeSec ??
+      snapshotCompetitor?.manualFinishTimeSec ??
       selectedReadout.readout.finishTimeSec ??
-      competitor.finishTimeSec;
+      snapshotCompetitor?.finishTimeSec ??
+      null;
 
     return validateCompetitorReadout(
       competitorClass,
@@ -311,7 +350,10 @@ export function ReadoutDashboard({
     competitors,
     courses,
     emergency,
+    hasAssignedCourseReadout,
     selectedReadout,
+    selectedReadoutClass,
+    selectedReadoutCompetitor,
     zeroTimeSec,
   ]);
   const selectedOfflineReadoutQueueItem = useMemo(
@@ -1051,12 +1093,17 @@ export function ReadoutDashboard({
                 </form>
               );
             })()}
-            {controlSequenceValidation &&
-              (selectedReadout.resultStatus === 'OK' ||
-                selectedReadout.resultStatus === 'MP') ? (
+            {hasAssignedCourseReadout || isUnassignedUnknownCard ? (
                 <ReadoutControlSequence
                   validation={controlSequenceValidation}
                   punches={selectedReadout.readout.punches}
+                  excludedControlCodes={nonCourseControlCodes}
+                  startTimeSec={selectedReadout.readout.startTimeSec}
+                  finishTimeSec={selectedReadout.readout.finishTimeSec}
+                  showStartStamp={
+                    isUnassignedUnknownCard ||
+                    selectedReadoutClass?.freeStart === true
+                  }
                 />
               ) : (
                 <div className="mt-2 flex flex-wrap gap-1">
