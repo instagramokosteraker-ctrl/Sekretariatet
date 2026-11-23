@@ -43,8 +43,10 @@ import {
 } from '../services/readoutSummary';
 import { getRunnerNameSuggestions } from '../utils/runnerNameSuggestions';
 import { calculateReadoutReassignmentPreview } from '../utils/readoutReassignment';
+import { validateCompetitorReadout } from '../utils/readoutValidation';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
+import { ReadoutControlSequence } from './ReadoutControlSequence';
 import { ReadoutTimeline } from './ReadoutTimeline';
 import { UsbStationBar, UsbStationErrorBanner } from './UsbStationBar';
 
@@ -264,6 +266,54 @@ export function ReadoutDashboard({
       readoutHistory.find((record) => record.clientReadoutId === selectedReadoutId) ?? null,
     [readoutHistory, selectedReadoutId]
   );
+  const controlSequenceValidation = useMemo(() => {
+    if (
+      !selectedReadout ||
+      (selectedReadout.resultStatus !== 'OK' &&
+        selectedReadout.resultStatus !== 'MP')
+    ) {
+      return null;
+    }
+
+    const snapshotCompetitor = selectedReadout.competitorSnapshot;
+    if (snapshotCompetitor?.validation) return snapshotCompetitor.validation;
+
+    const competitor =
+      snapshotCompetitor ??
+      competitors.find((candidate) => candidate.id === selectedReadout.competitorId) ??
+      null;
+    const competitorClass = competitor
+      ? classes.find((candidate) => candidate.id === competitor.classId) ??
+        classes.find((candidate) => candidate.name === selectedReadout.className)
+      : null;
+    if (!competitor || !competitorClass) return null;
+
+    const effectiveStartSec =
+      competitor.startTimeSec ??
+      selectedReadout.readout.startTimeSec ??
+      competitor.allocatedStartSec ??
+      zeroTimeSec;
+    const effectiveFinishSec =
+      competitor.manualFinishTimeSec ??
+      selectedReadout.readout.finishTimeSec ??
+      competitor.finishTimeSec;
+
+    return validateCompetitorReadout(
+      competitorClass,
+      courses,
+      effectiveStartSec,
+      effectiveFinishSec,
+      selectedReadout.readout.punches,
+      emergency
+    );
+  }, [
+    classes,
+    competitors,
+    courses,
+    emergency,
+    selectedReadout,
+    zeroTimeSec,
+  ]);
   const selectedOfflineReadoutQueueItem = useMemo(
     () =>
       selectedReadout
@@ -1001,17 +1051,28 @@ export function ReadoutDashboard({
                 </form>
               );
             })()}
-            <div className="mt-2 flex flex-wrap gap-1">
-              {selectedReadout.readout.punches.map((punch, index) => (
-                <span
-                  key={`${selectedReadout.clientReadoutId}-${index}`}
-                  className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 font-mono"
-                >
-                  {punch.code} · {formatSecondsAsClock(punch.timeSec)}
-                </span>
-              ))}
-              {selectedReadout.readout.punches.length === 0 && <span>Inga stämplingar</span>}
-            </div>
+            {controlSequenceValidation &&
+              (selectedReadout.resultStatus === 'OK' ||
+                selectedReadout.resultStatus === 'MP') ? (
+                <ReadoutControlSequence
+                  validation={controlSequenceValidation}
+                  punches={selectedReadout.readout.punches}
+                />
+              ) : (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {selectedReadout.readout.punches.map((punch, index) => (
+                    <span
+                      key={`${selectedReadout.clientReadoutId}-${index}`}
+                      className="rounded bg-slate-100 px-1.5 py-0.5 font-mono dark:bg-slate-800"
+                    >
+                      {punch.code} · {formatSecondsAsClock(punch.timeSec)}
+                    </span>
+                  ))}
+                  {selectedReadout.readout.punches.length === 0 && (
+                    <span>Inga stämplingar</span>
+                  )}
+                </div>
+              )}
           </div>
           )}
           {isEligibleWrongCompetitorReadout(selectedReadout) && (
