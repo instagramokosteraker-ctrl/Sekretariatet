@@ -5940,7 +5940,10 @@ async function startServer() {
       const [eventXml, classesXml, entriesXml] = await Promise.all([
         fetchFromEventorApi(`/event/${encodedEventId}`, config),
         fetchFromEventorApi(`/eventclasses?eventId=${encodedEventId}`, config),
-        fetchFromEventorApi(`/entries?eventId=${encodedEventId}`, config),
+        fetchFromEventorApi(
+          `/export/entries?eventId=${encodedEventId}&version=3.0`,
+          config
+        ),
       ]);
       const event = parseEventorEventXml(eventXml, eventId);
       if (!event) {

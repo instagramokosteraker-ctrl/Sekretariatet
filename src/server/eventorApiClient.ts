@@ -42,9 +42,10 @@ export async function fetchFromEventorApi(
       /^\s*(?:<!doctype\s+html|<(?:html|head|body|title|meta|script)\b)/i.test(body);
 
     if (!response.ok || (requireStatus200 && response.status !== 200)) {
+      const statusText = response.statusText.trim();
       throw new EventorApiError(
         response.ok ? 502 : response.status,
-        `Eventor svarade med HTTP ${response.status}: ${response.statusText}`
+        `Eventor svarade med HTTP ${response.status}${statusText ? `: ${statusText}` : ''} för ${endpointPath}.`
       );
     }
 
