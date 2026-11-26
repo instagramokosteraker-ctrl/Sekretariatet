@@ -1204,6 +1204,7 @@ service cloud.firestore {
         isValidId(competitionId) &&
         isValidCloudCompetition(incoming()) &&
         !incoming().keys().hasAny([
+          'allowSelfRegistration',
           'feeTrackingEnabled',
           'enableFeesAndSwish'
         ]) &&
@@ -1245,7 +1246,6 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
-              'allowSelfRegistration',
               'competitorCount',
               'finishedCount',
               'brokenControls',
@@ -1273,7 +1273,6 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
-              'allowSelfRegistration',
               'competitorCount',
               'finishedCount',
               'brokenControls',
@@ -1968,8 +1967,7 @@ service cloud.firestore {
               'zeroTimeStr',
               'zeroTimeSec',
               'arenaInfo',
-              'seriesName',
-              'allowSelfRegistration'
+              'seriesName'
             ]) &&
             data.competition.id == competitionId &&
             (

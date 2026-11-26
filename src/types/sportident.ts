@@ -80,7 +80,6 @@ export interface CompetitionMeta {
   zeroTimeSec: number; // seconds since midnight, e.g. 36000
   arenaInfo?: string;
   seriesName?: string;
-  allowSelfRegistration?: boolean;
 }
 
 export interface CompetitionSummary {
@@ -94,7 +93,6 @@ export interface CompetitionSummary {
   zeroTimeStr: string;
   arenaInfo: string;
   seriesName?: string;
-  allowSelfRegistration?: boolean;
   competitorCount: number;
   finishedCount: number;
   classCount: number;
@@ -592,7 +590,6 @@ export interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
-    allowSelfRegistration?: boolean;
   };
   courses: Course[];
   classes: CompClass[];

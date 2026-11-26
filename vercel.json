@@ -6,6 +6,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/eventor/import-event",
+      "destination": "/api"
+    },
+    {
       "source": "/api/:path((?!eventor(?:/|$)).*)",
       "destination": "/api"
     },

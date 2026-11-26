@@ -479,7 +479,6 @@ export default function App() {
   const [newEvtZeroTime, setNewEvtZeroTime] = useState('18:00:00');
   const [newEvtArena, setNewEvtArena] = useState('');
   const [newEvtSeriesName, setNewEvtSeriesName] = useState('');
-  const [newEvtSelfReg, setNewEvtSelfReg] = useState(true);
   const [newEvtCopyCourses, setNewEvtCopyCourses] = useState(true);
   const [newEvtCourseParsed, setNewEvtCourseParsed] = useState<ParsedIofDocument | null>(null);
   const [newEvtCourseFileName, setNewEvtCourseFileName] = useState('');
@@ -2576,7 +2575,6 @@ export default function App() {
         zeroTimeSec: parseTimeToSec(newEvtZeroTime),
         arenaInfo: newEvtArena.trim(),
         seriesName: newEvtSeriesName.trim(),
-        allowSelfRegistration: newEvtSelfReg,
       };
 
       await createCompetitionInFirestore({
@@ -2590,7 +2588,6 @@ export default function App() {
         zeroTimeSec: newComp.zeroTimeSec,
         arenaInfo: newComp.arenaInfo,
         seriesName: newComp.seriesName,
-        allowSelfRegistration: newComp.allowSelfRegistration,
         courses: newCourses,
         classes: newClasses,
       });
@@ -2755,7 +2752,6 @@ export default function App() {
       zeroTimeSec,
       arenaInfo: '',
       seriesName: '',
-      allowSelfRegistration: true,
     };
 
     await createCompetitionInFirestore({
@@ -2769,7 +2765,6 @@ export default function App() {
       status: competition.status,
       zeroTimeStr,
       zeroTimeSec,
-      allowSelfRegistration: true,
       activateOnCreate: false,
       courses: [],
       classes,
@@ -3789,15 +3784,6 @@ export default function App() {
 
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                    <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={newEvtSelfReg}
-                        onChange={(e) => setNewEvtSelfReg(e.target.checked)}
-                        className="rounded border-slate-300 dark:border-slate-700"
-                      />
-                      <span>Mobil självregistrering</span>
-                    </label>
                     {!isEmptySeason && !newEvtCourseParsed && (
                       <label className="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                         <input
@@ -4013,11 +3999,11 @@ export default function App() {
                           baseUrl: eventorConfig.baseUrl,
                         }),
                       });
-                      const responseBody = await response.json() as unknown;
+                      const responseBody = await readApiResponseJson<unknown>(
+                        response,
+                        'Kunde inte hämta tävlingen från Eventor.'
+                      );
                       const data = parseEventorImportApiResponse(responseBody);
-                      if (!response.ok) {
-                        throw new Error('Kunde inte hämta tävlingen från Eventor.');
-                      }
                       if (!data.event) {
                         throw new Error('Eventor returnerade ofullständiga tävlingsuppgifter.');
                       }

@@ -510,7 +510,6 @@ export function AccessControlView({
           zeroTimeSec: source.competition.zeroTimeSec,
           arenaInfo: source.competition.arenaInfo,
           seriesName: source.competition.seriesName,
-          allowSelfRegistration: source.competition.allowSelfRegistration,
           courses: source.courses,
           classes: source.classes,
         });

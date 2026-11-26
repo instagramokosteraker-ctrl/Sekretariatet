@@ -1855,7 +1855,6 @@ export async function updateCompetitionMetadataInFirestore(
     zeroTimeSec?: number;
     arenaInfo?: string;
     seriesName?: string;
-    allowSelfRegistration?: boolean;
   }
 ): Promise<void> {
   const statusOnlyUpdate =
@@ -1898,9 +1897,6 @@ export async function updateCompetitionMetadataInFirestore(
   }
   if ('arenaInfo' in patch) mutable.arenaInfo = (patch.arenaInfo || '').trim().slice(0, 500);
   if ('seriesName' in patch) mutable.seriesName = (patch.seriesName || '').trim().slice(0, 80);
-  if ('allowSelfRegistration' in patch) {
-    mutable.allowSelfRegistration = Boolean(patch.allowSelfRegistration);
-  }
   if (Object.keys(mutable).length === 0) return;
   await updateDoc(doc(db, 'competitions', context.competitionId), {
     ...mutable,
@@ -2301,7 +2297,6 @@ export async function syncFullSeasonToFirestore(
       statusOverride: Boolean(ev.competition.statusOverride),
       arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
       seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
-      allowSelfRegistration: Boolean(ev.competition.allowSelfRegistration),
       competitorCount,
       finishedCount,
       brokenControls: (ev.brokenControls || [])
@@ -2938,7 +2933,6 @@ export async function loadFullSeasonFromFirestore(options?: {
         zeroTimeSec: Number(compDocData.zeroTimeSec ?? 36000),
         arenaInfo: String(compDocData.arenaInfo || ''),
         seriesName: String(compDocData.seriesName || ''),
-        allowSelfRegistration: Boolean(compDocData.allowSelfRegistration),
       },
       courses,
       classes,
@@ -3162,7 +3156,6 @@ export async function publishPublicCompetitionMetadataToFirestore(
       zeroTimeSec: competition.zeroTimeSec,
       arenaInfo: competition.arenaInfo,
       seriesName: competition.seriesName,
-      allowSelfRegistration: competition.allowSelfRegistration,
     },
     radioControls,
     emergency: {
@@ -3240,7 +3233,6 @@ export function subscribePublicCompetitionMetadataFromFirestore(
           typeof competitionData.seriesName === 'string'
             ? competitionData.seriesName
             : '',
-        allowSelfRegistration: Boolean(competitionData.allowSelfRegistration),
       };
       const radioControls = Array.isArray(data.radioControls)
         ? data.radioControls.flatMap((candidate) => {
@@ -7705,7 +7697,6 @@ export async function loadPublicRaceFromFirestore(
       typeof competitionData.seriesName === 'string'
         ? competitionData.seriesName
         : '',
-    allowSelfRegistration: Boolean(competitionData.allowSelfRegistration),
   };
   const courses: Course[] = courseSnapshot.docs.map((courseDoc) => {
     const data = courseDoc.data();
@@ -7941,7 +7932,6 @@ export function subscribePublicCompetitionSummaries(
       zeroTimeStr: data.zeroTimeStr ?? '18:00:00',
       arenaInfo: data.arenaInfo ?? '',
       seriesName: data.seriesName,
-      allowSelfRegistration: Boolean((data as { allowSelfRegistration?: boolean }).allowSelfRegistration),
       competitorCount: data.competitorCount ?? 0,
       finishedCount: data.finishedCount ?? 0,
       classCount: data.classCount ?? 0,
@@ -8092,7 +8082,6 @@ export function subscribeCompetitionMetadataFromFirestore(
         zeroTimeSec: clampInt(data.zeroTimeSec, 0, 86400, 64800),
         arenaInfo: typeof data.arenaInfo === 'string' ? data.arenaInfo : '',
         seriesName: typeof data.seriesName === 'string' ? data.seriesName : '',
-        allowSelfRegistration: Boolean(data.allowSelfRegistration),
       };
       onUpdate(
         competition,
@@ -8229,7 +8218,6 @@ export interface CreateCompetitionInFirestoreParams {
   zeroTimeSec?: number;
   arenaInfo?: string;
   seriesName?: string;
-  allowSelfRegistration?: boolean;
   activateOnCreate?: boolean;
   courses?: Course[];
   classes?: CompClass[];
@@ -8285,7 +8273,6 @@ export async function createCompetitionInFirestore(
 
   const arenaInfo = (params.arenaInfo ?? '').trim().slice(0, 500);
   const seriesName = (params.seriesName ?? '').trim().slice(0, 80);
-  const allowSelfRegistration = Boolean(params.allowSelfRegistration);
   const eventorEventId = params.preserveEventorIdentities
     ? normalizeOptionalEventorId(params.eventorEventId, 'event')
     : undefined;
@@ -8303,7 +8290,6 @@ export async function createCompetitionInFirestore(
     arenaInfo,
     seriesName,
     ...(eventorEventId ? { eventorEventId } : {}),
-    allowSelfRegistration,
     competitorCount: 0,
     finishedCount: 0,
     brokenControls: [] as number[],

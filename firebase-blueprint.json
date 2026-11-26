@@ -614,10 +614,6 @@
           "minLength": 0,
           "maxLength": 80
         },
-        "allowSelfRegistration": {
-          "type": "boolean",
-          "description": "Whether self registration is enabled for mobile participants."
-        },
         "competitorCount": {
           "type": "integer",
           "description": "Total registered competitors."

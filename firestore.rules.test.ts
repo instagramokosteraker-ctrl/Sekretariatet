@@ -330,7 +330,7 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
       })
     );
 
-    // New competition documents omit legacy PIN fields and optional self-registration.
+    // New competition documents omit legacy PIN and self-registration fields.
     await assertSucceeds(
       raceAdminCtx.firestore().doc('competitions/evt_new').set({
         competitionId: 'evt_new',
@@ -344,6 +344,27 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         zeroTimeSec: 36000,
         arenaInfo: '',
         seriesName: '',
+        competitorCount: 0,
+        finishedCount: 0,
+        brokenControls: [],
+        ownerUid: 'race_admin_1',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      raceAdminCtx.firestore().doc('competitions/evt_self_registration').set({
+        competitionId: 'evt_self_registration',
+        shortCode: 'sr26',
+        name: 'Självregistrering',
+        organizer: 'OK Österåker',
+        date: '2026-06-01',
+        status: 'UPCOMING',
+        zeroTimeStr: '10:00:00',
+        zeroTimeSec: 36000,
+        arenaInfo: '',
+        seriesName: '',
+        allowSelfRegistration: true,
         competitorCount: 0,
         finishedCount: 0,
         brokenControls: [],
@@ -426,6 +447,12 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
     await assertFails(
       raceAdminCtx.firestore().doc('competitions/evt_live').update({
         eventorEventId: 'historical-event-should-not-be-added',
+        updatedAt: serverTimestamp(),
+      })
+    );
+    await assertFails(
+      raceAdminCtx.firestore().doc('competitions/evt_live').update({
+        allowSelfRegistration: true,
         updatedAt: serverTimestamp(),
       })
     );

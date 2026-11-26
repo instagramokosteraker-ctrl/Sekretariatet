@@ -158,7 +158,6 @@ interface CompetitionMeta {
   zeroTimeSec: number;
   arenaInfo: string;
   seriesName?: string;
-  allowSelfRegistration?: boolean;
 }
 
 interface CompetitionSummary {
@@ -468,7 +467,6 @@ interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
-    allowSelfRegistration?: boolean;
   };
   courses: Course[];
   classes: CompClass[];
@@ -2040,7 +2038,6 @@ function buildCompetitionsSummaryList(seasonDb: SeasonDatabase): CompetitionSumm
       zeroTimeStr: ev.competition.zeroTimeStr,
       arenaInfo: ev.competition.arenaInfo || '',
       seriesName: ev.competition.seriesName || '',
-      allowSelfRegistration: Boolean(ev.competition.allowSelfRegistration),
       competitorCount: ev.competitors.length,
       finishedCount: ev.competitors.filter(
         (c) => c.status === 'OK' || c.status === 'MP' || c.status === 'PRELIMINARY_FIN'
@@ -2627,7 +2624,7 @@ async function startServer() {
   }
 
   // ==========================================================================
-  // PUBLIC SPECTATOR, SELF-REGISTRATION & LIVELOX IOF XML 3.0 ROUTES
+  // PUBLIC SPECTATOR & LIVELOX IOF XML 3.0 ROUTES
   // ==========================================================================
   app.get('/api/public/competitions', (_req, res) => {
     res.json(buildCompetitionsSummaryList(seasonDb));
@@ -3286,7 +3283,6 @@ async function startServer() {
           zeroTimeSec: zeroSec,
           arenaInfo: item.competition.arenaInfo || '',
           seriesName: item.competition.seriesName || '',
-          allowSelfRegistration: Boolean(item.competition.allowSelfRegistration),
         },
         courses: Array.isArray(item.courses) ? item.courses : [],
         classes: Array.isArray(item.classes) ? item.classes : [],
@@ -3667,7 +3663,6 @@ async function startServer() {
         shortCode: competition.shortCode,
         status,
         statusOverride: competition.statusOverride,
-        allowSelfRegistration: competition.allowSelfRegistration,
         name: competition.name,
         organizer: competition.organizer,
         date: competition.date,
