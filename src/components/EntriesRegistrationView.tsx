@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
+  Pencil,
   Search,
   Trash2,
   UserCheck,
@@ -100,9 +101,10 @@ export function EntriesRegistrationView({
 }: EntriesRegistrationViewProps) {
   const [siInput, setSiInput] = useState('');
   const [fullName, setFullName] = useState('');
+  const [editingCompetitor, setEditingCompetitor] = useState<Competitor | null>(null);
   const [selectedRunner, setSelectedRunner] = useState<RunnerDbEntry | null>(null);
   const [nameSuggestionOpen, setNameSuggestionOpen] = useState(false);
-  const [activeNameSuggestionIndex, setActiveNameSuggestionIndex] = useState(0);
+  const [activeNameSuggestionIndex, setActiveNameSuggestionIndex] = useState<number | null>(null);
   const [club, setClub] = useState('');
   const [classId, setClassId] = useState<string>(classes[3]?.id ?? classes[0]?.id ?? '');
   const [isRentalCard, setIsRentalCard] = useState(false);
@@ -112,6 +114,7 @@ export function EntriesRegistrationView({
   const [error, setError] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const nameSuggestionListRef = useRef<HTMLDivElement | null>(null);
   const [checkingDeletionId, setCheckingDeletionId] = useState<string | null>(null);
   const [deletionTarget, setDeletionTarget] = useState<Competitor | null>(null);
   const [deletionImpact, setDeletionImpact] = useState<CompetitorDeletionImpact | null>(null);
@@ -225,6 +228,7 @@ export function EntriesRegistrationView({
 
   // Automatically populate runner name, club & default class when an SI number in runnerDb is entered/scanned
   useEffect(() => {
+    if (editingCompetitor) return;
     if (!matchedRunnerFromDb) {
       if (numericSiInput === 0) {
         lastAutoFilledSiRef.current = null;
@@ -251,7 +255,7 @@ export function EntriesRegistrationView({
         setClassId(targetCls.id);
       }
     }
-  }, [matchedRunnerFromDb, numericSiInput, classes, selectedRunner]);
+  }, [matchedRunnerFromDb, numericSiInput, classes, editingCompetitor, selectedRunner]);
 
   // Populate SI-number when captured on USB station in Registration mode
   const lastHandledCaptureAtRef = useRef<number>(0);
@@ -277,6 +281,42 @@ export function EntriesRegistrationView({
     }
   }, [capturedCard, runnerDb]);
 
+  const resetDirectEntryForm = () => {
+    setEditingCompetitor(null);
+    setSelectedRunner(null);
+    setSiInput('');
+    setFullName('');
+    setClub('');
+    setClassId(classes[3]?.id ?? classes[0]?.id ?? '');
+    setIsRentalCard(false);
+    setIsBorrowedCard(false);
+    setStartClock('');
+    setNameSuggestionOpen(false);
+    setActiveNameSuggestionIndex(null);
+    lastAutoFilledSiRef.current = null;
+  };
+
+  const startEditingCompetitor = (competitor: Competitor) => {
+    setEditingCompetitor(competitor);
+    setSelectedRunner(null);
+    setSiInput(String(competitor.siNumber));
+    setFullName(competitor.fullName);
+    setClub(competitor.club);
+    setClassId(competitor.classId);
+    setIsRentalCard(competitor.isRentalCard);
+    setIsBorrowedCard(Boolean(competitor.isBorrowedCard));
+    setStartClock(
+      competitor.allocatedStartSec == null
+        ? ''
+        : formatSecondsAsClock(competitor.allocatedStartSec)
+    );
+    setNameSuggestionOpen(false);
+    setActiveNameSuggestionIndex(null);
+    setError(null);
+    setSuccessNotice(null);
+    lastAutoFilledSiRef.current = competitor.siNumber;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsedSi = Number(siInput.replace(/\D/g, ''));
@@ -294,6 +334,36 @@ export function EntriesRegistrationView({
     setSuccessNotice(null);
 
     const allocSec = startClock.trim() ? parseClockToSeconds(startClock) : null;
+    if (editingCompetitor) {
+      const patch: Partial<Competitor> = {
+        fullName: fullName.trim(),
+        club: club.trim() || clubSettings?.clubName || 'Klubblös',
+        classId: classId || classes[0]?.id,
+        isRentalCard,
+        isBorrowedCard,
+        allocatedStartSec: allocSec,
+      };
+      if (parsedSi !== editingCompetitor.siNumber) {
+        patch.siNumber = parsedSi;
+        patch.cardSeries = inferCardSeries(parsedSi);
+      }
+
+      try {
+        await onUpdateCompetitor(editingCompetitor.id, patch);
+        setSuccessNotice(
+          `Direktanmälan uppdaterad. ${fullName.trim()} sparad med SI ${formatSiNumber(parsedSi)}!`
+        );
+        resetDirectEntryForm();
+      } catch (caught) {
+        setError(
+          caught instanceof Error ? caught.message : 'Direktanmälan kunde inte uppdateras.'
+        );
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     const err = await onCreateCompetitor({
       siNumber: parsedSi,
       cardSeries: inferCardSeries(parsedSi),
@@ -345,7 +415,7 @@ export function EntriesRegistrationView({
     setFullName(runner.fullName);
     setClub(runner.club);
     setNameSuggestionOpen(false);
-    setActiveNameSuggestionIndex(0);
+    setActiveNameSuggestionIndex(null);
     if (runner.defaultClassName) {
       const targetClass = classes.find(
         (candidate) =>
@@ -356,30 +426,50 @@ export function EntriesRegistrationView({
   };
 
   const handleNameInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!nameSuggestionOpen || nameSuggestions.length === 0) {
-      if (e.key === 'ArrowDown' && nameSuggestions.length > 0) {
-        setNameSuggestionOpen(true);
-        setActiveNameSuggestionIndex(0);
+    if (e.key === 'Escape') {
+      if (nameSuggestionOpen) {
+        setNameSuggestionOpen(false);
+        setActiveNameSuggestionIndex(null);
         e.preventDefault();
       }
       return;
     }
 
+    if (nameSuggestions.length === 0) return;
+
     if (e.key === 'ArrowDown') {
-      setActiveNameSuggestionIndex((index) => (index + 1) % nameSuggestions.length);
+      setNameSuggestionOpen(true);
+      setActiveNameSuggestionIndex((index) =>
+        index === null ? 0 : (index + 1) % nameSuggestions.length
+      );
       e.preventDefault();
     } else if (e.key === 'ArrowUp') {
+      setNameSuggestionOpen(true);
       setActiveNameSuggestionIndex(
-        (index) => (index - 1 + nameSuggestions.length) % nameSuggestions.length
+        (index) =>
+          index === null
+            ? nameSuggestions.length - 1
+            : (index - 1 + nameSuggestions.length) % nameSuggestions.length
       );
       e.preventDefault();
     } else if (e.key === 'Enter') {
-      e.preventDefault();
-      selectNameSuggestion(nameSuggestions[activeNameSuggestionIndex]);
-    } else if (e.key === 'Escape') {
-      setNameSuggestionOpen(false);
+      if (
+        nameSuggestionOpen &&
+        activeNameSuggestionIndex !== null &&
+        nameSuggestions[activeNameSuggestionIndex]
+      ) {
+        e.preventDefault();
+        selectNameSuggestion(nameSuggestions[activeNameSuggestionIndex]);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!nameSuggestionOpen || activeNameSuggestionIndex === null) return;
+    nameSuggestionListRef.current
+      ?.querySelector<HTMLElement>(`#direct-entry-runner-suggestion-${activeNameSuggestionIndex}`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [activeNameSuggestionIndex, nameSuggestionOpen]);
 
   return (
     <div className="space-y-3.5">
@@ -428,7 +518,7 @@ export function EntriesRegistrationView({
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3 space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-            Ny direktanmälan / Koppla SI-bricka
+            {editingCompetitor ? 'Redigerar direktanmälan' : 'Ny direktanmälan / Koppla SI-bricka'}
           </h2>
           <span className="text-[11px] text-slate-500 dark:text-slate-400">
             Läser bricknummer direkt vid dopp utan att radera eller kräva tömning
@@ -545,14 +635,19 @@ export function EntriesRegistrationView({
               aria-expanded={nameSuggestionOpen && nameSuggestions.length > 0}
               aria-controls="direct-entry-runner-suggestions"
               aria-activedescendant={
-                nameSuggestionOpen && nameSuggestions.length > 0
+                nameSuggestionOpen &&
+                activeNameSuggestionIndex !== null &&
+                nameSuggestions[activeNameSuggestionIndex]
                   ? `direct-entry-runner-suggestion-${activeNameSuggestionIndex}`
                   : undefined
               }
               onFocus={() => {
                 if (nameSuggestions.length > 0) setNameSuggestionOpen(true);
               }}
-              onBlur={() => setNameSuggestionOpen(false)}
+              onBlur={() => {
+                setNameSuggestionOpen(false);
+                setActiveNameSuggestionIndex(null);
+              }}
               onKeyDown={handleNameInputKeyDown}
               onChange={(e) => {
                 if (e.target.value !== selectedRunner?.fullName) {
@@ -560,7 +655,7 @@ export function EntriesRegistrationView({
                 }
                 setFullName(e.target.value);
                 setNameSuggestionOpen(true);
-                setActiveNameSuggestionIndex(0);
+                setActiveNameSuggestionIndex(null);
               }}
               placeholder="Förnamn Efternamn"
               className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
@@ -568,6 +663,7 @@ export function EntriesRegistrationView({
             />
             {nameSuggestionOpen && nameSuggestions.length > 0 && (
               <div
+                ref={nameSuggestionListRef}
                 id="direct-entry-runner-suggestions"
                 role="listbox"
                 aria-label="Löpare i databasen"
@@ -640,9 +736,33 @@ export function EntriesRegistrationView({
               disabled={saving}
               className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
-              <UserPlus className="w-3.5 h-3.5" />
-              <span>{saving ? 'Sparar...' : 'Spara anmälan'}</span>
+              {editingCompetitor ? (
+                <Pencil className="w-3.5 h-3.5" />
+              ) : (
+                <UserPlus className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {saving
+                  ? 'Sparar...'
+                  : editingCompetitor
+                    ? 'Spara ändringar'
+                    : 'Spara anmälan'}
+              </span>
             </button>
+            {editingCompetitor && (
+              <button
+                type="button"
+                onClick={() => {
+                  resetDirectEntryForm();
+                  setError(null);
+                  setSuccessNotice(null);
+                }}
+                disabled={saving}
+                className="mt-1.5 w-full px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors"
+              >
+                Avbryt
+              </button>
+            )}
           </div>
 
           <div className="sm:col-span-2 lg:col-span-5 flex flex-wrap items-center gap-x-5 gap-y-2 pt-1">
@@ -765,6 +885,14 @@ export function EntriesRegistrationView({
                       </td>
                       <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => startEditingCompetitor(c)}
+                            className="p-1 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 rounded"
+                            aria-label={`Redigera ${c.fullName}`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
                           {c.isRentalCard && !c.rentalReturned && (
                             <button
                               type="button"

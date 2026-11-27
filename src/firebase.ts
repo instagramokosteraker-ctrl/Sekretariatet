@@ -5003,6 +5003,7 @@ export async function updateCompetitorInFirestore(
     'siNumber',
     'cardSeries',
     'isRentalCard',
+    'isBorrowedCard',
     'rentalReturned',
     'status',
     'allocatedStartSec',
