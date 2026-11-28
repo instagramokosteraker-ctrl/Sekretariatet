@@ -334,6 +334,10 @@ export function EntriesRegistrationView({
     setSuccessNotice(null);
 
     const allocSec = startClock.trim() ? parseClockToSeconds(startClock) : null;
+    const cardSeries =
+      selectedRunner?.siNumber === parsedSi
+        ? selectedRunner.cardSeries
+        : inferCardSeries(parsedSi);
     if (editingCompetitor) {
       const patch: Partial<Competitor> = {
         fullName: fullName.trim(),
@@ -345,7 +349,7 @@ export function EntriesRegistrationView({
       };
       if (parsedSi !== editingCompetitor.siNumber) {
         patch.siNumber = parsedSi;
-        patch.cardSeries = inferCardSeries(parsedSi);
+        patch.cardSeries = cardSeries;
       }
 
       try {
@@ -366,7 +370,7 @@ export function EntriesRegistrationView({
 
     const err = await onCreateCompetitor({
       siNumber: parsedSi,
-      cardSeries: inferCardSeries(parsedSi),
+      cardSeries,
       fullName: fullName.trim(),
       club: club.trim() || clubSettings?.clubName || 'Klubblös',
       classId: classId || classes[0]?.id,
@@ -411,7 +415,10 @@ export function EntriesRegistrationView({
   }, [competitors, search]);
 
   const selectNameSuggestion = (runner: RunnerDbEntry) => {
+    const hasSiNumber = Number.isSafeInteger(runner.siNumber) && runner.siNumber > 0;
     setSelectedRunner(runner);
+    setSiInput(hasSiNumber ? String(runner.siNumber) : '');
+    lastAutoFilledSiRef.current = hasSiNumber ? runner.siNumber : null;
     setFullName(runner.fullName);
     setClub(runner.club);
     setNameSuggestionOpen(false);
