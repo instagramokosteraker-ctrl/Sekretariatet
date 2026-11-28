@@ -104,6 +104,7 @@ export function HardwareStationsView({
   const [stationFunction, setStationFunction] = useState<StationFunction>('RADIO');
   const [editingStationId, setEditingStationId] = useState<string | null>(null);
   const [stationErr, setStationErr] = useState<string | null>(null);
+  const [stationBusy, setStationBusy] = useState(false);
   const stationFormRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -139,6 +140,7 @@ export function HardwareStationsView({
   const handleCreateStationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setStationErr(null);
+    setStationBusy(true);
     try {
       const payload: Partial<SIStation> = {
         ...(editingStationId ? { id: editingStationId } : {}),
@@ -162,6 +164,8 @@ export function HardwareStationsView({
       setStationErr(
         error instanceof Error ? error.message : 'Kunde inte spara stationen.'
       );
+    } finally {
+      setStationBusy(false);
     }
   };
 
@@ -467,9 +471,14 @@ export function HardwareStationsView({
               </button>
               <button
                 type="submit"
-                className="px-3.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
+                disabled={stationBusy}
+                className="px-3.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg"
               >
-                {editingStationId ? 'Spara ändringar' : 'Lägg till station'}
+                {stationBusy
+                  ? 'Sparar...'
+                  : editingStationId
+                    ? 'Spara ändringar'
+                    : 'Lägg till station'}
               </button>
             </div>
           </form>
@@ -766,7 +775,13 @@ export function HardwareStationsView({
           {isAdmin && (
             <button
               type="button"
-              onClick={handleOpenNewStation}
+              onClick={() => {
+                if (modalOpen && !editingStationId) {
+                  setModalOpen(false);
+                } else {
+                  handleOpenNewStation();
+                }
+              }}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap"
             >
               {modalOpen && !editingStationId ? (

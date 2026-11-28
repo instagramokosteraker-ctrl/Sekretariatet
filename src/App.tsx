@@ -5435,18 +5435,48 @@ export default function App() {
                   onSimulateFullReadout={handleSimulateFullReadout}
                   onCreateStation={async (payload) => {
                     try {
-                      const useFirestore = await apiRequestUnavailable(
-                        '/api/stations',
-                        {
+                      let response: Response | null = null;
+                      try {
+                        response = await apiFetch('/api/stations', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify(payload),
-                        },
-                        'Kunde inte spara station.'
-                      );
-                      if (!useFirestore) return null;
+                        });
+                      } catch (error) {
+                        if (!(error instanceof TypeError)) throw error;
+                      }
+
+                      if (
+                        response &&
+                        response.status !== 404 &&
+                        response.status !== 405 &&
+                        response.ok
+                      ) {
+                        const saved = await readApiResponseJson<SIStation>(
+                          response,
+                          'Kunde inte spara station.'
+                        );
+                        setStations((current) =>
+                          [...current.filter((station) => station.id !== saved.id), saved].sort(
+                            (a, b) => a.stationCode - b.stationCode
+                          )
+                        );
+                        return null;
+                      }
+                      if (
+                        response &&
+                        response.status !== 404 &&
+                        response.status !== 405
+                      ) {
+                        await ensureApiResponseOk(response, 'Kunde inte spara station.');
+                      }
+
                       const saved = await saveStationToFirestore(activeEventId, payload);
-                      setStations((current) => [...current, saved]);
+                      setStations((current) =>
+                        [...current.filter((station) => station.id !== saved.id), saved].sort(
+                          (a, b) => a.stationCode - b.stationCode
+                        )
+                      );
                       return null;
                     } catch (error) {
                       return error instanceof Error ? error.message : 'Kunde inte spara station.';
