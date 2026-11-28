@@ -680,7 +680,7 @@ export function EntriesRegistrationView({
                     onClick={() => selectNameSuggestion(runner)}
                     className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs ${
                       index === activeNameSuggestionIndex
-                        ? 'bg-slate-100 dark:bg-slate-800'
+                        ? 'bg-sky-100 ring-2 ring-inset ring-sky-600 dark:bg-sky-900/50 dark:ring-sky-400'
                         : 'hover:bg-slate-50 dark:hover:bg-slate-800/70'
                     }`}
                   >

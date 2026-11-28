@@ -733,6 +733,27 @@ export async function runFirestoreRulesDirtyDozenSuite(): Promise<void> {
         })
     );
 
+    const clubEditBatch = writeBatch(raceAdminCtx.firestore());
+    clubEditBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid'),
+      {
+        club: 'Ny klubb',
+        isBorrowedCard: false,
+        updatedAt: serverTimestamp(),
+      }
+    );
+    clubEditBatch.update(
+      doc(raceAdminCtx.firestore(), 'competitions/evt_live/publicResults/cmp_valid'),
+      { club: 'Ny klubb', updatedAt: serverTimestamp() }
+    );
+    await assertSucceeds(clubEditBatch.commit());
+    await assertFails(
+      updateDoc(
+        doc(raceAdminCtx.firestore(), 'competitions/evt_live/competitors/cmp_valid'),
+        { isBorrowedCard: 'false', updatedAt: serverTimestamp() }
+      )
+    );
+
     const invalidEventorIdentityBatch = writeBatch(raceAdminCtx.firestore());
     invalidEventorIdentityBatch.set(
       doc(

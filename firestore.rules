@@ -500,6 +500,7 @@ service cloud.firestore {
           'siNumber',
           'cardSeries',
           'isRentalCard',
+          'isBorrowedCard',
           'rentalReturned',
           'eventorPersonId',
           'eventorOrgId',
@@ -540,6 +541,10 @@ service cloud.firestore {
         data.siNumber is int && data.siNumber >= 1 && data.siNumber <= 99999999 &&
         data.cardSeries is string && data.cardSeries.size() >= 1 && data.cardSeries.size() <= 24 &&
         data.isRentalCard is bool &&
+        (
+          !data.keys().hasAny(['isBorrowedCard']) ||
+          data.isBorrowedCard is bool
+        ) &&
         data.rentalReturned is bool &&
         (
           !data.keys().hasAny(['eventorPersonId']) ||
