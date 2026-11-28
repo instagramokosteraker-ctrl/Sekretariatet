@@ -44,6 +44,7 @@ import {
 import { getRunnerNameSuggestions } from '../utils/runnerNameSuggestions';
 import { calculateReadoutReassignmentPreview } from '../utils/readoutReassignment';
 import { validateCompetitorReadout } from '../utils/readoutValidation';
+import { calculateControlIntakeStatus } from '../utils/controlIntakeStatus';
 import { RunnerStatusIndicator, formatStationFunctionLabel } from './StatusLabels';
 import { RunnerSplitCardModal } from './RunnerSplitCardModal';
 import { ReadoutControlSequence } from './ReadoutControlSequence';
@@ -223,38 +224,10 @@ export function ReadoutDashboard({
   );
 
   // MeOS Control Status (Kontrollintagning)
-  const controlStatusList = useMemo(() => {
-    const allCodes = Array.from(
-      new Set(courses.flatMap((c) => c.controls))
-    ).sort((a, b) => a - b);
-
-    return allCodes.map((code) => {
-      const matchingCourseIds = new Set(
-        courses.filter((crs) => crs.controls.includes(code)).map((c) => c.id)
-      );
-      const matchingClassIds = new Set(
-        classes.filter((cls) => cls.courseId && matchingCourseIds.has(cls.courseId)).map((c) => c.id)
-      );
-      const activeRunnersRemaining = competitors.filter((cmp) => {
-        if (
-          cmp.status !== 'REGISTERED' &&
-          cmp.status !== 'CHECKED' &&
-          cmp.status !== 'IN_FOREST'
-        ) {
-          return false;
-        }
-        if (!matchingClassIds.has(cmp.classId)) return false;
-        const punched = cmp.cardPunches.some((p) => p.code === code);
-        return !punched;
-      }).length;
-
-      return {
-        code,
-        courseCount: matchingCourseIds.size,
-        activeRunnersRemaining,
-      };
-    });
-  }, [courses, classes, competitors]);
+  const controlStatusList = useMemo(
+    () => calculateControlIntakeStatus(courses, classes, competitors),
+    [courses, classes, competitors]
+  );
 
   const rentalList = useMemo(
     () => competitors.filter((c) => c.isRentalCard),
@@ -1977,7 +1950,7 @@ export function ReadoutDashboard({
               Kontrollstatus i skogen (Kontrollintagning)
             </h2>
             <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              Antal löpare i terrängen med kontrollen kvar
+              Löpare utan avläsning på banor med kontrollen
             </span>
           </div>
 

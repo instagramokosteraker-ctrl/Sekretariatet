@@ -14,6 +14,7 @@ import {
   type ParsedIofCourse,
   type ParsedIofDocument,
 } from '../utils/iofXml';
+import { calculateControlIntakeStatus } from '../utils/controlIntakeStatus';
 
 interface CoursesClassesViewProps {
   courses: Course[];
@@ -83,38 +84,10 @@ export function CoursesClassesView({
   }, [importParsed, importAutoClasses, importFreeStart]);
 
   // MeOS "Kontrollstatus": How many runners in forest/registered still have each control ahead of them?
-  const controlStatusList = useMemo(() => {
-    const allCodes = Array.from(
-      new Set(courses.flatMap((c) => c.controls))
-    ).sort((a, b) => a - b);
-
-    return allCodes.map((code) => {
-      const coursesUsing = courses.filter((c) => c.controls.includes(code));
-      const classIdsUsing = new Set(
-        classes
-          .filter((cl) => {
-            if (cl.classFormat === 'FORKED' && cl.forkCourseIds?.length) {
-              return coursesUsing.some((cr) => cl.forkCourseIds!.includes(cr.id));
-            }
-            return coursesUsing.some((cr) => cr.id === cl.courseId);
-          })
-          .map((cl) => cl.id)
-      );
-
-      const activeRunnersRemaining = competitors.filter((r) => {
-        if (!classIdsUsing.has(r.classId)) return false;
-        if (r.status !== 'CHECKED' && r.status !== 'IN_FOREST') return false;
-        const passedThisRadio = r.radioSplits.some((s) => s.controlCode === code);
-        return !passedThisRadio;
-      }).length;
-
-      return {
-        code,
-        courseCount: coursesUsing.length,
-        activeRunnersRemaining,
-      };
-    });
-  }, [courses, classes, competitors]);
+  const controlStatusList = useMemo(
+    () => calculateControlIntakeStatus(courses, classes, competitors),
+    [courses, classes, competitors]
+  );
 
   const openNewCourse = () => {
     setCourseActionError(null);
@@ -1027,7 +1000,7 @@ export function CoursesClassesView({
             Kontrollstatus i skogen (Kontrollintagning)
           </h2>
           <span className="text-[11px] text-slate-500 dark:text-slate-400">
-            Antal löpare i terrängen med kontrollen kvar
+            Löpare utan avläsning på banor med kontrollen
           </span>
         </div>
 
