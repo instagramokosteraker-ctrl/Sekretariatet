@@ -19,7 +19,7 @@ import type {
 } from '../types/sportident';
 import { useEffectiveCompetitors } from '../hooks/useEffectiveCompetitors';
 import {
-  getScheduledStartTimestamp,
+  getCompetitionClockTimestamp,
   transitionStartCorralStatus,
 } from '../utils/effectiveRunnerStatus';
 import {
@@ -209,14 +209,14 @@ export function StartCorralView({
   const activeClockSec = clockMode === 'REALTIME' ? wallSec : simBaseSec;
   const callupClockSec = (activeClockSec + corralOffsetMin * 60) % 86400;
   const secInMinute = activeClockSec % 60;
-  const simulatedNowMs =
-    clockMode === 'RACE_SIM'
-      ? getScheduledStartTimestamp(competition.date, activeClockSec) ?? Date.now()
-      : undefined;
+  const competitionClockNowMs = getCompetitionClockTimestamp(
+    competition.date,
+    activeClockSec
+  );
   const competitors = useEffectiveCompetitors(
     rawCompetitors,
     competition,
-    simulatedNowMs
+    competitionClockNowMs
   );
 
   useEffect(() => {

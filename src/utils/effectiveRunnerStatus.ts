@@ -136,6 +136,16 @@ export function getScheduledStartTimestamp(
   return timestamp;
 }
 
+export function getCompetitionClockTimestamp(
+  competitionDate: string,
+  clockSec: number,
+  fallbackNowMs = Date.now()
+): number {
+  return (
+    getScheduledStartTimestamp(competitionDate, clockSec) ?? fallbackNowMs
+  );
+}
+
 export function getEffectiveRunnerStatus(
   competitor: Pick<Competitor, 'status' | 'allocatedStartSec'>,
   competition: Pick<CompetitionMeta, 'date' | 'status'>,

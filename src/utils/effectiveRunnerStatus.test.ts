@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CompetitionMeta, Competitor } from '../types/sportident';
 import {
+  getCompetitionClockTimestamp,
   getEffectiveRunnerStatus,
   getScheduledStartTimestamp,
   transitionStartCorralStatus,
@@ -48,6 +49,29 @@ describe('effective runner status', () => {
     expect(getScheduledStartTimestamp('2026-07-15', 10 * 3600)).toBe(
       Date.parse('2026-07-15T08:00:00Z')
     );
+  });
+
+  it('uses the Start clock on the competition date when the host date is later', () => {
+    const competitionDate = '2026-11-26';
+    const startSec = 17 * 3600 + 34 * 60;
+    const activeClockSec = 17 * 3600 + 32 * 60 + 28;
+    const hostNowMs = Date.parse('2026-11-28T16:32:28Z');
+    const competitionClockNowMs = getCompetitionClockTimestamp(
+      competitionDate,
+      activeClockSec,
+      hostNowMs
+    );
+
+    expect(hostNowMs).toBeGreaterThan(
+      getScheduledStartTimestamp(competitionDate, startSec)!
+    );
+    expect(
+      getEffectiveRunnerStatus(
+        { ...makeCompetitor(), allocatedStartSec: startSec },
+        { ...competition, date: competitionDate },
+        competitionClockNowMs
+      )
+    ).toBe('CHECKED');
   });
 
   it('keeps a checked runner checked before the allocated start', () => {
