@@ -224,13 +224,13 @@ const NAV_ITEMS: {
 }[] = [
   { id: 'competition_settings', label: 'Tävlingsinställningar', icon: SlidersHorizontal },
   { id: 'courses', label: 'Banor & Klasser', icon: GitBranch },
-  { id: 'entries', label: 'Direktanmälan', icon: UserPlus },
-  { id: 'readout', label: 'Avläsning & Översikt', icon: Activity },
-  { id: 'start_corral', label: 'Startfålla och startlista', icon: Timer },
-  { id: 'forest', label: 'Kvar i skogen', icon: Compass },
-  { id: 'results', label: 'Speaker & Resultat', icon: Mic },
-  { id: 'draw', label: 'Lottning', icon: Shuffle },
   { id: 'hardware', label: 'SportIdent, ROC & USB', icon: Radio },
+  { id: 'entries', label: 'Direktanmälan', icon: UserPlus },
+  { id: 'draw', label: 'Lottning', icon: Shuffle },
+  { id: 'start_corral', label: 'Startfålla och startlista', icon: Timer },
+  { id: 'readout', label: 'Avläsning & Översikt', icon: Activity },
+  { id: 'results', label: 'Speaker & Resultat', icon: Mic },
+  { id: 'forest', label: 'Kvar i skogen', icon: Compass },
   { id: 'season', label: 'Tävlingar och Serier', icon: Trophy },
   { id: 'runner_db', label: 'Löpardatabas', icon: Database },
   { id: 'access', label: 'Klubbadmin och behörighet', icon: KeyRound },
@@ -3257,6 +3257,8 @@ export default function App() {
                 type="button"
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 text-[13px] font-medium rounded-lg transition-colors whitespace-nowrap ${
+                  item.id === 'season' ? 'mt-3' : ''
+                } ${
                   isActive
                     ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100/80 dark:hover:bg-slate-800/60'
@@ -3468,6 +3470,8 @@ export default function App() {
                       setMobileNavOpen(false);
                     }}
                     className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-[13px] font-medium rounded-lg ${
+                      item.id === 'season' ? 'mt-3' : ''
+                    } ${
                       isActive
                         ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
                         : 'text-slate-600 dark:text-slate-400'
