@@ -12,8 +12,9 @@ import {
   initializeApp,
   type Credential,
 } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { getParsedServiceAccount } from './src/server/firebaseServiceAccount';
+import { transitionStartCorralStatus } from './src/utils/effectiveRunnerStatus';
 import {
   calculateSeriesStandings,
   normalizeSeriesScoringSettings,
@@ -467,6 +468,7 @@ interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
+    rocUnitId?: string;
   };
   courses: Course[];
   classes: CompClass[];
@@ -2389,9 +2391,7 @@ async function startServer() {
 
       if (station.stationFunction === 'CHECK') {
         runner.checkTimeSec = effectiveSec;
-        if (runner.status === 'REGISTERED' || runner.status === 'DNS') {
-          runner.status = 'CHECKED';
-        }
+        runner.status = transitionStartCorralStatus(runner.status, 'CHECK');
         eventItem = {
           id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           timestamp: nowIso,
@@ -2410,13 +2410,7 @@ async function startServer() {
         };
       } else if (station.stationFunction === 'START') {
         runner.startTimeSec = effectiveSec;
-        if (
-          runner.status === 'REGISTERED' ||
-          runner.status === 'CHECKED' ||
-          runner.status === 'DNS'
-        ) {
-          runner.status = 'IN_FOREST';
-        }
+        runner.status = transitionStartCorralStatus(runner.status, 'START_PUNCH');
         eventItem = {
           id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
           timestamp: nowIso,
@@ -2462,7 +2456,7 @@ async function startServer() {
         };
       } else {
         if (runner.status === 'REGISTERED' || runner.status === 'CHECKED') {
-          runner.status = 'IN_FOREST';
+          runner.status = transitionStartCorralStatus(runner.status, 'START_PUNCH');
         }
         const startRef =
           runner.startTimeSec ?? runner.allocatedStartSec ?? ev.competition.zeroTimeSec;
@@ -3223,6 +3217,7 @@ async function startServer() {
         zeroTimeSec: ev.competition.zeroTimeSec,
         arenaInfo: ev.competition.arenaInfo || '',
         seriesName: ev.competition.seriesName || '',
+        rocUnitId: ev.roc.unitId,
       },
       courses: ev.courses,
       classes: ev.classes.map(omitLegacyPaymentFields),
@@ -3303,7 +3298,12 @@ async function startServer() {
             existingLocal?.emergency?.controlTimeOffsets ??
             {},
         },
-        roc: existingLocal?.roc ?? buildDefaultRocStatus('1042'),
+        roc: {
+          ...(existingLocal?.roc ?? buildDefaultRocStatus('1042')),
+          ...(typeof item.competition.rocUnitId === 'string'
+            ? { unitId: item.competition.rocUnitId.trim().slice(0, 128) }
+            : {}),
+        },
         events: existingLocal?.events ?? [],
         processedClientIds: existingLocal?.processedClientIds ?? [],
       };
@@ -4314,11 +4314,48 @@ async function startServer() {
   });
 
   // 5. ROC (roc.olresultat.se) Radio Controls Integration
-  app.put('/api/roc/settings', (req, res) => {
+  app.put('/api/roc/settings', async (req, res) => {
+    if (!requireAdminRequest(req, res)) return;
     const db = getActiveEvent();
     const body = req.body as Partial<RocIntegrationStatus>;
+    let updatedUnitId: string | undefined;
+    if (body.unitId !== undefined) {
+      if (typeof body.unitId !== 'string' || body.unitId.length > 128) {
+        res.status(400).json({ error: 'Ogiltigt ROC Passnings-ID.' });
+        return;
+      }
+      if (!db.competition.id) {
+        res.status(409).json({ error: 'Ingen aktiv tävling finns att spara ROC Passnings-ID för.' });
+        return;
+      }
+      updatedUnitId = body.unitId.trim();
+      console.info('[roc-settings] save started', {
+        competitionId: db.competition.id,
+        unitId: updatedUnitId,
+      });
+      try {
+        await getTrustedFirestore()
+          .doc(`competitions/${db.competition.id}`)
+          .update({
+            rocUnitId: updatedUnitId,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+      } catch (error) {
+        console.error('[roc-settings] save failed', {
+          competitionId: db.competition.id,
+          unitId: updatedUnitId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).json({ error: 'ROC Passnings-ID kunde inte sparas i Firestore.' });
+        return;
+      }
+      db.roc.unitId = updatedUnitId;
+      console.info('[roc-settings] save succeeded', {
+        competitionId: db.competition.id,
+        unitId: updatedUnitId,
+      });
+    }
     if (body.enabled !== undefined) db.roc.enabled = Boolean(body.enabled);
-    if (body.unitId !== undefined) db.roc.unitId = String(body.unitId).trim();
     if (body.pollIntervalSec !== undefined) {
       db.roc.pollIntervalSec = Math.max(3, Math.min(60, Number(body.pollIntervalSec) || 5));
     }

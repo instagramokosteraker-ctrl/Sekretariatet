@@ -276,6 +276,7 @@ service cloud.firestore {
           'zeroTimeSec',
           'arenaInfo',
           'seriesName',
+          'rocUnitId',
           'eventorEventId',
           'allowSelfRegistration',
           'feeTrackingEnabled',
@@ -304,6 +305,10 @@ service cloud.firestore {
         data.zeroTimeSec is int && data.zeroTimeSec >= 0 && data.zeroTimeSec <= 86400 &&
         data.arenaInfo is string && data.arenaInfo.size() <= 500 &&
         data.seriesName is string && data.seriesName.size() <= 80 &&
+        (
+          !data.keys().hasAny(['rocUnitId']) ||
+          (data.rocUnitId is string && data.rocUnitId.size() <= 128)
+        ) &&
         (
           !data.keys().hasAny(['eventorEventId']) ||
           (
@@ -1246,6 +1251,7 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
+              'rocUnitId',
               'competitorCount',
               'finishedCount',
               'brokenControls',
@@ -1273,6 +1279,7 @@ service cloud.firestore {
               'zeroTimeSec',
               'arenaInfo',
               'seriesName',
+              'rocUnitId',
               'competitorCount',
               'finishedCount',
               'brokenControls',

@@ -8,6 +8,20 @@ export type CompetitorWithOptionalEffectiveStatus = Competitor & {
   effectiveStatus?: RunnerStatus;
 };
 
+export type StartCorralStatusAction = 'CHECK' | 'START_PUNCH';
+
+export function transitionStartCorralStatus(
+  status: RunnerStatus,
+  action: StartCorralStatusAction
+): RunnerStatus {
+  if (action === 'CHECK') {
+    return status === 'REGISTERED' || status === 'DNS' ? 'CHECKED' : status;
+  }
+  return status === 'REGISTERED' || status === 'CHECKED' || status === 'DNS'
+    ? 'IN_FOREST'
+    : status;
+}
+
 interface StockholmDateTime {
   year: number;
   month: number;

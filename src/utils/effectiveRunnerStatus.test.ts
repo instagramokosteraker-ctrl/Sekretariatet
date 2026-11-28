@@ -3,6 +3,7 @@ import type { CompetitionMeta, Competitor } from '../types/sportident';
 import {
   getEffectiveRunnerStatus,
   getScheduledStartTimestamp,
+  transitionStartCorralStatus,
   withEffectiveStatus,
 } from './effectiveRunnerStatus';
 
@@ -55,6 +56,11 @@ describe('effective runner status', () => {
     ).toBe('CHECKED');
   });
 
+  it('moves a runner to checked for a check action, not directly to in-forest', () => {
+    expect(transitionStartCorralStatus('REGISTERED', 'CHECK')).toBe('CHECKED');
+    expect(transitionStartCorralStatus('CHECKED', 'CHECK')).toBe('CHECKED');
+  });
+
   it('derives in-forest status at the allocated start boundary', () => {
     expect(
       getEffectiveRunnerStatus(makeCompetitor(), competition, scheduledStart)
@@ -76,6 +82,27 @@ describe('effective runner status', () => {
         scheduledStart + 1000
       )
     ).toBe('REGISTERED');
+  });
+
+  it('does not transition an unchecked runner when another runner is checked', () => {
+    const checked = withEffectiveStatus(
+      makeCompetitor('CHECKED'),
+      competition,
+      scheduledStart + 1000
+    );
+    const unchecked = withEffectiveStatus(
+      { ...makeCompetitor('REGISTERED'), id: 'runner-2' },
+      competition,
+      scheduledStart + 1000
+    );
+
+    expect(checked.effectiveStatus).toBe('IN_FOREST');
+    expect(unchecked.effectiveStatus).toBe('REGISTERED');
+  });
+
+  it('moves a checked runner to in-forest on a start punch', () => {
+    expect(transitionStartCorralStatus('CHECKED', 'START_PUNCH')).toBe('IN_FOREST');
+    expect(transitionStartCorralStatus('REGISTERED', 'START_PUNCH')).toBe('IN_FOREST');
   });
 
   it('uses the stored status for completed competitions', () => {

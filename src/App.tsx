@@ -1046,7 +1046,15 @@ export default function App() {
     return subscribeCompetitionMetadataFromFirestore(
       activeEventId,
       (metadata, emergencySettings) => {
-        if (metadata) setCompetition(metadata);
+        if (metadata) {
+          setCompetition(metadata);
+          if (metadata.rocUnitId !== undefined) {
+            const unitId = metadata.rocUnitId;
+            setRoc((current) =>
+              current.unitId === unitId ? current : { ...current, unitId }
+            );
+          }
+        }
         if (emergencySettings) {
           setEmergency((current) => {
             const sameBrokenControls =
@@ -5274,7 +5282,6 @@ export default function App() {
                   emergency={emergency}
                   roc={roc}
                   stations={stations}
-                  serialStatus={serialStatus}
                   onUpdateEmergency={async (patch) => {
                     let res: Response | null = null;
                     try {
@@ -5384,11 +5391,16 @@ export default function App() {
                     return null;
                   }}
                   onUpdateRocSettings={async (patch) => {
-                    await apiFetch('/api/roc/settings', {
+                    const response = await apiFetch('/api/roc/settings', {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(patch),
                     });
+                    const saved = await readApiResponseJson<RocIntegrationStatus>(
+                      response,
+                      'Kunde inte spara ROC-inställningarna.'
+                    );
+                    setRoc(saved);
                   }}
                   onPollRocNow={async () => {
                     const res = await apiFetch('/api/roc/poll-now', { method: 'POST' });
@@ -5415,28 +5427,8 @@ export default function App() {
                       samplePayload: data.samplePayload ?? '',
                     };
                   }}
-                  onConnectUsb={async (baud) => {
-                    await readoutHistoryStore.initialize();
-                    await sportidentSerial.connect(baud);
-                  }}
-                  onConnectWebUsb={async (baud) => {
-                    await readoutHistoryStore.initialize();
-                    await sportidentSerial.connectWebUsb(baud);
-                  }}
-                  onDisconnectUsb={() => sportidentSerial.disconnect()}
-                  onSetUsbMode={(mode) => sportidentSerial.setUsbMode(mode)}
-                  onSetBaudRate={(baud) => sportidentSerial.setBaudRate(baud)}
                   onSelectRunner={(id) => setSelectedRunnerId(id)}
                   onSimulateFullReadout={handleSimulateFullReadout}
-                  onSendDirectMode={async () => {
-                    await sportidentSerial.requestDirectMode();
-                  }}
-                  onRequestSysConfig={async () => {
-                    await sportidentSerial.requestSystemConfig();
-                  }}
-                  onTriggerStationBeep={async () => {
-                    await sportidentSerial.triggerStationBeep(1);
-                  }}
                   onCreateStation={async (payload) => {
                     try {
                       const useFirestore = await apiRequestUnavailable(

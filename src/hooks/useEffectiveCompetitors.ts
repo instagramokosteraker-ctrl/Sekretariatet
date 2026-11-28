@@ -10,12 +10,19 @@ const MAX_TIMEOUT_MS = 2_147_000_000;
 
 export function useEffectiveCompetitors(
   competitors: Competitor[],
-  competition: Pick<CompetitionMeta, 'date' | 'status'> | null
+  competition: Pick<CompetitionMeta, 'date' | 'status'> | null,
+  controlledNowMs?: number
 ): CompetitorWithEffectiveStatus[] {
   const [clockRevision, setClockRevision] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!competition || competition.status === 'COMPLETED') return;
+    if (
+      controlledNowMs !== undefined ||
+      !competition ||
+      competition.status === 'COMPLETED'
+    ) {
+      return;
+    }
 
     const now = Date.now();
     const nextStart = competitors.reduce<number | null>((nearest, competitor) => {
@@ -34,7 +41,7 @@ export function useEffectiveCompetitors(
       Math.min(nextStart - now, MAX_TIMEOUT_MS)
     );
     return () => window.clearTimeout(timer);
-  }, [competitors, competition, clockRevision]);
+  }, [competitors, competition, clockRevision, controlledNowMs]);
 
   useEffect(() => {
     const refreshClock = () => setClockRevision(Date.now());
@@ -48,13 +55,13 @@ export function useEffectiveCompetitors(
 
   return useMemo(
     () => {
-      const nowMs = Date.now();
+      const nowMs = controlledNowMs ?? Date.now();
       return competitors.map((competitor) => ({
         ...(competition
           ? withEffectiveStatus(competitor, competition, nowMs)
           : { ...competitor, effectiveStatus: competitor.status }),
       }));
     },
-    [competitors, competition, clockRevision]
+    [competitors, competition, clockRevision, controlledNowMs]
   );
 }

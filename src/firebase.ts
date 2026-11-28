@@ -40,6 +40,7 @@ import {
   type FirestoreCompetitorContext,
   type FirestoreLiveRadioPunch,
 } from './utils/firestoreLiveResults';
+import { transitionStartCorralStatus } from './utils/effectiveRunnerStatus';
 import { applyPublicCompetitionCounts } from './utils/publicCompetitionSummaries';
 import {
   addPublicRadioSplit,
@@ -1855,6 +1856,7 @@ export async function updateCompetitionMetadataInFirestore(
     zeroTimeSec?: number;
     arenaInfo?: string;
     seriesName?: string;
+    rocUnitId?: string;
   }
 ): Promise<void> {
   const statusOnlyUpdate =
@@ -1897,6 +1899,12 @@ export async function updateCompetitionMetadataInFirestore(
   }
   if ('arenaInfo' in patch) mutable.arenaInfo = (patch.arenaInfo || '').trim().slice(0, 500);
   if ('seriesName' in patch) mutable.seriesName = (patch.seriesName || '').trim().slice(0, 80);
+  if ('rocUnitId' in patch) {
+    if (typeof patch.rocUnitId !== 'string' || patch.rocUnitId.length > 128) {
+      throw new Error('ROC Passnings-ID får vara högst 128 tecken.');
+    }
+    mutable.rocUnitId = patch.rocUnitId.trim();
+  }
   if (Object.keys(mutable).length === 0) return;
   await updateDoc(doc(db, 'competitions', context.competitionId), {
     ...mutable,
@@ -2297,6 +2305,9 @@ export async function syncFullSeasonToFirestore(
       statusOverride: Boolean(ev.competition.statusOverride),
       arenaInfo: (ev.competition.arenaInfo || '').trim().slice(0, 500),
       seriesName: (ev.competition.seriesName || '').trim().slice(0, 80),
+      ...(typeof ev.competition.rocUnitId === 'string'
+        ? { rocUnitId: ev.competition.rocUnitId.trim().slice(0, 128) }
+        : {}),
       competitorCount,
       finishedCount,
       brokenControls: (ev.brokenControls || [])
@@ -2933,6 +2944,9 @@ export async function loadFullSeasonFromFirestore(options?: {
         zeroTimeSec: Number(compDocData.zeroTimeSec ?? 36000),
         arenaInfo: String(compDocData.arenaInfo || ''),
         seriesName: String(compDocData.seriesName || ''),
+        ...(typeof compDocData.rocUnitId === 'string'
+          ? { rocUnitId: compDocData.rocUnitId }
+          : {}),
       },
       courses,
       classes,
@@ -6363,18 +6377,12 @@ export async function submitOnlinePunchToFirestore(
     const update: Record<string, unknown> = { updatedAt: serverTimestamp() };
     if (stationFunction === 'CHECK') {
       update.checkTimeSec = punchTimeSec;
-      if (competitor.status === 'REGISTERED' || competitor.status === 'DNS') {
-        update.status = 'CHECKED';
-      }
+      const nextStatus = transitionStartCorralStatus(competitor.status, 'CHECK');
+      if (nextStatus !== competitor.status) update.status = nextStatus;
     } else if (stationFunction === 'START') {
       update.startTimeSec = punchTimeSec;
-      if (
-        competitor.status === 'REGISTERED' ||
-        competitor.status === 'CHECKED' ||
-        competitor.status === 'DNS'
-      ) {
-        update.status = 'IN_FOREST';
-      }
+      const nextStatus = transitionStartCorralStatus(competitor.status, 'START_PUNCH');
+      if (nextStatus !== competitor.status) update.status = nextStatus;
     } else if (stationFunction === 'FINISH') {
       update.finishTimeSec = punchTimeSec;
       update.runningTimeSec = runningTimeSec;
@@ -6396,7 +6404,7 @@ export async function submitOnlinePunchToFirestore(
       (stationFunction === 'RADIO' || stationFunction === 'PREWARNING') &&
       (competitor.status === 'REGISTERED' || competitor.status === 'CHECKED')
     ) {
-      update.status = 'IN_FOREST';
+      update.status = transitionStartCorralStatus(competitor.status, 'START_PUNCH');
     }
     transaction.update(competitorRef, update);
     const publicRadioSplit =
@@ -8083,6 +8091,9 @@ export function subscribeCompetitionMetadataFromFirestore(
         zeroTimeSec: clampInt(data.zeroTimeSec, 0, 86400, 64800),
         arenaInfo: typeof data.arenaInfo === 'string' ? data.arenaInfo : '',
         seriesName: typeof data.seriesName === 'string' ? data.seriesName : '',
+        ...(typeof data.rocUnitId === 'string'
+          ? { rocUnitId: data.rocUnitId }
+          : {}),
       };
       onUpdate(
         competition,

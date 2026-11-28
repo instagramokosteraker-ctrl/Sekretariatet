@@ -19,6 +19,10 @@ import type {
 } from '../types/sportident';
 import { useEffectiveCompetitors } from '../hooks/useEffectiveCompetitors';
 import {
+  getScheduledStartTimestamp,
+  transitionStartCorralStatus,
+} from '../utils/effectiveRunnerStatus';
+import {
   formatSecondsAsClock,
   formatSiNumber,
   inferCardSeries,
@@ -111,7 +115,6 @@ export function StartCorralView({
   onCreateCompetitor,
   onUpdateCompetitor,
 }: StartCorralViewProps) {
-  const competitors = useEffectiveCompetitors(rawCompetitors, competition);
   // Real-time 24h Swedish clock by default so BSM8 Pinnstart matches forest SI stations; Testklocka available for pre-race rehearsal
   const [clockMode, setClockMode] = useState<'REALTIME' | 'RACE_SIM'>('REALTIME');
   const [simBaseSec, setSimBaseSec] = useState<number>(() => competition.zeroTimeSec + 110);
@@ -206,6 +209,15 @@ export function StartCorralView({
   const activeClockSec = clockMode === 'REALTIME' ? wallSec : simBaseSec;
   const callupClockSec = (activeClockSec + corralOffsetMin * 60) % 86400;
   const secInMinute = activeClockSec % 60;
+  const simulatedNowMs =
+    clockMode === 'RACE_SIM'
+      ? getScheduledStartTimestamp(competition.date, activeClockSec) ?? Date.now()
+      : undefined;
+  const competitors = useEffectiveCompetitors(
+    rawCompetitors,
+    competition,
+    simulatedNowMs
+  );
 
   useEffect(() => {
     if (!startBeepRef.current) return;
@@ -293,7 +305,7 @@ export function StartCorralView({
 
         if (startUsbAction === 'PUNCH_START') {
           await onUpdateCompetitor(matched.id, {
-            status: 'IN_FOREST',
+            status: transitionStartCorralStatus(matched.status, 'START_PUNCH'),
             startTimeSec: stampSec,
             checkTimeSec: matched.checkTimeSec ?? stampSec,
             lastSeenControl: 20,
@@ -333,7 +345,7 @@ export function StartCorralView({
             return;
           }
           await onUpdateCompetitor(matched.id, {
-            status: 'CHECKED',
+            status: transitionStartCorralStatus(matched.status, 'CHECK'),
             checkTimeSec: stampSec,
           });
           if (soundEnabled) playMeosFeedbackTone('registration');
@@ -465,7 +477,10 @@ export function StartCorralView({
       if (existingDns) {
         await onUpdateCompetitor(existingDns.id, {
           classId: clsId,
-          status: isPunchStart ? 'IN_FOREST' : 'CHECKED',
+          status: transitionStartCorralStatus(
+            existingDns.status,
+            isPunchStart ? 'START_PUNCH' : 'CHECK'
+          ),
           checkTimeSec: stamp,
           startTimeSec: isPunchStart ? stamp : null,
           lastSeenControl: isPunchStart ? 20 : null,
@@ -529,7 +544,10 @@ export function StartCorralView({
         siNumber: pendingStartCard.siNumber,
         cardSeries: pendingStartCard.cardSeries,
         isBorrowedCard: true,
-        status: isPunchStart ? 'IN_FOREST' : 'CHECKED',
+        status: transitionStartCorralStatus(
+          target.status,
+          isPunchStart ? 'START_PUNCH' : 'CHECK'
+        ),
         checkTimeSec: target.checkTimeSec ?? stamp,
         startTimeSec: isPunchStart ? stamp : target.startTimeSec,
         lastSeenControl: isPunchStart ? 20 : target.lastSeenControl,
@@ -1231,12 +1249,12 @@ export function StartCorralView({
                         </span>
                         <span className="text-[11px] text-slate-500 font-mono"> · {cls}</span>
                       </div>
-                      {r.status === 'REGISTERED' ? (
+                      {r.effectiveStatus === 'REGISTERED' ? (
                         <button
                           type="button"
                           onClick={() =>
                             void onUpdateCompetitor(r.id, {
-                              status: 'CHECKED',
+                              status: transitionStartCorralStatus(r.status, 'CHECK'),
                               checkTimeSec: activeClockSec,
                             })
                           }
@@ -1244,11 +1262,13 @@ export function StartCorralView({
                         >
                           Check
                         </button>
-                      ) : r.status === 'CHECKED' ? (
+                      ) : r.effectiveStatus === 'CHECKED' ? (
                         <span className="text-[11px] text-slate-500 whitespace-nowrap shrink-0">
                           Checkad
                         </span>
-                      ) : null}
+                      ) : (
+                        <RunnerStatusIndicator status={r.effectiveStatus} compact />
+                      )}
                     </div>
                   );
                 })}
@@ -1284,18 +1304,27 @@ export function StartCorralView({
                         </span>
                         <span className="text-[11px] text-slate-500 font-mono"> · {cls}</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void onUpdateCompetitor(r.id, {
-                            status: 'CHECKED',
-                            checkTimeSec: activeClockSec,
-                          })
-                        }
-                        className="px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded whitespace-nowrap shrink-0"
-                      >
-                        Check
-                      </button>
+                      {(r.effectiveStatus === 'REGISTERED' ||
+                        r.effectiveStatus === 'DNS') ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void onUpdateCompetitor(r.id, {
+                              status: transitionStartCorralStatus(r.status, 'CHECK'),
+                              checkTimeSec: activeClockSec,
+                            })
+                          }
+                          className="px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded whitespace-nowrap shrink-0"
+                        >
+                          Check
+                        </button>
+                      ) : r.effectiveStatus === 'CHECKED' ? (
+                        <span className="text-[11px] text-slate-500 whitespace-nowrap shrink-0">
+                          Checkad
+                        </span>
+                      ) : (
+                        <RunnerStatusIndicator status={r.effectiveStatus} compact />
+                      )}
                     </div>
                   );
                 })}
@@ -1486,38 +1515,45 @@ export function StartCorralView({
 
                     <td className="py-1.5 pl-2 pr-3.5 text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void onUpdateCompetitor(r.id, {
-                              status: 'CHECKED',
-                              checkTimeSec: activeClockSec,
-                            })
-                          }
-                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
-                          title="Markera avprickad i förfållan"
-                        >
-                          <Check className="w-3 h-3" />
-                          <span className="hidden sm:inline">Check</span>
-                        </button>
+                        {['REGISTERED', 'CHECKED', 'DNS'].includes(r.effectiveStatus) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void onUpdateCompetitor(r.id, {
+                                status: transitionStartCorralStatus(r.status, 'CHECK'),
+                                checkTimeSec: activeClockSec,
+                              })
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
+                            title="Markera avprickad i förfållan"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span className="hidden sm:inline">Check</span>
+                          </button>
+                        )}
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void onUpdateCompetitor(r.id, {
-                              status: 'IN_FOREST',
-                              startTimeSec: r.allocatedStartSec ?? activeClockSec,
-                              checkTimeSec: r.checkTimeSec ?? activeClockSec,
-                              lastSeenControl: 20,
-                              lastSeenTimeSec: r.allocatedStartSec ?? activeClockSec,
-                            })
-                          }
-                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded"
-                          title="Registrera start och skicka ut i skogen"
-                        >
-                          <Play className="w-3 h-3" />
-                          <span>Start</span>
-                        </button>
+                        {['REGISTERED', 'CHECKED', 'DNS'].includes(r.effectiveStatus) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void onUpdateCompetitor(r.id, {
+                                status: transitionStartCorralStatus(
+                                  r.status,
+                                  'START_PUNCH'
+                                ),
+                                startTimeSec: r.allocatedStartSec ?? activeClockSec,
+                                checkTimeSec: r.checkTimeSec ?? activeClockSec,
+                                lastSeenControl: 20,
+                                lastSeenTimeSec: r.allocatedStartSec ?? activeClockSec,
+                              })
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded"
+                            title="Registrera start och skicka ut i skogen"
+                          >
+                            <Play className="w-3 h-3" />
+                            <span>Start</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"

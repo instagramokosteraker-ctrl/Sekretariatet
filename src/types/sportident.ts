@@ -80,6 +80,7 @@ export interface CompetitionMeta {
   zeroTimeSec: number; // seconds since midnight, e.g. 36000
   arenaInfo?: string;
   seriesName?: string;
+  rocUnitId?: string;
 }
 
 export interface CompetitionSummary {
@@ -590,6 +591,7 @@ export interface CloudEventExportItem {
     zeroTimeSec: number;
     arenaInfo: string;
     seriesName: string;
+    rocUnitId?: string;
   };
   courses: Course[];
   classes: CompClass[];

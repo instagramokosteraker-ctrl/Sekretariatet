@@ -8,11 +8,7 @@ import {
   Plus,
   Radio,
   RefreshCw,
-  Sliders,
-  Smartphone,
   Trash2,
-  Usb,
-  Volume2,
   Wrench,
   X,
 } from 'lucide-react';
@@ -27,7 +23,6 @@ import type {
   SIStation,
   StationFunction,
 } from '../types/sportident';
-import type { SerialConnectionStatus, UsbStationMode } from '../services/sportidentWebSerial';
 import { formatStationFunctionLabel } from './StatusLabels';
 import {
   SportidentHardwareTestbench,
@@ -44,7 +39,6 @@ interface HardwareStationsViewProps
   emergency: EmergencySettings;
   roc: RocIntegrationStatus;
   stations: SIStation[];
-  serialStatus: SerialConnectionStatus;
   onUpdateEmergency: (patch: Partial<EmergencySettings>) => Promise<{
     recalculatedCount: number;
   }>;
@@ -56,14 +50,6 @@ interface HardwareStationsViewProps
   onUpdateRocSettings: (patch: Partial<RocIntegrationStatus>) => Promise<void>;
   onPollRocNow: () => Promise<{ ingested: number; error: string | null }>;
   onSimulateRocBatch: () => Promise<{ ingested: number; samplePayload: string }>;
-  onConnectUsb: (baudRate: 38400 | 4800) => Promise<void>;
-  onConnectWebUsb: (baudRate: 38400 | 4800) => Promise<void>;
-  onDisconnectUsb: () => Promise<void>;
-  onSetUsbMode: (mode: UsbStationMode) => void;
-  onSetBaudRate: (baud: 38400 | 4800) => void;
-  onSendDirectMode: () => Promise<void>;
-  onRequestSysConfig: () => Promise<void>;
-  onTriggerStationBeep: () => Promise<void>;
   onCreateStation: (payload: Partial<SIStation>) => Promise<string | null>;
   onSaveStation: (payload: Partial<SIStation>) => Promise<string | null>;
   onDeleteStation: (id: string) => Promise<void>;
@@ -97,21 +83,12 @@ export function HardwareStationsView({
   emergency,
   roc,
   stations,
-  serialStatus,
   onUpdateEmergency,
   onRecalculateAll,
   onAssignManualFinish,
   onUpdateRocSettings,
   onPollRocNow,
   onSimulateRocBatch,
-  onConnectUsb,
-  onConnectWebUsb,
-  onDisconnectUsb,
-  onSetUsbMode,
-  onSetBaudRate,
-  onSendDirectMode,
-  onRequestSysConfig,
-  onTriggerStationBeep,
   onCreateStation,
   onSaveStation,
   onDeleteStation,
@@ -150,7 +127,14 @@ export function HardwareStationsView({
   const [rocPassId, setRocPassId] = useState(roc.unitId ?? '');
   const [rocAutoPoll, setRocAutoPoll] = useState(roc.enabled);
   const [rocBusy, setRocBusy] = useState(false);
+  const [rocSaveBusy, setRocSaveBusy] = useState(false);
   const [rocFeedback, setRocFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  useEffect(() => {
+    const unitId = roc.unitId ?? '';
+    setRocPassId(unitId);
+    console.info('[roc-settings] value loaded', { unitId });
+  }, [roc.unitId]);
 
   const handleCreateStationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -316,8 +300,23 @@ export function HardwareStationsView({
 
   const handleSaveRocPassId = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onUpdateRocSettings({ unitId: rocPassId.trim() });
-    setRocFeedback({ ok: true, msg: 'ROC Passnings-ID sparat!' });
+    const unitId = rocPassId.trim();
+    setRocSaveBusy(true);
+    setRocFeedback(null);
+    console.info('[roc-settings] save started', { unitId });
+    try {
+      await onUpdateRocSettings({ unitId });
+      setRocPassId(unitId);
+      setRocFeedback({ ok: true, msg: 'ROC Passnings-ID sparat!' });
+      console.info('[roc-settings] save succeeded', { unitId });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Kunde inte spara ROC Passnings-ID.';
+      setRocFeedback({ ok: false, msg: message });
+      console.error('[roc-settings] save failed', { unitId, error: message });
+    } finally {
+      setRocSaveBusy(false);
+    }
   };
 
   const handleToggleRocAuto = async () => {
@@ -368,7 +367,7 @@ export function HardwareStationsView({
             <span>Sportident, ROC och USB</span>
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            SPORTident USB-avläsare, nödlägen i skogen & omräkning, ROC-radiokontroller samt hårdvarustationer.
+            Nödlägen i skogen & omräkning, ROC-radiokontroller samt hårdvarustationer.
           </p>
         </div>
 
@@ -477,161 +476,7 @@ export function HardwareStationsView({
         </section>
       )}
 
-      {/* 1. SPORTident USB-avläsare — Web Serial & WebUSB CP210x (Android OTG) */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
-          <div>
-            <div className="flex items-center gap-2">
-              <Usb className="w-4 h-4 text-slate-700 dark:text-slate-300 shrink-0" />
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                SPORTident USB-avläsare — Web Serial & WebUSB CP210x (Android OTG)
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Koppla USB-master (BSM7, BSM8, SRR) direkt i Chrome/Edge på PC, Mac eller Android OTG.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                serialStatus.connected
-                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  serialStatus.connected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
-                }`}
-              />
-              <span>{serialStatus.connected ? 'USB Ansluten' : 'Ingen enhet ansluten'}</span>
-            </span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Connection Controls */}
-          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
-            <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-              Anslut SPORTident-hårdvara
-            </h3>
-            <div className="flex flex-wrap items-center gap-2">
-              {!serialStatus.connected ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void onConnectUsb(38400)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 dark:bg-slate-100 dark:text-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    <Usb className="w-3.5 h-3.5" />
-                    <span>Web Serial (38400 baud)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void onConnectUsb(4800)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    <span>Äldre enhet (4800 baud)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void onConnectWebUsb(38400)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    <Smartphone className="w-3.5 h-3.5" />
-                    <span>Android WebUSB (OTG)</span>
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void onDisconnectUsb()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    <span>Koppla från USB</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void onTriggerStationBeep()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    <Volume2 className="w-3.5 h-3.5" />
-                    <span>Skicka test-pip</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void onRequestSysConfig()}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Läs stationsinfo</span>
-                  </button>
-                </>
-              )}
-            </div>
-            {serialStatus.error && (
-              <p className="text-xs text-red-600 dark:text-red-400 font-medium">
-                {serialStatus.error}
-              </p>
-            )}
-          </div>
-
-          {/* Mode & Station Info */}
-          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
-            <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
-              Arbetsläge för USB-enheten
-            </h3>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => onSetUsbMode('READOUT')}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border text-center transition-colors ${
-                  serialStatus.usbMode === 'READOUT'
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900'
-                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
-                }`}
-              >
-                Målavläsning
-              </button>
-              <button
-                type="button"
-                onClick={() => onSetUsbMode('START_CORRAL')}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border text-center transition-colors ${
-                  serialStatus.usbMode === 'START_CORRAL'
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900'
-                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
-                }`}
-              >
-                Start / Check
-              </button>
-              <button
-                type="button"
-                onClick={() => onSetUsbMode('REGISTRATION')}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border text-center transition-colors ${
-                  serialStatus.usbMode === 'REGISTRATION'
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 border-slate-900'
-                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800'
-                }`}
-              >
-                Direktanmälan
-              </button>
-            </div>
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono flex items-center justify-between">
-              <span>Baud: {serialStatus.baudRate} bps</span>
-              <span>Drivrutin: {serialStatus.activeTransport ? (serialStatus.activeTransport === 'WEB_USB' ? 'WebUSB (CP210x)' : 'WebSerial') : 'Ingen'}</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 2. Nödlägen i skogen & Omräkning */}
+      {/* 1. Nödlägen i skogen & Omräkning */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
           <div>
@@ -810,7 +655,7 @@ export function HardwareStationsView({
         </div>
       </section>
 
-      {/* 3. ROC Radiokontroller i skogen (roc.olresultat.se) */}
+      {/* 2. ROC Radiokontroller i skogen (roc.olresultat.se) */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100 dark:border-slate-800">
           <div>
@@ -858,9 +703,10 @@ export function HardwareStationsView({
             />
             <button
               type="submit"
+              disabled={rocSaveBusy}
               className="px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
             >
-              Spara ID
+              {rocSaveBusy ? 'Sparar...' : 'Spara ID'}
             </button>
           </form>
 
@@ -911,7 +757,7 @@ export function HardwareStationsView({
         )}
       </section>
 
-      {/* 4. Konfigurerade SI-stationer & Radiokontroller */}
+      {/* 3. Konfigurerade SI-stationer & Radiokontroller */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
